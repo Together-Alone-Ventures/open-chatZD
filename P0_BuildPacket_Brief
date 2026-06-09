@@ -1,0 +1,78 @@
+# P0 — ICP-DELETE-LEAF API Repair — Build-Packet Brief
+
+**Packet:** P0 (first; blocks all OpenChatZD work)
+**Target:** `ICP-Delete-Leaf` @ `1c45a68` (engine/library only — no OpenChatZD changes here)
+**Mode:** **High-assurance** (changes the auth model of an evidence engine; touches deletion/
+authenticity claims). Inspect-and-propose-only for CD; Claude reviews diff; human-in-the-loop commit.
+**Gate:** `OpenChatZD_Integration_Gate_ACCEPTED.md` (D6, D7).
+
+---
+
+## Goal
+
+Add two **additive** APIs so a host canister can drive finalization without being a controller, and
+supply its own subject identity — without changing behaviour for existing (DaffyDefs-style)
+integrations.
+
+## In scope
+
+**A1 — Host-supplied `record_id`.** New entry point
+`execute_deletion_with_record_id(adapter, config, record_id)` where `record_id` is opaque host-supplied
+bytes used as the record identity in the receipt. Existing `execute_deletion` is retained and
+re-expressed as a thin wrapper that derives `record_id` from `caller()` exactly as today
+(`engine.rs:81-84`). The engine does not interpret `record_id` beyond recording it; the host is
+responsible for it being stable, non-raw, and domain-tagged.
+
+**A2 — Host-authorized Phase C finalization.** New **non-public library function** (not a Candid
+endpoint) `finalize_receipt_after_host_authorization(...)`. **Not** an `authorized: bool` parameter.
+Contract:
+- finalizes **only the current pending receipt**; **fails on receipt-id mismatch**;
+- requires the Phase-A pending state / finalization lock to be held (`lib.rs:112-127`, `119-121`);
+- still validates the Phase-B certificate before embedding it (no weakening of V2);
+- the caller (host canister) is responsible for having authorized the request first.
+
+The default `finalize_receipt` retains its controller-only check (`finalization.rs:145-180`) unchanged.
+
+**A3 — Confirm MemoryId range (O6).** Read and record the engine's actual reserved stable-memory
+range from source (expected v0.3 `base..base+6` / 100–106) so P1 can set `base_memory_id` safely.
+
+## Out of scope
+
+No OpenChatZD code, no user-canister wrappers, no receipts canister, no frontend. Those are P1–P5.
+
+## Backwards-compatibility invariants (hard)
+
+1. Existing `execute_deletion` and `finalize_receipt` signatures and behaviour are **unchanged**.
+2. New entry points are purely additive; default Cargo features unchanged.
+3. A DaffyDefs-style integration (caller-derived `record_id`, controller-gated finalize) compiles and
+   passes its existing tests with no source change.
+
+## Security properties (the high-assurance core — reviewed adversarially)
+
+- The host-authorized finalizer cannot finalize a receipt not produced by the matching Phase A on the
+  same canister (receipt-id binding).
+- It cannot bypass certificate validation; V2's certificate path is identical to the controller path.
+- It cannot finalize when no pending receipt / lock is present, nor twice (idempotent / single-shot).
+- It does not relax the controller-only default path for callers that don't opt in.
+- Host-supplied `record_id` is metadata only; it cannot alter the certified state-transition proof.
+  Document the trust boundary: a misbehaving host can mislabel *its own* receipt's subject, not forge
+  another canister's certified state.
+
+## Test plan
+
+- Unit: A1 wrapper parity (caller-derived path identical to old `execute_deletion`); A2 success on
+  matching pending receipt; A2 rejects receipt-id mismatch, missing lock, double-finalize, invalid/
+  absent certificate; default `finalize_receipt` still controller-gated.
+- Regression: DaffyDefs integration test suite green, unchanged.
+- Record O6 range in the packet output.
+
+## Release gate (before P1 opens)
+
+Arweave archival (source + WASM); `RELEASES.md` linter pass; new version tag on the engine chain
+(OpenChatZD will pin to it); **G adversarial security audit of the host-auth path**; `MILESTONE_LOG.md`
+entry. Tag in dependency order if `zombie-core` is touched.
+
+## Done = 
+
+Both APIs merged additively, all tests + DaffyDefs regression green, O6 range recorded, release gate
+cleared, engine tagged. Then P1 may open.
