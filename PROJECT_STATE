@@ -1,0 +1,43 @@
+# PROJECT_STATE — OpenChatZD × ICP-DELETE-LEAF (MKTd02)
+
+_Continuity anchor. Update at each packet boundary. Append session lessons to `MILESTONE_LOG.md`._
+
+## Where we are
+- **Repo:** `open-chatZD` @ `c4a34213e` (fork of `open-chat-labs/open-chat`).
+- **Engine:** `ICP-Delete-Leaf` @ `1c45a68`.
+- **Gate:** `OpenChatZD_Integration_Gate_ACCEPTED.md` — **accepted** (G), authorizes P0.
+- **Current packet:** **P0 — ICP-DELETE-LEAF API repair** (opening). Spec: `P0_BuildPacket_Brief.md`.
+- **Tree:** clean.
+
+## Next action
+G crafts the CD implementation prompt from `P0_BuildPacket_Brief.md` → CD implements
+**inspect-and-propose only** → Claude reviews the diff → **human-in-the-loop commit**. No CD commit
+without explicit clearance.
+
+## Accepted decisions (gate D1–D8)
+- **D1** Scope: per-user `user` canister PII only; shared-canister residuals disclosed.
+- **D2** Sequence: Phase A → B (ingress query) → C (host-authorized) → store → display/download →
+  `deleteCurrentUser` → uninstall.
+- **D3** Verification profile: V1–V3 archival; **V4 N/A** by design.
+- **D4** Dedicated receipts canister + best-effort user export/download.
+- **D5** User-facing receipt display/download is a hard requirement.
+- **D6** Phase C repair: additive non-public `finalize_receipt_after_host_authorization`; default
+  controller-only path unchanged.
+- **D7** `record_id` repair: additive host-supplied `record_id`; OpenChatZD supplies a stable,
+  non-raw, domain-tagged reference (never `caller()`).
+- **D8** Phase A = point of no return; blocking retry/recovery; no uninstall before confirmed
+  storage; recovery/resume procedure owned by **P3**.
+
+## Carried conditions (open; neither blocks P0)
+- **O2** — residual disclosure facts (identity auth-principals; group/community authored messages;
+  storage blob vs metadata). Gates **P4** receipt-screen copy.
+- **O6** — engine MemoryId range (expected v0.3 `base..base+6` / 100–106). Confirmed **inside P0**.
+
+## P0 discipline (high-assurance)
+Additive-only ICP-Delete-Leaf changes; DaffyDefs regression must pass; adversarial security review of
+the host-authorized Phase C path; full release gate (Arweave source+WASM, RELEASES linter, version
+tag) before OpenChatZD integration begins.
+
+## Packet sequence
+P0 (engine) → P1 (user-canister adapter + A/B/C wrappers) → P2 (receipts canister) → P3 (sequencing
+guard + recovery) → P4 (frontend receipt UX) → P5 (end-to-end proof).
