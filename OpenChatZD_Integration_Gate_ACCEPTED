@@ -1,0 +1,124 @@
+# OpenChatZD × ICP-DELETE-LEAF (MKTd02) — Integration Gate (ACCEPTED)
+
+**Type:** Gate doc (docs-only go/no-go) per TAV Vibe Coding Playbook v6 §1. **Not a spec.**
+**Repo:** `Together-Alone-Ventures/open-chatZD` @ `c4a34213e`
+**Engine:** `ICP-Delete-Leaf` @ `1c45a68` — modified additively in P0
+**Companion:** `OpenChatZD_Implementation_Plan_Draft1.md`; `P0_BuildPacket_Brief.md`
+**Status:** **ACCEPTED** (G, with the P3 recovery amendment folded in). Authorizes P0.
+**Author:** Claude
+
+**Source status:** engine claims confirmed against CD primary citations (Phase C controller-only
+`finalization.rs:145-180`; `record_id = caller()` `engine.rs:81-84`). Citation-check cleared.
+
+---
+
+## 1. What this gate decides
+
+Implementation may open in order, **P0 first** (ICP-DELETE-LEAF API repair) before any OpenChatZD
+work: the engine must support host-supplied `record_id` and host-authorized Phase C finalization first.
+
+---
+
+## 2. Decisions
+
+**D1 — Scope: per-user `user` canister PII only.** Shared-canister PII out of scope, disclosed plainly
+(§5); build on `RESIDUAL_TRUST_STATEMENT.md:40-50`.
+
+**D2 — Erasure & orchestration (firm, frontend-orchestrated, delete-last):**
+> confirmation → **Phase A** (tombstone, set `certified_data`, returns pending receipt-id, takes
+> finalization lock — `lib.rs:112-127`) → **Phase B** (ingress query; `data_certificate()` is
+> query-only — `README.md:34-37`, `lib.rs:133-145`, `finalization.rs:112-138`) → **Phase C**
+> (host-authorized finalize) → **store** in receipts canister → **display + JSON download / copy
+> id+token** → **then** `deleteCurrentUser` → `uninstall_code` (`delete_users.rs:68-77`).
+
+**D3 — Verification profile: V1–V3 archival; V4 N/A by design.**
+
+**D4 — Durable store: dedicated receipts canister** + best-effort user export/download
+(`export.rs:16-20`). Not `user_index` blobs, not return-only.
+
+**D5 — User-facing receipt display/download is a hard requirement.** Receipt screen (summary, bounded
+scope, residual disclosure, JSON download, copy id+token) before the delete pipeline runs. Conventions
+exist (`ConfirmDeleteAccount.svelte:27-43`, `utils/blob.ts:1-5`). "Unconditional" = not opt-in.
+
+**D6 — Phase C authorization repair (additive).** Default `finalize_receipt` keeps controller-only
+(`finalization.rs:145-180`). Add non-public `finalize_receipt_after_host_authorization(...)` (not
+`authorized: bool`): host authorizes first; finalizes only the current pending receipt; fails on
+receipt-id mismatch. OpenChatZD user canister exposes an owner-guarded wrapper (`set_bio.rs:1-14`).
+
+**D7 — Host-supplied `record_id` repair (additive).** Engine derives from `caller()`
+(`engine.rs:81-84`); trait has no hook (`trait_def.rs:46-58`). Add
+`execute_deletion_with_record_id(...)`, keep caller-derived `execute_deletion`. OpenChatZD supplies a
+stable, non-raw, domain-tagged reference, not `caller()`.
+
+**D8 — Phase A is the point of no return.** Enforced by the finalization lock (`lib.rs:119-121`,
+`engine.rs:124-130`). No rollback in v1. (a) On B/C/storage failure → blocking retry/recovery, no
+pipeline trigger, no restoration of normal use; (b) no uninstall until storage confirmed (O8);
+(c) flow resumable/idempotent; (d) **admin recovery/resume procedure — owned by P3** (see §6).
+
+---
+
+## 3. Open items (carried; neither blocks P0)
+
+- **O2 — residual disclosure facts** (identity auth-principals; group/community authored-message
+  persistence; storage blob vs metadata). Gates P4 receipt-screen copy.
+- **O6 — engine MemoryId range** (expected v0.3 `base..base+6` / 100–106). Confirmed inside P0.
+
+---
+
+## 4. Receipt store & privacy
+
+Retrieval by receipt-id + lookup token (or token alone) — never raw principal/`record_id`. Stored
+fields hold hashes (`record_id_hash`, `lookup_token_hash`) plus `receipt_id`, CBOR/JSON, schema +
+protocol + source versions, `user_canister_id`, `issued_at`, scope + residual-disclosure metadata.
+Idempotent by `receipt_id`. Private/token-gated, not publicly enumerable.
+
+---
+
+## 5. Disclosure scope (DRAFT — pending O2)
+
+**Erased (user canister):** direct-chat messages, bio, avatar, profile background, contacts, blocked
+users, saved crypto accounts, BTC/one-sec addresses, PIN, unique-person proof, wallet config, local
+username/display_name copies.
+**Remains:** `user_index` deletion tuple (maps removed); `identity` link nulled (auth-record
+persistence **O2**); group/community membership removed (authored-message persistence **O2**);
+storage/online/notifications/email-auth out of scope (**O2**); empty user-canister shell; hashed
+receipt metadata (token-gated). Build wording on `RESIDUAL_TRUST_STATEMENT.md`.
+
+---
+
+## 6. Implementation packet sequence
+
+**P0 — ICP-DELETE-LEAF API repair (first).** Additive `execute_deletion_with_record_id` +
+`finalize_receipt_after_host_authorization`; confirm MemoryId range (O6); default paths unchanged.
+*Validation:* unit tests; DaffyDefs regression; **adversarial security review of the host-auth path**;
+full release gate (Arweave, RELEASES linter, tag). See `P0_BuildPacket_Brief.md`.
+
+**P1 — OpenChatZD user-canister adapter + A/B/C wrappers.** `MKTdDataSource`; owner-guarded A/B/C;
+pending/failure behaviour (D8); set `base_memory_id` after O6 + `chat_events`; **expose a
+pending-finalization-state query** for P3's recovery detection. *Validation:* round-trip; guard
+coverage; lock-blocks-mutation.
+
+**P2 — Dedicated receipts canister.** `store_finalized_receipt` / `get_receipt_by_lookup_token` /
+`get_receipt_by_id(receipt_id, token)`; hashed identifiers; idempotent. *Validation:* store/retrieve;
+idempotency; no-raw-lookup test.
+
+**P3 — Delete-pipeline sequencing guard + recovery.** `deleteCurrentUser`/uninstall fires only after
+confirmed storage; no race to `uninstall_code`. **Plus (G amendment):** a minimal admin
+recovery/resume procedure for a permanently-stuck post-Phase-A pending-receipt state. *Validation:*
+race/ordering test; crash-resumability; **detection of pending-finalization state (via P1's query) and
+safe re-entry or administrative resume without triggering uninstall prematurely.**
+
+**P4 — Frontend receipt UX.** Desktop + mobile delete flow → A→B→C/storage → receipt screen (summary,
+bounded scope, **residual disclosure — needs O2**, JSON download, copy id/token) → then pipeline;
+failure/recovery states. *Validation:* both platforms; failure paths.
+
+**P5 — End-to-end proof run.** Test user → finalized CVDR → stored → displayed/downloaded → uninstall
+→ verify V1–V3, V4 documented N/A, residual disclosure shown.
+
+---
+
+## 7. Go / no-go
+
+**ACCEPTED → P0 opens**, in order P0→P5, under high-assurance discipline for P0. Carried conditions:
+O2 closed before P4 copy is final; O6 confirmed in P0; no uninstall before confirmed storage (D8/O8).
+Nothing irreversible until P0 clears its release gate.
