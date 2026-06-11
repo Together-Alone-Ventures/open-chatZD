@@ -1,0 +1,114 @@
+# O2 — User-Canister PII Classification (RATIFIED)
+
+**Type:** O2 resolution (gate companion). **Status:** RATIFIED by G (with amendments folded in below).
+**Author:** Claude; ratified G. **Grounding:** E5 recon (CC) against `open-chatZD` `b5e77ec94`,
+`backend/canisters/user/impl/src/lib.rs:446-499`.
+**Feeds:** the S1 tombstone manifest (ERASE set) and the P4 receipt copy / `RESIDUAL_TRUST_STATEMENT`
+(DISCLOSE set). Closes carried condition **O2** for the user-canister scope.
+
+## Why this exists
+
+E5 found the gate §5 PII DRAFT is **present-but-under-counts**: all 12 DRAFT fields exist, but ~11 more
+PII / relational / financial fields in the `Data` struct were not classified. Before S1 fixes the
+erasure manifest and P4 writes receipt copy, each field needs a deliberate **erase vs disclose** call.
+
+## Classification principles
+
+- **D1 boundary:** the erasure scope is the user canister's *own* state. Data that is canonically held
+  elsewhere — other users' canisters, group/community/`user_index` canisters, or external ledgers — is
+  **disclosed as residual**, not claimed deleted.
+- **Honesty (EDPB positioning):** the receipt asserts *proof of state transition within a defined system
+  boundary*, **not** proof of data absence. Anything outside the boundary (counterpart DM copies,
+  on-chain transactions, shared-canister records) must be disclosed, never implied erased.
+- **D3:** OpenChatZD is V1–V3 / **V4 N/A**.
+
+Three classes:
+- **ERASE** — subject's own data, in-canister, unilaterally tombstoned. → S1 manifest.
+- **ERASE + DISCLOSE** — local copy tombstoned, but a canonical/other-side copy persists outside the
+  boundary. → S1 manifest *and* P4 disclosure.
+- **DISCLOSE / flag-only** — little or nothing to erase in-canister; the real PII residual is elsewhere.
+
+## Classification (proposed)
+
+### Confirmed DRAFT fields
+
+| Field | `lib.rs` | Class | Rationale |
+|---|---|---|---|
+| bio | 465 | ERASE | own profile text, fully in-canister |
+| avatar | 458 | ERASE | own |
+| profile_background | 459 | ERASE | own |
+| username (local) | 463 | ERASE | local copy; canonical in `user_index` (already a disclosed shared residual) |
+| display_name (local) | 464 | ERASE | local copy; as username |
+| pin_number (PIN) | 480 | ERASE | own credential |
+| wallet_config | 489 | ERASE | own config |
+| unique_person_proof | 488 | ERASE | own credential in-canister; issuer's record is outside the boundary (note) |
+| contacts | 471 | ERASE | subject's own address book; one-directional, no reciprocal residual |
+| blocked_users | 452 | ERASE | subject's own blocklist |
+| direct_chats (message bodies, stable map id 3) | 448 | **ERASE + DISCLOSE** | tombstone local copy; the **counterpart retains their copy** of the same DM in their own canister |
+| saved_crypto_accounts | 474 | **ERASE + DISCLOSE** | erase saved labels/addresses; **on-chain/ledger history persists** outside the boundary |
+| btc_address / one_sec_address | 481-482 | **ERASE + DISCLOSE** | erase stored strings; on-chain history outside the boundary |
+
+### Under-counted fields (E5 additions)
+
+| Field | `lib.rs` | Class | Rationale |
+|---|---|---|---|
+| group_chats | 449 | **ERASE + DISCLOSE** | erase local membership/state; group canister retains membership + **authored messages** persist (gate O2) |
+| communities | 450 | **ERASE + DISCLOSE** | as group_chats |
+| favourite_chats | 451 | ERASE | subject's own pointers |
+| referred_by / referrals | 491-492 | **ERASE + DISCLOSE** | **relational** — linked users' canisters retain the reciprocal link; not unilaterally erasable (D1) |
+| token_swaps / p2p_swaps | 476-477 | **ERASE + DISCLOSE** | erase local records; **on-chain swap/ledger records persist** |
+| chit_events / streak | 483-484 | ERASE | **G ruling:** code shows `ChitEvents` = local events + `total_chit_earned`/`total_chit_spent`; `Streak` = local fields. No external reward ledger in evidence → plain ERASE. *Note: if later product inspection proves CHIT is mirrored/minted to an external ledger, reclassify that external fact as DISCLOSE.* (Streak insurance-payment billing is already covered by the grouped financial disclosure.) |
+| achievements / external_achievements / achievements_last_seen | 485-487 | ERASE | own behavioral history, in-canister |
+| message_activity_events | 493 | ERASE | subject's own activity feed |
+| diamond_membership_expires_at | 472 | **ERASE + DISCLOSE** | erase local status; **billing/payment ledger residual** outside boundary |
+| bots (InstalledBots) | 497 | ERASE | own installed-bot config (not third-party PII) |
+| premium_items (PremiumItems) | 498 | **ERASE + DISCLOSE** | erase local; **purchase/payment ledger residual** |
+| phone_is_verified | 467 | **flag ERASE + DISCLOSE** | erase the boolean; the **phone number itself lives in the verification subsystem**, not this canister — residual (possibly out-of-scope, like the gate's email-auth) |
+
+### Already-disclosed shared residuals (gate §5, unchanged — listed for completeness)
+
+`user_index` deletion tuple; `identity` auth-principal record; group/community authored messages;
+storage blobs vs metadata; online/notifications/email-auth. These remain **DISCLOSE** per the gate.
+
+## G rulings (ratified)
+
+Governing principle ratified: the receipt proves a **state transition inside the user-canister
+boundary**, not global data absence. External ledgers, counterpart copies, shared canisters,
+identity/auth subsystems, and payment systems are **disclosed as residual**, never silently implied
+erased.
+
+- **A. Direct messages** → ERASE + DISCLOSE. Tombstone local bodies; disclose the counterpart's canister
+  may retain its copy. Receipt must not say "your messages were deleted" without the counterpart caveat.
+- **B. Relational** (referrals/referred_by, group/community membership) → **ERASE local pointer/state +
+  DISCLOSE canonical residual**. S1 tombstones only the local user-canister fields; P4/RTS discloses
+  that the relationship/membership may persist outside the boundary (linked users, group/community,
+  index canisters). Wording amendment, not a reversal.
+- **C. Financial / on-chain** → ERASE + DISCLOSE with **one grouped disclosure line** (S1 manifest stays
+  field-level; P4 disclosure is grouped). Ratified P4 wording:
+  > "External ledger, blockchain, payment, billing, and purchase records may persist outside the
+  > OpenChatZD user-canister deletion boundary."
+- **D. phone_is_verified** → ERASE local boolean + DISCLOSE the verification-subsystem residual. Do not
+  claim the phone number was deleted; disclose it as outside the boundary — **not** omitted as
+  "out-of-scope" in a way that could mislead.
+- **E. CHIT / streak** → amended to **ERASE** (see table note).
+
+### Net O2 outcome (ratified)
+
+**ERASE** → S1 tombstone manifest: bio, avatar, profile_background, username (local copy), display_name
+(local copy), pin_number, wallet_config, unique_person_proof (local copy), contacts, blocked_users,
+favourite_chats, achievements, external_achievements, achievements_last_seen, message_activity_events,
+bots, chit_events, streak, phone_is_verified (boolean).
+
+**ERASE + DISCLOSE** → S1 manifest *and* P4 disclosure: direct_chats, group_chats (local state),
+communities (local state), referred_by/referrals (local state), saved_crypto_accounts, btc_address,
+one_sec_address, token_swaps, p2p_swaps, diamond_membership_expires_at, premium_items.
+
+**DISCLOSE / flag-only** → P4 / RTS: user_index tuple, identity/auth principals, phone-number
+verification subsystem, email-auth/notification systems, group/community authored-message residuals,
+storage blob/metadata residuals, counterpart DM copies, external ledger/payment/billing systems.
+
+## Outputs once ratified
+
+- **ERASE set** → S1 `pii_field_manifest()` / `tombstone_state()` (heap `Data` fields + stable-map
+  message purge via `stable_memory_keys_to_garbage_collect`).
+- **DISCLOSE set** → P4 receipt-screen residual block + `RESIDUAL_TRUST_STATEMENT`.

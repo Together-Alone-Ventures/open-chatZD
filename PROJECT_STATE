@@ -3,41 +3,75 @@
 _Continuity anchor. Update at each packet boundary. Append session lessons to `MILESTONE_LOG.md`._
 
 ## Where we are
-- **Repo:** `open-chatZD` @ `c4a34213e` (fork of `open-chat-labs/open-chat`).
-- **Engine:** `ICP-Delete-Leaf` @ `1c45a68`.
-- **Gate:** `OpenChatZD_Integration_Gate_ACCEPTED.md` — **accepted** (G), authorizes P0.
-- **Current packet:** **P0 — ICP-DELETE-LEAF API repair** (opening). Spec: `P0_BuildPacket_Brief.md`.
+- **Repo (integration):** `open-chatZD` — `origin/master` HEAD now `b5e77ec94` (the gate's
+  `c4a34213e` is +3 docs-only commits stale; user-canister code unchanged). **`git fetch` + confirm HEAD
+  before editing.** P1 is first to modify the backend.
+- **Engine:** `ICP-Delete-Leaf` — released **`mktd02-v0.4.0`** (tag on `ba5cef5`; main at `ade76a9`).
+  Canonical repo is `ICP-Delete-Leaf` (the old `MKTd02` URL is retired; DaffyDefs repointed).
+- **Consumer:** `DaffyDefs` @ `7429237` — pinned to engine `v0.4.0`; `profile_canister` builds clean
+  on `wasm32`. No further role (regression concern closed via G's E4 property-6 sign-off).
+- **Gate:** `OpenChatZD_Integration_Gate_ACCEPTED.md` — accepted (G).
+- **Current packet:** **P1 — OpenChatZD user-canister adapter + A/B/C wrappers** (opening).
+  Spec: `P1_BuildPacket_Brief.md`.
 - **Tree:** clean.
 
 ## Next action
-G crafts the CD implementation prompt from `P0_BuildPacket_Brief.md` → CD implements
-**inspect-and-propose only** → Claude reviews the diff → **human-in-the-loop commit**. No CD commit
-without explicit clearance.
+P1 design decisions **SETTLED by G** (GO): O2 ratified (w/ amendments), state-hash on-demand confirmed,
+`record_id` ADR ratified, high-assurance/Checked split ratified. **Remaining gating action: commit the
+refreshed planning docs** (`PROJECT_STATE.md`, `P1_BuildPacket_Brief.md`, `O2_PII_Classification_RATIFIED.md`)
+to `open-chatZD` through the ladder — the committed copies (`b5e77ec94`) are pre-E4/O6 (7 slots, E3/E4
+open). Then → G crafts the CC implementation prompt → CC implements **inspect-and-propose only** →
+Claude reviews diff (CD independent review) → **human-in-the-loop commit**. No commit/push without
+explicit clearance through the review ladder.
 
-## Accepted decisions (gate D1–D8)
+## P1 entry-condition status
+- **E1** Engine tagged `mktd02-v0.4.0`; OpenChatZD pins to it. ✅
+- **E2** O6 = 100–107 / 8 slots. ✅ (corroborated by G's E4: `storage.rs` base+5 lock, base+6 receipts,
+  base+7 tombstoned_at).
+- **E3** Controller-path preservation. ✅ closed by substitution (G E4 property 6 — preserved).
+- **E4** G adversarial audit of A2 host-auth path. ✅ **GO**. Two accepted wording corrections folded
+  into the build packet: (a) `record_id` affects `receipt_id`, not `certified_commitment` — drop
+  "metadata only"; (b) the engine validates no BLS cert on-chain in either path — both embed; V2 is
+  off-chain (parity, not an A2 regression). Five binding wrapper conditions recorded in the packet.
+- **E5** CC read-only recon. ✅ **Done**. HEAD `c4a34213e` → `b5e77ec94` (+3 docs-only). Grounded
+  S1/S3/S4/S6. Key facts: user canister uses only MemoryId {0, 3} → `base_memory_id = 100` safe;
+  owner-guard = `caller_is_owner` (51 endpoints); PII is split across heap `Data` + stable map (id 3);
+  `certified_data`/`data_certificate()` do **not** exist in the user canister (Phase B read side must be
+  built, model on `identity` canister); delete/uninstall is in `local_user_index` (`delete_users.rs:76`),
+  P3-owned. The §5 PII DRAFT under-counts — see Open decisions in the build packet.
+
+## P0 closeout (done)
+- Engine released `mktd02-v0.4.0`: A1 `execute_deletion_with_record_id` + A2
+  `finalize_receipt_after_host_authorization` (additive); PocketIC harness 3/3; honest RELEASES.md
+  provenance (captured, not remembered); G endorsed release path (a).
+- **O6 resolved:** engine reserves **8 stable-memory slots, 100–107** (`finalization_lock` is a real
+  `StableCell`). Supersedes the gate's assumed 7 / 100–106. Feeds P1 `base_memory_id`.
+- **Deferred as pre-existing release-infrastructure debt** (G-endorsed, not a P0 blocker): release CI +
+  local-replica build guard (no `release.yml`), Arweave archival automation, RELEASES schema, stale
+  `release.yml` ref in `mktd02/Cargo.toml`, vestigial `mktd02-macros` member, v0.4.0 guide hand-attach.
+- Spreadsheet carry-forward: update `Zombie_Delete_Configurations.xlsx` MKTd02 tab to **8 slots /
+  100–107** (currently 7 / 100–106) after Pass-3.
+
+## Accepted decisions (gate D1–D8) — unchanged
 - **D1** Scope: per-user `user` canister PII only; shared-canister residuals disclosed.
 - **D2** Sequence: Phase A → B (ingress query) → C (host-authorized) → store → display/download →
   `deleteCurrentUser` → uninstall.
 - **D3** Verification profile: V1–V3 archival; **V4 N/A** by design.
 - **D4** Dedicated receipts canister + best-effort user export/download.
 - **D5** User-facing receipt display/download is a hard requirement.
-- **D6** Phase C repair: additive non-public `finalize_receipt_after_host_authorization`; default
-  controller-only path unchanged.
-- **D7** `record_id` repair: additive host-supplied `record_id`; OpenChatZD supplies a stable,
-  non-raw, domain-tagged reference (never `caller()`).
-- **D8** Phase A = point of no return; blocking retry/recovery; no uninstall before confirmed
-  storage; recovery/resume procedure owned by **P3**.
+- **D6** Phase C: additive non-public `finalize_receipt_after_host_authorization`; default
+  controller-only path unchanged. **Implemented in P0 (A2); wrapped in P1 (S4).**
+- **D7** `record_id`: additive host-supplied; OpenChatZD supplies a stable, non-raw, domain-tagged
+  reference, never `caller()`. **Engine support in P0 (A1); derivation decided in P1 (S5).**
+- **D8** Phase A = point of no return; blocking retry/recovery; no uninstall before confirmed storage;
+  recovery/resume procedure owned by **P3**. **P1 must not foreclose it (S7/S8).**
 
-## Carried conditions (open; neither blocks P0)
+## Carried conditions (open)
 - **O2** — residual disclosure facts (identity auth-principals; group/community authored messages;
-  storage blob vs metadata). Gates **P4** receipt-screen copy.
-- **O6** — engine MemoryId range (expected v0.3 `base..base+6` / 100–106). Confirmed **inside P0**.
-
-## P0 discipline (high-assurance)
-Additive-only ICP-Delete-Leaf changes; DaffyDefs regression must pass; adversarial security review of
-the host-authorized Phase C path; full release gate (Arweave source+WASM, RELEASES linter, version
-tag) before OpenChatZD integration begins.
+  storage blob vs metadata). Gates **P4** receipt-screen copy. (Open — does not block P1.)
+- **O6** — **RESOLVED in P0: 100–107 / 8 slots** (corroborated by G's E4 review). Kept for traceability.
 
 ## Packet sequence
-P0 (engine) → P1 (user-canister adapter + A/B/C wrappers) → P2 (receipts canister) → P3 (sequencing
-guard + recovery) → P4 (frontend receipt UX) → P5 (end-to-end proof).
+P0 ✅ (engine, released `v0.4.0`) → **P1 (user-canister adapter + A/B/C wrappers) ← current** →
+P2 (receipts canister) → P3 (sequencing guard + recovery) → P4 (frontend receipt UX) →
+P5 (end-to-end proof).

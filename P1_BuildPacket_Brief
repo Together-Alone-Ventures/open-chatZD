@@ -1,0 +1,229 @@
+# P1 — OpenChatZD User-Canister Adapter + A/B/C Wrappers — Build-Packet Brief
+
+**Packet:** P1 (first OpenChatZD-side packet; opens only after P0 closed — it is)
+**Target:** `Together-Alone-Ventures/open-chatZD` user canister (fork of `open-chat-labs/open-chat`)
+**Engine pin:** `ICP-Delete-Leaf` @ tag **`mktd02-v0.4.0`** (on `ba5cef5`)
+**Mode:** **High-assurance for the auth-touching surface** (owner-guard, Phase-C finalize wrapper,
+`record_id` derivation) — see §Mode note. Inspect-and-propose-only for CD/CC; Claude reviews diff;
+human-in-the-loop commit. Commit/push/tag stays gated through the review ladder.
+**Gate:** `OpenChatZD_Integration_Gate_ACCEPTED.md` (decisions D1, D2, D6, D7, D8).
+
+---
+
+## Mode note (classification call for G)
+
+**Classification — RATIFIED by G:** high-assurance for the owner-guard, the Phase-C wrapper, the
+`record_id` derivation, and the adapter's state-bytes/tombstone logic; ordinary plumbing (query
+exposure, wiring) stays Checked. Inspect-and-propose-only for CC; Claude reviews diff; CD independent
+review; human-in-the-loop commit.
+
+---
+
+## Goal
+
+Make the OpenChatZD **user** canister able to drive a single-subject (Leaf-mode) deletion through the
+v0.4.0 engine: implement the adapter, expose owner-guarded Phase A / B / C entry points using the
+**additive** v0.4.0 APIs, behave correctly on failure (D8), and expose a pending-finalization-state
+query for P3. **No pipeline, no uninstall, no receipts canister, no UI** in this packet.
+
+## In scope
+
+**S1 — `MKTdDataSource` adapter for the user canister.** Map the user canister's PII to the Leaf-mode
+trait: `mode() = Leaf`; `pii_field_manifest()`; `get_state_bytes()` via `zombie_core::encode_pii_state()`;
+`tombstone_state()`; `is_tombstoned()`. Crate confirmed (E5): `backend/canisters/user/impl/`; `Data`
+struct `lib.rs:446-499`.
+
+**Split-region reality (E5, affects design):** PII spans two physical regions, so the adapter cannot
+treat the canister as one serializable blob. (a) Profile/scalar PII lives in heap `Data` (only
+serialized to MemoryId 0 at upgrade); (b) direct-chat **message bodies** live in the unified
+`stable_memory_map` (MemoryId 3). Therefore `get_state_bytes()` must read **both** live heap `Data`
+*and* the stable map; `tombstone_state()` must clear **both** — heap PII fields under the
+`caller_is_owner` mutation discipline, and the stable-map message entries via the canister's existing
+`Data.stable_memory_keys_to_garbage_collect: Vec<BaseKeyPrefix>` (`lib.rs:494`) purge mechanism. The
+deterministic-encoding spec must cover the cross-region ordering.
+
+**State-hash model (CONFIRMED by G against engine Phase A):** compute state bytes **on demand at Phase
+A** — no instrumenting the 51 writers. The v0.4.0 engine's `execute_deletion_with_record_id` calls
+`adapter.get_state_bytes()` **twice**: once **before** tombstoning (`pre_state_hash`) and once **after**
+`tombstone_state()` + `is_tombstoned()` (`post_state_hash`); it derives the certified commitment from
+`post_state_hash` + the deletion-event hash, then acquires the finalization lock and persists the
+pending receipt-id. So the adapter contract is: `get_state_bytes()` must return a **deterministic,
+complete, cross-region snapshot** (heap `Data` + stable-map message bodies) and must reflect the change
+across the tombstone; `is_tombstoned()` must read true after. Continuous `refresh_state_hash()` is
+unnecessary (D3 → V4 N/A). **D8 constraint:** after Phase A the finalization lock must block normal
+mutation from resuming before finalize/recovery.
+
+**PII boundary — see `O2_PII_Classification_RATIFIED` (G).** The tombstone manifest is the ratified
+**ERASE** set; the **ERASE + DISCLOSE** and **DISCLOSE** sets feed P4 copy / RTS. Per G's amendments:
+relational fields (referrals/referred_by, group/community membership) tombstone only the **local**
+user-canister state and disclose the canonical residual; `chit_events`/`streak` are **ERASE**;
+`phone_is_verified` erases the boolean and discloses the verification-subsystem residual; financial/
+on-chain residuals get one grouped P4 disclosure line. Do not let the receipt imply data-absence beyond
+the canister boundary.
+
+Publish a **State Encoding Spec** (field names, types, cross-region serialization order, tombstone
+mapping, encoder/version) per Integration Guide §03.
+
+**S2 — Owner-guarded Phase A wrapper.** Owner-guarded entry point calling
+`execute_deletion_with_record_id(adapter, config, record_id)` (A1). `record_id` is supplied by the
+host per **D7**: a **stable, non-raw, domain-tagged** reference derived from the user's durable
+identity — **never `caller()`**. See S5 for the derivation decision (needs an ADR).
+
+**S3 — Phase B reachability (E5: must be BUILT, not just confirmed).** The user canister does **not**
+use `certified_data` / `data_certificate()` anywhere today, nor do the shared libraries — E5 found
+usage only in the `identity` and `sign_in_with_email` canisters. So P1 must **introduce** the read
+side: a new ingress query that returns `ic_cdk::api::data_certificate()`, modelled on
+`identity/impl/src/lib.rs:271`. The *set* side is the engine's Phase A (`certified_data_set`); P1 wires
+that and confirms it. Upside: because the user canister has no other `certified_data` use, the engine's
+deletion-time use is **uncontended** — no risk of clobbering an existing certified value. (Earlier gate
+D2 citations for `data_certificate()` referred to the *engine*, not open-chat — they do not describe an
+existing open-chat path.)
+
+**S4 — Owner-guarded Phase C wrapper.** Owner-guarded entry point calling the non-public
+`finalize_receipt_after_host_authorization(...)` (A2). **Host authorization (the owner-guard) must run
+before A2 is called** — A2 itself performs no caller/controller check (confirmed by G's E4 review). A2
+must **never** be exposed as a direct Candid `#[update]`; it is reachable only through this guarded
+wrapper. It surfaces A2's engine-level rejection semantics intact: finalizes only the current pending
+receipt; fails on receipt-id mismatch, missing lock (no pending receipt), and double-finalize
+(already-finalized). Note: the engine does **not** validate the BLS certificate in either path (see S5
+/ security properties) — certificate validity is a verifier-side V2 concern, not an A2 rejection. The
+default controller-only `finalize_receipt` is **not** exposed.
+
+**S5 — `record_id` derivation (ADR — RATIFIED by G).** Rule:
+`record_id = hash_with_tag("OPENCHATZD_RECORD_ID_USER_V1", canonical_bytes(OpenChat UserId))`. Bindings:
+use the **canonical durable OpenChat UserId**, never `caller()`, never a raw principal; never use
+username, display name, phone, or wallet address; never store a raw identifier as `record_id`; the
+resulting 32-byte hash is what's passed to `execute_deletion_with_record_id`. **CC must inspect the
+actual UserId representation and choose a deterministic canonical byte encoding** (prefer OpenChat's
+existing stable/Candid encoding if already used) and the ADR **must cite the exact encoding method**.
+**Trust boundary (corrected per G's E4 review — do NOT call `record_id` "metadata only"):**
+host-supplied `record_id` **is** fed into `compute_receipt_id`, so it **does** affect this receipt's
+`receipt_id` (it is part of the v3 receipt-ID preimage: length-delimited `canister_id` + `record_id` +
+`deletion_seq`). It does **not** reach the BLS-certified `certified_commitment`, which is computed from
+`post_state_hash` + `deletion_event_hash` *before* receipt construction. So a misbehaving host can
+mislabel its own receipt's subject — changing that receipt's `receipt_id` — but cannot alter the
+certified commitment, cannot forge another canister's certified state, and cannot make the certificate
+prove a different state transition. This precise wording carries to the P4 receipt/disclosure copy.
+
+**S6 — `base_memory_id` selection (E5: RESOLVED → 100).** The user canister uses only **two** MemoryId
+slots: `0` = UPGRADES, `3` = STABLE_MEMORY_MAP (where `chat_events` live, via the unified map — not a
+dedicated id). ids 1, 2, and everything ≥4 are free; nothing above 3 (`memory.rs`). The engine reserves
+**8 slots** (`base..base+7`; O6 = 100–107). **`base_memory_id = 100`** → engine slots 100–107, which
+intersect `{0, 3}` as ∅, with the entire 4–99 band as buffer for any future OpenChat slot growth.
+Record the final 8-slot map in the State Encoding Spec. (One confirming check worth CD's independent
+read: that no dependency library allocates a MemoryId from the *same* `MEMORY_MANAGER` outside
+`memory.rs` — E5 verified no other `.get(MemoryId` callers in the impl crate and that `stable_memory_map`
+is handed id 3's memory rather than allocating its own; a silent collision here would be corrupting.)
+
+**S7 — D8 pending/failure behaviour.** Phase A is the point of no return (finalization lock). On B/C/
+storage failure: blocking retry/recovery, **no** pipeline trigger, **no** restoration of normal use;
+flow is resumable/idempotent. (Admin recovery/resume procedure itself is **P3** — P1 only must not make
+it impossible.)
+
+**S8 — Pending-finalization-state query.** Expose a read-only query reporting whether a pending
+(post-Phase-A, pre-finalize) receipt exists and its receipt-id, for **P3** recovery detection. Read
+only; no state change.
+
+## Out of scope (explicitly)
+
+Receipts canister and storage (**P2**); `deleteCurrentUser` / `uninstall_code` sequencing and the
+no-uninstall-before-confirmed-storage guard and admin resume (**P3**); frontend delete flow and receipt
+screen (**P4**); end-to-end proof run (**P5**). P1 **must not** trigger any account deletion or
+uninstall, and must not export/store receipts.
+
+## Backwards-compatibility invariants (hard)
+
+1. No change to the v0.4.0 engine source — P1 consumes it as a pinned dependency only.
+2. P1 adds canister entry points; it does not alter existing OpenChat user-canister behaviour for
+   non-deletion flows.
+3. DaffyDefs (the other v0.4.0 consumer) is untouched and unaffected.
+
+## Security properties (high-assurance core — reviewed adversarially)
+
+- Phase A and Phase C entry points are **owner-guarded** with OpenChat's confirmed convention (E5):
+  `#[update(guard = "caller_is_owner")]` → `caller_is_owner()` → `is_caller_owner()` →
+  `caller() == data.owner` (`guards.rs:3-9`, `lib.rs:85-87`; 51 existing endpoints use it). The Phase A/C
+  wrappers reuse it verbatim. Only the user's own durable principal can initiate or finalize.
+- The Phase-C wrapper cannot finalize a receipt not produced by the matching Phase A on the same
+  canister (A2 receipt-id binding preserved end-to-end through the wrapper).
+- The engine does **not** validate the BLS certificate on-chain in either path; both the controller
+  path and A2 **embed** the supplied certificate, and V2 validation is off-chain (CVDR-Verify against
+  the NNS root key). A2 introduces no asymmetry vs the controller path — parity is in embedding, not
+  validating. The wrapper / receipt copy must not imply engine-side certificate validation.
+- `record_id` affects this receipt's `receipt_id` but **not** the certified `certified_commitment`
+  (S5 trust boundary). It cannot forge another canister's certified state.
+- The pending-state query (S8) is read-only and leaks no raw principal / raw `record_id`.
+
+## Test plan
+
+- **Round-trip:** Phase A → (frontend-simulated B) → Phase C succeeds; receipt finalizes; `is_tombstoned()`
+  true; certified commitment present.
+- **Guard coverage:** non-owner principal is rejected at Phase A and Phase C.
+- **Lock-blocks-mutation:** after Phase A, PII-mutating endpoints are blocked (tombstone guard / lock).
+- **A2 rejection passthrough:** receipt-id mismatch, missing lock (no pending receipt), and
+  double-finalize (already-finalized) each rejected through the wrapper. (Certificate validity is
+  **not** an engine rejection — it's a verifier-side V2 check; see the parked end-to-end negative in
+  Carries forward.)
+- **`record_id` shape:** derived value is stable across calls for the same subject, domain-tagged,
+  non-raw, and never equals `caller()`.
+- **MemoryId:** chosen `base_memory_id` does not collide with any enumerated existing slot; full map
+  recorded.
+- **Pending-state query:** reports correctly before/after Phase A and after finalize.
+- **D8 failure:** simulated B/C failure leaves the canister in a resumable pending state with no
+  pipeline trigger and normal use not restored.
+
+## Entry conditions (close before CD/CC implements)
+
+- **E1** Engine tagged `mktd02-v0.4.0`; OpenChatZD pins the engine dependency to that tag. ✅ (engine
+  side done; pin is part of P1).
+- **E2** O6 range recorded = **100–107 / 8 slots**. ✅ (resolved in P0; feeds S6).
+- **E3** Controller-path behaviour preservation (the shared-helper refactor). ✅ **Closed by
+  substitution** — G's E4 property-6 review explicitly compared the pre-A2 controller path
+  (`b83a910^`) against the v0.4.0 shared-helper path and confirmed *preserved*: same controller guard,
+  same `NoPendingReceipt`-before-`NotController` ordering (harness-tested in `runtime.rs`), same
+  finalize sequence. This is exactly what a DaffyDefs regression run would have vouched for, so the
+  separate run is **not required**. DaffyDefs is fully behind us.
+- **E4** G adversarial audit of the A2 host-auth path. ✅ **GO** (review logged). No substantive
+  disagreement with Claude; two accepted wording corrections (record_id → `receipt_id`; cert validation
+  is off-chain) folded into S4 / S5 / security properties. Five binding wrapper conditions captured
+  across S4, S5, and Carries-forward.
+- **E5** Fresh inspect pass on `open-chatZD` HEAD. ✅ **Done** (CC, read-only). HEAD advanced
+  `c4a34213e` → `b5e77ec94` (+3 docs-only commits — our own committed gate/PROJECT_STATE/build-packet
+  files; user-canister code byte-identical, citations valid). Grounded S1/S3/S4/S6 above. Delete-path
+  citation corrected: the uninstall is `backend/canisters/local_user_index/impl/src/jobs/delete_users.rs:76`
+  (`utils::canister::uninstall`), triggered via `user_index` c2c `delete_user` → queue → job — **not**
+  `user_index/delete_users.rs:68-77` and there is no literal `deleteCurrentUser`/`uninstall_code`
+  symbol. P3 owns this path; P1 leaves it untouched.
+
+## Design decisions (SETTLED by G — GO to craft the CC implementation prompt)
+
+1. **O2 PII classification** ✅ ratified with amendments — see `O2_PII_Classification_RATIFIED`. ERASE
+   set = S1 manifest; ERASE+DISCLOSE / DISCLOSE = P4 copy. (CHIT/streak → ERASE; relational = local-only
+   erase + disclose; financial = grouped disclosure; phone flag erased + residual disclosed.)
+2. **State-hash model** ✅ confirmed on-demand at Phase A — folded into S1 (engine calls
+   `get_state_bytes()` twice; no 51-writer instrumentation).
+3. **`record_id` derivation** ✅ ratified — folded into S5 (`OPENCHATZD_RECORD_ID_USER_V1` over
+   canonical UserId; CC determines + cites the exact byte encoding).
+4. **Commit the refreshed planning docs** ⛳ **the only remaining action before the CC prompt.** The
+   gate/PROJECT_STATE committed in `open-chatZD` (`b5e77ec94`) are pre-E4/O6 (7 slots, E3/E4 open). Commit
+   `PROJECT_STATE.md`, `P1_BuildPacket_Brief.md`, and `O2_PII_Classification_RATIFIED.md` through the
+   ladder so CC/CD read the settled state. (Alternative G allowed: the CC prompt explicitly supersedes
+   the stale committed docs — but committing is cleaner.)
+
+## Done =
+
+Adapter implemented and unit-covered; owner-guarded A/B/C wrappers present with A2 rejection semantics
+intact; `record_id` derivation decided + ADR'd; `base_memory_id` chosen collision-free with the slot
+map recorded; D8 pending/failure behaviour in place; pending-state query exposed for P3; all P1 tests
+green; engine pinned to `mktd02-v0.4.0`; `MILESTONE_LOG.md` entry. Then **P2** may open.
+
+## Carries forward
+
+- **O2** (residual disclosure facts) still open; gates **P4** copy, not P1. S5's corrected
+  trust-boundary wording is the first piece P4 reuses. **G E4 condition:** the receipt-screen copy must
+  not imply residual shared-canister PII was deleted (ties to O2).
+- **Parked hardening test (P5 / test backlog):** end-to-end verifier-negative — finalize with a
+  malformed certificate, export the receipt, confirm CVDR-Verify rejects V2. Not an engine-level test
+  (the engine embeds without validating); belongs to the proof run, not P1.
+- `record_id` derivation choice (S5) and the State Encoding Spec (S1) become reference inputs for any
+  future host integration.
