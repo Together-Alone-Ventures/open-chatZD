@@ -1,110 +1,131 @@
 # P0.x — v0.4.1 Engine Re-Pin + P1 Scope Decisions (DECISION REQUEST for G)
 
-**Type:** Decision request (gate companion). **Status:** OPEN — awaiting G ruling.
+**Type:** Decision request (gate companion). **Status:** RESOLVED — G ruled 2026-06-11;
+1c E4-lite signed off by G 2026-06-12 (see Execution status).
 **Author:** Claude. **Grounding:** CC P1 implementation pass (inspect-and-propose, uncommitted in the
 `open-chatZD` working tree; full artifacts in `open-chatZD/MKTd02_P1_Deliverable.md`); engine inspected at
 tag `mktd02-v0.4.0`. **Routes to:** G (architectural / gate authority). Per playbook, amendments are
 evidence triggers, not votes.
 
-## Context
+---
+
+## G Rulings — RESOLVED (2026-06-11)
+
+### Decision 1 — compile blocker
+- **1a — APPROVE.** Re-pin the engine to ic-cdk 0.18 / ic-stable-structures 0.7 and release as
+  `mktd02-v0.4.1`, provided the 1d tag-classification test remains satisfied.
+- **1b — DaffyDefs → single engine line.** Move DaffyDefs forward to v0.4.1 and compat-verify it
+  *after* the re-pin lands (R2). Do not create two maintained engine lines unless v0.4.1 fails 1d.
+- **1c — E4-lite REQUIRED** (focused re-pass, not a full re-audit). Confirm v0.4.1 preserves:
+  receipt-id binding; finalization lock / single-shot; no-lock / mismatch / double-finalize error
+  behaviour; controller path + guard ordering; the A2 host-authorized path; the stable-memory slot
+  map 100–107 (base+5 `finalization_lock`, base+6 receipt store, base+7 `tombstoned_at`); DaffyDefs
+  compat (deferred to R2). No reopening of the full adversarial model unless the bump forces a
+  protocol / receipt-schema / hash-formula / public-API / layout change.
+- **1d — PATCH `v0.4.1` OK, CONDITIONAL.** A `v0.4.1` patch tag is valid *only if* the re-pin is
+  strictly dependency / API-compatibility work that preserves the same protocol, the same receipt
+  schema, the same hash formulas, and the same 8-slot 100–107 stable-memory layout. Any public-API /
+  receipt-schema / hash-formula / stable-memory-layout change ⇒ **not** a patch ⇒ halt and route to a
+  broader release gate / new version line.
+
+### Decision 2 — message-body certification scope
+- **2a — SIGN OFF.** The P1 certification scope is accepted: the receipt certifies heap-PII-cleared +
+  tombstone sentinel set (the state transition); it does **not** certify physical absence of message
+  bodies, which persist in stable memory until the P3 uninstall (after receipt export).
+  **P4 / RTS copy constraint ratified:** the receipt copy must state *tombstone applied + scheduled
+  purge, with physical erasure completing on account uninstall* — it must **not** imply message bodies
+  are provably deleted at receipt time. Ties to O2's direct-messages disclosure (ERASE + DISCLOSE
+  counterpart residual).
+
+### Decision 3 — V3 module-hash interim
+- **3a — CONFIRM.** Placeholder module-hash + deferred full V3 is acceptable for P1, *provided*
+  receipts and verification copy disclose that OpenChatZD is **V1–V2 with V3 pending** until
+  installer-supplied module-hash wiring lands. Do not describe OpenChatZD as full V1–V3 while
+  `module_hash` is zero/placeholder.
+- **3b — CONFIRM.** Full V3 lands in a named follow-up packet: **P1A — Module-Hash Wiring / V3
+  Enablement** (wire `local_user_index` / installer-side module-hash supply into the user-canister
+  init/upgrade so OpenChatZD satisfies V3 without placeholder hashes).
+
+**G's net effect:** the engine re-pin may start now, but **P1 is not accepted** until v0.4.1 exists,
+DaffyDefs compatibility is checked (R2), E4-lite passes, OpenChatZD builds, and the P1 PocketIC tests run.
+
+---
+
+## Execution status (closeout — verified against repo state, 2026-06-16)
+
+- **1d PATCH-CLASS — VERIFIED against the `mktd02-v0.4.0..mktd02-v0.4.1` diff** (not merely the commit
+  subject). Scope is dependency / compile-adaptation only (dep `Cargo.toml`/`Cargo.lock`s, CI,
+  `RELEASES.md`, two in-repo docs, six engine source files). `zombie-core` (receipt schema, hash
+  formulas, protocol version) byte-untouched. `storage.rs` adds only the is-0.7-required `into_bytes`,
+  delegating to `to_bytes().into_owned()` so stable-memory bytes stay identical to v0.4.0; `Bound`s
+  unchanged; **no slot reassignment — 100–107 / base+5/6/7 intact.** `engine.rs`/`certified.rs` changes
+  are behaviour-identical syscall renames (`caller→msg_caller`, `set_certified_data→certified_data_set`,
+  is-0.7 `StableCell::set` signature); `compute_certified_commitment` and the public trait surface
+  unchanged.
+- **R1 — engine re-pin RELEASED.** ICP-Delete-Leaf re-pinned ic-cdk 0.17→0.18 / is 0.6→0.7 with the
+  source/root-lock/harness-lock commit separation G mandated. Released as annotated tag
+  **`mktd02-v0.4.1`** (peels to commit `921d710c`). Durable evidence committed *in the engine repo*:
+  `MKTd02_v0.4.1_RePin_Deliverable.md`, `P0x_v0.4.1_RePin_BuildPacket`, and the `RELEASES.md` v0.4.1 entry.
+- **1c E4-lite — SIGNED OFF by G (2026-06-12), all-OK.** receipt-id binding · finalization lock /
+  single-shot · no-lock / mismatch / double-finalize errors · controller path + guard ordering · A2
+  host-authorized path · slot map 100–107 (base+5/6/7) · tag stays patch-class under 1d — every line
+  OK. No 1d HALT. CD's two deliverable wording nits folded in at commit time.
+- **1b — R2 (DaffyDefs → v0.4.1 compat): PENDING.** P1-acceptance gate; runs after the engine landed.
+- **R3 — (OpenChatZD P1 re-point → v0.4.1, clean build, 10 PocketIC cases): PENDING.** The P1 proposal
+  remains uncommitted in the working tree, still pinned to v0.4.0.
+
+---
+
+## Context (original request — preserved)
 
 CC completed the P1 implementation as inspect-and-propose (W1–W8, two ADRs, MemoryId map, 10-case test
 plan) and **did not commit** (boundary held). The pass surfaced a **build-stopping blocker** that
-supersedes packet entry-condition **E1** and reopens the engine. **Nothing is build-verified** — the code
-is statically reasoned; the build aborts at dependency resolution. Three decisions are needed before P1
-can build, test, and move to CD/Claude diff review + human commit.
+supersedes packet entry-condition **E1** and reopens the engine. The code was statically reasoned; the
+build aborts at dependency resolution. Three decisions were needed before P1 could build, test, and move
+to CD/Claude diff review + human commit.
 
-**Compile blocker vs. acceptance gates.** Decision 1 is the **compile blocker** — rule it first: it blocks
-dependency resolution (and therefore all build/test) and invalidates v0.4.0 as the P1 entry pin.
-Decisions 2–3 are P1-**acceptance** gates (evidence-scope / wording) — they must be settled before P1 is
-accepted, but they do **not** have to delay the engine re-pin starting.
+**Compile blocker vs. acceptance gates.** Decision 1 is the compile blocker — it blocks dependency
+resolution (and therefore all build/test) and invalidates v0.4.0 as the P1 entry pin. Decisions 2–3 are
+P1-acceptance gates (evidence-scope / wording); they must be settled before P1 is accepted, but do not
+have to delay the engine re-pin starting.
 
----
+### Decision 1 — v0.4.1 engine re-pin (the blocker, Divergence #1)
 
-## Decision 1 — v0.4.1 engine re-pin (the blocker, Divergence #1)
+**Problem.** `mktd02-v0.4.0` pins ic-cdk 0.17 / is 0.6; the `open-chatZD` workspace is on ic-cdk 0.18 /
+is 0.7. Two failures: (a) **resolution-fatal** — ic-cdk 0.17 and 0.18 both pull `ic-cdk-executor`
+declaring the same `links` value, which Cargo forbids in one graph; (b) **type-level** —
+`MemoryManager<DefaultMemoryImpl>` from is-0.6 ≠ is-0.7, crossing the `mktd02::init` shared-manager
+boundary (W6).
 
-**Problem.** `mktd02-v0.4.0` pins ic-cdk 0.17 / ic-stable-structures 0.6; the `open-chatZD` workspace is on
-ic-cdk 0.18 / is 0.7. Two failures:
-- **Resolution-fatal:** ic-cdk 0.17 and 0.18 both pull `ic-cdk-executor` declaring the same
-  `links = "ic-cdk async executor"`; Cargo forbids two `links`-equal crates in one graph, so resolution
-  aborts before type-checking.
-- **Type-level:** `MemoryManager<DefaultMemoryImpl>` from is-0.6 ≠ is-0.7, and it crosses the
-  `mktd02::init` shared-manager boundary (W6 design).
+**Proposed fix.** Re-pin the engine to ic-cdk 0.18 + is 0.7, re-release as `mktd02-v0.4.1`; P1 re-points
+its pin to v0.4.1.
 
-**Proposed fix.** Re-pin the engine to ic-cdk 0.18 + ic-stable-structures 0.7, re-release as
-**`mktd02-v0.4.1`**, bump the tag; P1 re-points its pin to v0.4.1.
+**Scope / risk weighed:** breaking dep releases (real engine work — own build + lib 9/9 + PocketIC 3/3 +
+release gate); DaffyDefs blast radius (single line vs frozen); E4 re-confirmation under is-0.7;
+tag-classification test (patch only if protocol / receipt schema / hash formulas / 8-slot 100–107 layout
+unchanged).
 
-**Scope / risk to weigh — this is not a one-line bump:**
-- ic-cdk 0.17→0.18 and is 0.6→0.7 are **breaking releases**. The engine may need API adjustments
-  (StableCell/MemoryManager APIs in is-0.7; ic-cdk surface changes). Treat as real engine work: its own
-  build + lib 9/9 + PocketIC harness 3/3 re-passing under the new deps + the release-gate steps.
-- **DaffyDefs blast radius.** DaffyDefs (reference consumer, pinned v0.4.0, likely is-0.6) hits the same
-  type mismatch if the engine moves to is-0.7. Decide: DaffyDefs bumps to v0.4.1 / is-0.7 alongside
-  (single engine line) **or** stays frozen at v0.4.0 (two maintained lines). Recommend the former.
-- **E4 re-confirmation.** E4's adversarial audit was against v0.4.0. is-0.7 changes the stable-memory
-  primitives the finalization lock (StableCell base+5), receipt store (base+6) and tombstoned_at (base+7)
-  sit on. The auth *logic* shouldn't change, but **decide whether v0.4.1 needs a focused E4-lite re-pass**
-  confirming the audited properties (receipt-id binding, single-shot lock, controller-path preservation)
-  still hold under is-0.7 — confirm, don't assume.
+### Decision 2 — Q1: message-body certification scope (high-assurance / evidence)
 
-**Tag-classification test (gates whether v0.4.1 is a legitimate patch tag).** A `v0.4.1` patch tag is only
-appropriate if the re-pin is *strictly dependency / API-compatibility work* that preserves the same
-protocol, the same receipt schema, the same hash formulas, and the same 8-slot (100–107) stable-memory
-layout. If it forces **any** public API change, receipt-schema change, hash-formula change, or
-stable-memory layout change, it is **not** a mere dependency patch — require a broader release gate or a new
-version line instead.
+`get_state_bytes()` builds its preimage from a bounded heap projection + a direct-chat counterparts
+summary + a tombstone sentinel — message **bodies are not in the certified preimage**. Physical body
+purge is deferred GC (reusing `delete_direct_chat`). Synchrony is met because the sentinel / heap
+projection flip within the same update call. Certifies the state transition, **not** physical body
+absence (final erasure is the P3 uninstall, after receipt export). Requires the P4/RTS copy to say so.
 
-**Asked of G:** approve the v0.4.1 re-pin; rule on the DaffyDefs path; rule on whether an E4-lite
-re-confirmation is required (and its scope); and rule the tag classification (patch v0.4.1 vs broader gate /
-new version line) against the test above.
+### Decision 3 — W1A: V3 module-hash interim
+
+`mktd02::init` / `on_post_upgrade` wired with an additive `mktd_module_hash: Option<[u8;32]>`.
+`None → [0u8;32]` does not satisfy V3. Full V3 needs the installer (`local_user_index`) to supply the
+real module hash — out of P1 scope. Interim: two-pass attestation; receipts disclosed as V1–V2 (V3
+pending) until the installer wiring lands.
 
 ---
 
-## Decision 2 — Q1: message-body certification scope (high-assurance / evidence)
-
-**Design (CC).** Full message-body hashing in one update call is infeasible/unbounded. So
-`get_state_bytes()` builds its preimage from a **bounded heap projection + a direct-chat counterparts
-summary + a tombstone sentinel** — the message **bodies are not in the certified preimage**. Physical body
-purge is **deferred GC** (reusing `delete_direct_chat`'s mechanism). Synchrony is met because the sentinel
-/ heap projection flip within the same update call, so the post-tombstone hash changes immediately,
-independent of the deferred purge.
-
-**What this certifies — and what it does not.**
-- Certifies: heap PII cleared + tombstone sentinel set (the state transition).
-- Does **not** certify: physical absence of message bodies. At finalization the bodies are still in stable
-  memory; final physical erasure comes via the **P3 uninstall** (wipes all stable memory), *after* the
-  receipt is generated/exported — i.e. outside the receipt's certification.
-
-**Why it needs a ruling.** Consistent with our standing position — *proof of state transition within a
-boundary, not proof of data absence* — **but only if the receipt copy says so**. The P4 / RTS copy must
-not imply message bodies are provably deleted at receipt time; it must state: tombstone applied + scheduled
-purge, with physical erasure completing on account uninstall. Ties to O2's direct-messages disclosure
-(ERASE + DISCLOSE counterpart residual).
-
-**Asked of G:** sign off the certification scope for P1; ratify the P4/RTS copy constraint above. (The
-counterparts-summary preimage detail to be verified in the diff review; it is a hash input, not exposed in
-the receipt.)
-
----
-
-## Decision 3 — W1A: V3 module-hash interim
-
-**Design (CC).** `mktd02::init` / `on_post_upgrade` wired with an additive `mktd_module_hash: Option<[u8;32]>`.
-`None → [0u8;32]` does **not** satisfy V3. Full V3 needs the installer (`local_user_index`) to supply the
-real module hash at install/upgrade — out of P1 scope. Interim: two-pass attestation.
-
-**Impact.** Until the installer wiring lands, OpenChatZD receipts are effectively **V1–V2 (+ V3 pending)**,
-not the D3 V1–V3 profile. That must be disclosed in the receipt / verification copy.
-
-**Asked of G:** confirm the placeholder + deferred full-V3 (installer-supplied module hash) is acceptable
-for P1, with V3-pending disclosed; confirm full V3 lands in a named follow-up packet.
-
----
-
-## Packet impact (once decided)
+## Packet impact (resolved)
 
 - **E1 superseded:** engine pin moves v0.4.0 → **v0.4.1**; update PROJECT_STATE + the build packet.
-- **P1 "done" is gated behind:** v0.4.1 released → P1 re-points → **clean build** → the 10 PocketIC cases
-  pass → CD independent review + Claude diff review (on building code) → human-in-the-loop commit.
-- This note covers only the gating release / design decisions. The full P1 diff review does not begin until
-  the re-pin makes the code compile.
+- **P1 "done" is gated behind:** v0.4.1 released (✅) → P1 re-points → clean build → 10 PocketIC cases
+  pass → CD independent review + Claude diff review (on building code) → human-in-the-loop commit →
+  DaffyDefs compat (R2) confirmed.
+- Decisions 2–3 carry forward to P4 receipt copy (2a) and the V3-pending disclosure + P1A (3a/3b).
