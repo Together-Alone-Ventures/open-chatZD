@@ -51,7 +51,12 @@ PACKAGES=()
 for CANISTER in "${CANISTERS[@]}"; do
   PACKAGES+=(--package "${CANISTER}_canister_impl")
 done
-cargo build --locked --target wasm32-unknown-unknown --release "${PACKAGES[@]}" || exit 1
+FEATURES=()
+if [[ "${OPENCHAT_LOCAL_REPLICA:-false}" == "true" ]]
+then
+  FEATURES+=(--features user_canister_impl/local-replica)
+fi
+cargo build --locked --target wasm32-unknown-unknown --release "${PACKAGES[@]}" "${FEATURES[@]}" || exit 1
 
 echo Optimising and compressing wasms
 if ! cargo install --list | grep -Fxq "ic-wasm v0.9.11:"

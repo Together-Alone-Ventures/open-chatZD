@@ -27,4 +27,10 @@ pub struct Args {
     pub referred_by: Option<UserId>,
     pub rng_seed: [u8; 32],
     pub test_mode: bool,
+    /// SHA-256 of the deployed wasm, for MKTd02 V3 (Canister Module Verification).
+    /// A canister cannot read its own module hash, so the installer must supply
+    /// it (see P1 lifecycle/module-hash ADR). `None` is retained only for
+    /// decoding older install arguments; current installers always pass it.
+    #[serde(default)]
+    pub mktd_module_hash: Option<[u8; 32]>,
 }

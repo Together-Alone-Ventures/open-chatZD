@@ -165,6 +165,7 @@ fn prepare(args: &Args, state: &mut RuntimeState) -> Result<PrepareOk, Response>
 
     let canister_id = state.data.canister_pool.pop();
     let canister_wasm = state.data.child_canister_wasms.get(ChildCanisterType::User).wasm.clone();
+    let mktd_module_hash = state.data.user_canister_module_hash;
 
     let referred_by = referral_code
         .and_then(|c| c.user())
@@ -187,6 +188,7 @@ fn prepare(args: &Args, state: &mut RuntimeState) -> Result<PrepareOk, Response>
         referred_by,
         test_mode: state.data.test_mode,
         rng_seed: state.env.rng().r#gen(),
+        mktd_module_hash: Some(mktd_module_hash),
         bot_api_gateway_canister_id: Principal::anonymous(),
     };
 

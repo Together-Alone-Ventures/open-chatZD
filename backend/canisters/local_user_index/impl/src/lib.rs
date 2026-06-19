@@ -37,7 +37,7 @@ use types::{
     BotDataEncoding, BotEventPayload, BotEventWrapper, BotNotification, BotNotificationEnvelope, BuildVersion, CanisterId,
     ChannelLatestMessageIndex, ChatId, ChildCanisterWasms, CommunityCanisterChannelSummary, CommunityCanisterCommunitySummary,
     CommunityId, Cycles, DiamondMembershipDetails, IdempotentEnvelope, MessageContentInitial, Milliseconds, Notification,
-    NotificationEnvelope, ReferralType, TimestampMillis, Timestamped, UserId, UserNotificationEnvelope,
+    Hash, NotificationEnvelope, ReferralType, TimestampMillis, Timestamped, UserId, UserNotificationEnvelope,
     VerifiedCredentialGateArgs,
 };
 use user_canister::LocalUserIndexEvent as UserEvent;
@@ -59,6 +59,7 @@ mod memory;
 mod model;
 mod queries;
 mod updates;
+mod wasm_hash;
 
 const CHILD_CANISTER_INITIAL_CYCLES_BALANCE: Cycles = CYCLES_REQUIRED_FOR_UPGRADE + CHILD_CANISTER_TOP_UP_AMOUNT; // 0.5T cycles
 const CHILD_CANISTER_TOP_UP_AMOUNT: Cycles = 200_000_000_000; // 0.2T cycles
@@ -548,6 +549,8 @@ struct Data {
     pub global_users: GlobalUserMap,
     pub bots: BotsMap,
     pub child_canister_wasms: ChildCanisterWasms<ChildCanisterType>,
+    #[serde(default)]
+    pub user_canister_module_hash: Hash,
     pub user_index_canister_id: CanisterId,
     pub group_index_canister_id: CanisterId,
     pub notifications_index_canister_id: CanisterId,
@@ -637,6 +640,7 @@ impl Data {
             local_communities: LocalCommunityMap::default(),
             global_users: GlobalUserMap::default(),
             child_canister_wasms: ChildCanisterWasms::default(),
+            user_canister_module_hash: Hash::default(),
             user_index_canister_id,
             group_index_canister_id,
             notifications_index_canister_id,

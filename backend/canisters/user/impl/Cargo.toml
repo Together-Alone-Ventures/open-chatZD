@@ -9,6 +9,12 @@ edition.workspace = true
 path = "src/lib.rs"
 crate-type = ["cdylib"]
 
+[features]
+default = []
+# Test/local builds must never label PocketIC or local-replica certificates as
+# mainnet. Release builds leave this feature disabled.
+local-replica = ["mktd02/local-replica", "zombie-core/local-replica"]
+
 [dependencies]
 async-trait = { workspace = true }
 legacy_bot_api = { path = "../../../legacy_bots/api" }
@@ -50,6 +56,7 @@ itertools = { workspace = true }
 ledger_utils = { path = "../../../libraries/ledger_utils" }
 local_user_index_canister = { path = "../../local_user_index/api" }
 local_user_index_canister_c2c_client = { path = "../../local_user_index/c2c_client" }
+mktd02 = { workspace = true }
 msgpack = { path = "../../../libraries/msgpack" }
 nns_governance_canister = { path = "../../../external_canisters/nns_governance/api" }
 nns_governance_canister_c2c_client = { path = "../../../external_canisters/nns_governance/c2c_client" }
@@ -74,6 +81,8 @@ user_canister = { path = "../api" }
 user_canister_c2c_client = { path = "../c2c_client" }
 user_index_canister = { path = "../../user_index/api" }
 user_index_canister_c2c_client = { path = "../../user_index/c2c_client" }
+zombie-core = { workspace = true }
 
 [dev-dependencies]
+hex = { workspace = true }
 test-case = { workspace = true }

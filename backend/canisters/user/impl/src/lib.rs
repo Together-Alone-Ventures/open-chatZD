@@ -55,6 +55,7 @@ mod guards;
 mod jobs;
 mod lifecycle;
 mod memory;
+mod mktd;
 mod model;
 mod openchat_bot;
 mod queries;
@@ -69,7 +70,7 @@ thread_local! {
     static WASM_VERSION: RefCell<Timestamped<BuildVersion>> = RefCell::default();
 }
 
-canister_state!(RuntimeState);
+canister_state!(RuntimeState, assert_write_allowed);
 
 struct RuntimeState {
     pub env: Box<dyn Environment>,
@@ -496,6 +497,12 @@ struct Data {
     pub idempotency_checker: IdempotencyChecker,
     pub bots: InstalledBots,
     pub premium_items: PremiumItems,
+    /// MKTd02 Leaf-mode deletion: set synchronously by the adapter's
+    /// `tombstone_state()` during Phase A. Single source of truth for
+    /// `MKTdUserAdapter::is_tombstoned()` and the D8 mutation block. Additive;
+    /// defaults to `false` for canisters upgraded from a pre-P1 wasm.
+    #[serde(default)]
+    pub pii_tombstoned: bool,
 }
 
 impl Data {
@@ -566,6 +573,7 @@ impl Data {
             idempotency_checker: IdempotencyChecker::default(),
             bots: InstalledBots::default(),
             premium_items: PremiumItems::default(),
+            pii_tombstoned: false,
         }
     }
 
@@ -752,8 +760,29 @@ pub struct Metrics {
     pub canister_ids: CanisterIds,
 }
 
+fn assert_write_allowed(state: &RuntimeState) {
+    assert_not_pending_deletion(state);
+}
+
+/// D8: once Phase A has run (`pii_tombstoned` set), every PII-mutating update
+/// entry point is blocked from resuming until finalize/recovery. Both
+/// `execute_update` and `execute_update_async` funnel here, and E5 verified all
+/// 51 `caller_is_owner` writers (plus c2c writers) go through one of them — so
+/// this single chokepoint is complete. The Phase A wrapper drives the engine
+/// directly (not via these helpers); the Phase C wrapper and P3 recovery use
+/// `mutate_state` directly — so neither self-blocks. See P1 NOTES (W7).
+fn assert_not_pending_deletion(state: &RuntimeState) {
+    if state.data.pii_tombstoned {
+        ic_cdk::trap(
+            "user canister deletion in progress: mutating calls are blocked after \
+             MKTd02 Phase A (pending finalization / tombstoned) — D8",
+        );
+    }
+}
+
 fn execute_update<F: FnOnce(&mut RuntimeState) -> R, R>(f: F) -> R {
     mutate_state(|state| {
+        assert_not_pending_deletion(state);
         state.regular_jobs.run(state.env.deref(), &mut state.data);
         let result = f(state);
         state.data.flush_pending_events();
@@ -762,8 +791,11 @@ fn execute_update<F: FnOnce(&mut RuntimeState) -> R, R>(f: F) -> R {
 }
 
 async fn execute_update_async<F: FnOnce() -> Fut, Fut: Future<Output = R>, R>(f: F) -> R {
+    read_state(assert_not_pending_deletion);
     run_regular_jobs();
     let result = f().await;
+    // D8: re-check after the await — trap rolls back this message if Phase A tombstoned mid-await.
+    read_state(assert_not_pending_deletion);
     flush_pending_events();
     result
 }

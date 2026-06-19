@@ -113,6 +113,20 @@ pub fn execute_msgpack_update<P: Serialize, R: DeserializeOwned>(
     unwrap_msgpack_response(env.update_call(canister_id, sender, method_name, msgpack::serialize_then_unwrap(payload)))
 }
 
+// Like `execute_msgpack_update` but returns the raw reject result instead of
+// panicking, so a test can assert that a call is *rejected* (e.g. a guard
+// failure or an `ic_cdk::trap`). Used by the MKTd02 deletion tests for the
+// non-owner reject and the D8 post-Phase-A mutation trap.
+pub fn execute_msgpack_update_no_unwrap<P: Serialize>(
+    env: &mut PocketIc,
+    sender: Principal,
+    canister_id: CanisterId,
+    method_name: &str,
+    payload: &P,
+) -> Result<Vec<u8>, RejectResponse> {
+    env.update_call(canister_id, sender, method_name, msgpack::serialize_then_unwrap(payload))
+}
+
 pub fn execute_update_no_response<P: CandidType>(
     env: &mut PocketIc,
     sender: Principal,

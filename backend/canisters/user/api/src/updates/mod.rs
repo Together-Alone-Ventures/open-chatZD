@@ -48,6 +48,8 @@ pub mod manage_favourite_chats;
 pub mod mark_achievements_seen;
 pub mod mark_message_activity_feed_read;
 pub mod mark_read;
+pub mod mktd_execute_deletion;
+pub mod mktd_finalize_deletion;
 pub mod mute_notifications;
 pub mod pay_for_streak_insurance;
 pub mod pin_chat_v2;

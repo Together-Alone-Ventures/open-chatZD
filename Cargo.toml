@@ -230,6 +230,20 @@ jwt-simple = { version = "0.12", default-features = false, features = [
     "pure-rust",
 ] }
 lazy_static = "1"
+# --- MKTd02 / ICP-Delete-Leaf CVDR engine (P1 integration) ---
+# Engine pinned to the released tag. zombie-core MUST match the tag mktd02
+# itself pins (mktd02-v0.4.0 -> zombie-core-v0.3.1) so the FieldDescriptor /
+# encode_pii_state / DeletionReceipt types are the same crate instance the
+# engine uses (no transitive-version skew).
+#
+# ⚠ PREREQUISITE BLOCKER (see P1 NOTES, Divergence #1): mktd02-v0.4.0 pins
+# ic-stable-structures = "0.6" and ic-cdk = "0.17"; this workspace uses 0.7 /
+# 0.18. `MemoryManager<DefaultMemoryImpl>` crosses the mktd02::init boundary,
+# so the engine MUST be re-pinned to ic-stable-structures 0.7 (+ ic-cdk 0.18)
+# and re-released (e.g. mktd02-v0.4.1) before this builds. Update the tag below
+# to that release.
+mktd02 = { git = "https://github.com/Together-Alone-Ventures/ICP-Delete-Leaf", tag = "mktd02-v0.4.1" }
+zombie-core = { git = "https://github.com/Together-Alone-Ventures/zombie-core", tag = "zombie-core-v0.3.1" }
 num-traits = "0.2"
 openssl = "0.10"
 p256 = { version = "0.13" }

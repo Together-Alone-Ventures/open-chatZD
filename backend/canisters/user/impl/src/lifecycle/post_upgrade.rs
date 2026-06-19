@@ -25,6 +25,17 @@ fn post_upgrade(args: Args) {
     let env = Box::new(CanisterEnv::new(data.rng_seed));
     init_state(env, data, args.wasm_version);
 
+    // MKTd02: reconnect to the engine's stable slots (base 100) on the SAME
+    // MemoryManager, recompute the state hash and re-publish the certified
+    // commitment, and update module_hash. Runs AFTER state is restored and with
+    // no borrow held. If a receipt is pending finalization, this traps by
+    // design (finalize before upgrading) — see mktd02::on_post_upgrade.
+    let module_hash = args.mktd_module_hash.unwrap_or([0u8; 32]);
+    let adapter = crate::mktd::MKTdUserAdapter;
+    crate::memory::with_memory_manager(|mm| {
+        mktd02::on_post_upgrade(&adapter, mm, crate::mktd::config(), module_hash);
+    });
+
     let total_instructions = ic_cdk::api::call_context_instruction_counter();
     info!(version = %args.wasm_version, total_instructions, "Post-upgrade complete");
 }

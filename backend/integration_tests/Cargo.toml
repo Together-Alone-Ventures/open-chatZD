@@ -18,6 +18,7 @@ event_relay_canister = { path = "../canisters/event_relay/api" }
 event_store_canister = { workspace = true }
 group_canister = { path = "../canisters/group/api" }
 group_index_canister = { path = "../canisters/group_index/api" }
+hex = { workspace = true }
 ic-ledger-types = { workspace = true }
 ic-stable-structures = { workspace = true }
 icrc-ledger-types = { workspace = true }

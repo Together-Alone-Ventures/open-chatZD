@@ -1,4 +1,5 @@
 use crate::guards::caller_is_user_index;
+use crate::wasm_hash::deployed_module_hash;
 use crate::{Data, RuntimeState, mutate_state, read_state};
 use canister_api_macros::update;
 use canister_tracing_macros::trace;
@@ -71,6 +72,8 @@ fn commit(
     state.data.users_requiring_upgrade.clear();
     let version = args.version;
     let wasm_hash = args.wasm_hash;
+    let module_hash = deployed_module_hash(&wasm.module).expect("user canister wasm hash");
+    state.data.user_canister_module_hash = module_hash;
 
     state
         .data

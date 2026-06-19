@@ -23,7 +23,12 @@ for l in $(ls ${CARGO_HOME}/registry/src/)
 do
   export RUSTFLAGS="--remap-path-prefix ${CARGO_HOME}/registry/src/${l}=/cargo/registry/src/github ${RUSTFLAGS}"
 done
-cargo build --locked --target wasm32-unknown-unknown --release --package $PACKAGE || exit 1
+FEATURES=()
+if [[ "$PACKAGE" == "user_canister_impl" && "${OPENCHAT_LOCAL_REPLICA:-false}" == "true" ]]
+then
+  FEATURES+=(--features user_canister_impl/local-replica)
+fi
+cargo build --locked --target wasm32-unknown-unknown --release --package $PACKAGE "${FEATURES[@]}" || exit 1
 
 echo Optimising wasm
 if ! cargo install --list | grep -Fxq "ic-wasm v0.9.11:"

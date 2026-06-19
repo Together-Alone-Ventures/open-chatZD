@@ -104,6 +104,7 @@ fn initialize_upgrade(canister_id: CanisterId, force: bool, state: &mut RuntimeS
         deposit_cycles_if_needed,
         args: msgpack::serialize_then_unwrap(&user_canister::post_upgrade::Args {
             wasm_version: new_wasm_version,
+            mktd_module_hash: Some(state.data.user_canister_module_hash),
         }),
         mode: CanisterInstallMode::Upgrade(None),
         stop_start_canister: true,

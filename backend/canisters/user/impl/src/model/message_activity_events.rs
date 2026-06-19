@@ -58,4 +58,51 @@ impl MessageActivityEvents {
     pub fn last_updated(&self) -> TimestampMillis {
         self.last_updated
     }
+
+    pub fn attestation_snapshot(&self) -> (Vec<MessageActivityEvent>, TimestampMillis, TimestampMillis) {
+        (self.events.iter().cloned().collect(), self.read_up_to, self.last_updated)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use types::{Chat, MessageId, MessageIndex};
+    use user_canister::MessageActivity;
+
+    #[test]
+    fn serde_round_trip_preserves_stored_event_order() {
+        let mut events = MessageActivityEvents::default();
+        for timestamp in [10, 30, 20] {
+            events.push(
+                MessageActivityEvent {
+                    chat: Chat::Direct(candid::Principal::anonymous().into()),
+                    thread_root_message_index: None,
+                    message_index: MessageIndex::from(timestamp as u32),
+                    message_id: MessageId::from(timestamp),
+                    event_index: (timestamp as u32).into(),
+                    activity: MessageActivity::Mention,
+                    timestamp,
+                    user_id: None,
+                },
+                timestamp,
+            );
+        }
+        events.mark_read_up_to(10, 31);
+
+        let bytes = msgpack::serialize_then_unwrap(&events);
+        let decoded: MessageActivityEvents = msgpack::deserialize_then_unwrap(&bytes);
+
+        assert_eq!(
+            decoded
+                .attestation_snapshot()
+                .0
+                .into_iter()
+                .map(|event| event.timestamp)
+                .collect::<Vec<_>>(),
+            vec![30, 20, 10]
+        );
+        assert_eq!(decoded.read_up_to, 10);
+        assert_eq!(decoded.last_updated, 31);
+    }
 }

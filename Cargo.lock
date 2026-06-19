@@ -1784,6 +1784,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "ciborium"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42e69ffd6f0917f5c029256a24d0161db17cea3997d185db0d35926308770f0e"
+dependencies = [
+ "ciborium-io",
+ "ciborium-ll",
+ "serde",
+]
+
+[[package]]
+name = "ciborium-io"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05afea1e0a06c9be33d539b876f1ce3692f4afea2cb41f740e7743225ed1c757"
+
+[[package]]
+name = "ciborium-ll"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57663b653d948a338bfb3eeba9bb2fd5fcfaecb9e199e87e1eda4d9e8b240fd9"
+dependencies = [
+ "ciborium-io",
+ "half 2.7.1",
+]
+
+[[package]]
 name = "cipher"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4367,6 +4394,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b43ede17f21864e81be2fa654110bf1e793774238d86ef8555c37e6519c0403"
 
 [[package]]
+name = "half"
+version = "2.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ea2d84b969582b4b1864a92dc5d27cd2b77b622a8d79306834f1be5ba20d84b"
+dependencies = [
+ "cfg-if",
+ "crunchy",
+ "zerocopy",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5774,6 +5812,7 @@ dependencies = [
  "event_store_canister",
  "group_canister",
  "group_index_canister",
+ "hex",
  "ic-ledger-types",
  "ic-stable-structures 0.7.0",
  "icrc-ledger-types",
@@ -6364,6 +6403,7 @@ dependencies = [
  "event_store_producer_cdk_runtime",
  "event_store_utils",
  "fire_and_forget_handler",
+ "flate2",
  "futures",
  "group_canister",
  "group_canister_c2c_client",
@@ -6671,6 +6711,20 @@ dependencies = [
  "libc",
  "wasi 0.11.1+wasi-snapshot-preview1",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "mktd02"
+version = "0.4.1"
+source = "git+https://github.com/Together-Alone-Ventures/ICP-Delete-Leaf?tag=mktd02-v0.4.1#921d710c8e7295739ed6055991383bb0929e4cec"
+dependencies = [
+ "candid",
+ "ciborium",
+ "hex",
+ "ic-cdk",
+ "ic-stable-structures 0.7.0",
+ "serde",
+ "zombie-core",
 ]
 
 [[package]]
@@ -9710,7 +9764,7 @@ version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2bef2ebfde456fb76bbcf9f59315333decc4fda0b2b44b420243c11e0f5ec1f5"
 dependencies = [
- "half",
+ "half 1.8.3",
  "serde",
 ]
 
@@ -12238,6 +12292,7 @@ dependencies = [
  "ic-ledger-types",
  "ic_principal",
  "icrc-ledger-types",
+ "mktd02",
  "oc_error_codes",
  "serde",
  "ts-rs",
@@ -12296,6 +12351,7 @@ dependencies = [
  "group_canister_c2c_client",
  "group_index_canister",
  "group_index_canister_c2c_client",
+ "hex",
  "http_request",
  "ic-cdk",
  "ic-cdk-timers",
@@ -12314,6 +12370,7 @@ dependencies = [
  "legacy_bot_c2c_client",
  "local_user_index_canister",
  "local_user_index_canister_c2c_client",
+ "mktd02",
  "msgpack",
  "nns_governance_canister",
  "nns_governance_canister_c2c_client",
@@ -12339,6 +12396,7 @@ dependencies = [
  "user_index_canister",
  "user_index_canister_c2c_client",
  "utils",
+ "zombie-core",
 ]
 
 [[package]]
@@ -13766,6 +13824,18 @@ dependencies = [
  "sha3",
  "thiserror 1.0.69",
  "zeroize",
+]
+
+[[package]]
+name = "zombie-core"
+version = "0.3.0"
+source = "git+https://github.com/Together-Alone-Ventures/zombie-core?tag=zombie-core-v0.3.1#508f2f8bb88f4395293168c6ef25c92a67dee894"
+dependencies = [
+ "candid",
+ "ciborium",
+ "hex",
+ "serde",
+ "sha2 0.10.9",
 ]
 
 [[package]]

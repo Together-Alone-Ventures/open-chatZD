@@ -22,7 +22,12 @@ cd $SCRIPT_DIR/..
 
 if [ $WASM_SRC = "build" ]
 then
-    ./scripts/generate-all-canister-wasms.sh
+    if [ "$TEST_MODE" = "true" ]
+    then
+        OPENCHAT_LOCAL_REPLICA=true ./scripts/generate-all-canister-wasms.sh
+    else
+        ./scripts/generate-all-canister-wasms.sh
+    fi
 elif [ $WASM_SRC != "local" ]
 then
     ./scripts/download-all-canister-wasms.sh $WASM_SRC || exit 1

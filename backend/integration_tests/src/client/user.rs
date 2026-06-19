@@ -8,6 +8,9 @@ generate_msgpack_query_call!(events_by_index);
 generate_msgpack_query_call!(events_window);
 generate_msgpack_query_call!(initial_state);
 generate_msgpack_query_call!(message_activity_feed);
+generate_msgpack_query_call!(mktd_get_receipt);
+generate_msgpack_query_call!(mktd_pending_certificate);
+generate_msgpack_query_call!(mktd_pending_deletion_state);
 generate_msgpack_query_call!(saved_crypto_accounts);
 generate_msgpack_query_call!(updates);
 
@@ -33,6 +36,8 @@ generate_msgpack_update_call!(leave_community);
 generate_msgpack_update_call!(leave_group);
 generate_msgpack_update_call!(mark_message_activity_feed_read);
 generate_msgpack_update_call!(mark_read);
+generate_msgpack_update_call!(mktd_execute_deletion);
+generate_msgpack_update_call!(mktd_finalize_deletion);
 generate_msgpack_update_call!(mute_notifications);
 generate_msgpack_update_call!(c2c_pay_for_premium_item);
 generate_msgpack_update_call!(pay_for_streak_insurance);

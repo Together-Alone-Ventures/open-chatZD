@@ -65,4 +65,8 @@ impl Contacts {
     pub fn iter(&self) -> impl Iterator<Item = (&UserId, &Contact)> {
         self.map.iter()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
 }

@@ -19,6 +19,8 @@ fn main() {
     generate_ts_method!(user, local_user_index);
     generate_ts_method!(user, message_activity_feed);
     generate_ts_method!(user, messages_by_message_index);
+    generate_ts_method!(user, mktd_pending_certificate);
+    generate_ts_method!(user, mktd_pending_deletion_state);
     generate_ts_method!(user, public_profile);
     generate_ts_method!(user, search_messages);
     generate_ts_method!(user, saved_crypto_accounts);
@@ -53,6 +55,8 @@ fn main() {
     generate_ts_method!(user, mark_achievements_seen);
     generate_ts_method!(user, mark_message_activity_feed_read);
     generate_ts_method!(user, mark_read);
+    generate_ts_method!(user, mktd_execute_deletion);
+    generate_ts_method!(user, mktd_finalize_deletion);
     generate_ts_method!(user, mute_notifications);
     generate_ts_method!(user, pay_for_streak_insurance);
     generate_ts_method!(user, pin_chat_v2);

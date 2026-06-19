@@ -1294,6 +1294,25 @@ impl ChatEvents {
             .and_then(|(m, _)| if let MessageContentInternal::P2PSwap(p) = m.content { Some(p.into()) } else { None })
     }
 
+    pub fn has_reserved_p2p_swap(&self) -> bool {
+        self.events_contain_reserved_p2p_swap(self.main_events_reader())
+            || self
+                .thread_keys()
+                .any(|thread_root| {
+                    self.events_reader(EventIndex::default(), Some(thread_root), None)
+                        .is_some_and(|reader| self.events_contain_reserved_p2p_swap(reader))
+                })
+    }
+
+    fn events_contain_reserved_p2p_swap(&self, reader: impl Reader) -> bool {
+        reader.iter_events(None, true).any(|event| {
+            matches!(
+                event.event.into_message().map(|m| m.content),
+                Some(MessageContentInternal::P2PSwap(p)) if matches!(p.status, P2PSwapStatus::Reserved(_))
+            )
+        })
+    }
+
     pub fn reserve_p2p_swap(
         &mut self,
         user_id: UserId,
