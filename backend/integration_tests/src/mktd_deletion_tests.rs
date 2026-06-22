@@ -585,3 +585,148 @@ fn receipt_module_hash_is_the_on_chain_upload_hash() {
     println!("ONCHAIN_MODULE_HASH = {}", hex(&on_chain));
     println!("SHA256_USER_WASM_GZ = {}", hex(&upload_hash));
 }
+
+/// CVDR receipt download path: the `/mktd_receipt?id=<hex>` http_request route
+/// must serve bytes byte-identical to the canonical test-hook export
+/// (`serde_json::to_string(&DeletionReceipt)`), so CVDR-Verify accepts the
+/// downloaded file unchanged. Writes both artifacts (when the env vars are set)
+/// for independent sha256 + CVDR-Verify re-derivation.
+#[test]
+fn receipt_download_path_matches_test_hook_export() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv { env, canister_ids, .. } = wrapper.env();
+    let user = register(env, canister_ids);
+
+    // Finalize a receipt on the live canister.
+    let receipt_id = phase_a(env, &user);
+    let pc = phase_b(env, &user);
+    let response = finalize(env, &user, receipt_id.clone(), pc.certificate);
+    assert!(
+        matches!(response, user_canister::mktd_finalize_deletion::Response::Success),
+        "Phase C expected Success, got {response:?}"
+    );
+
+    // Reference bytes: engine canonical serde_json, exactly as the
+    // MKTD_RECEIPT_EXPORT_PATH test hook emits (mktd_get_receipt -> serde_json).
+    let exported = client::user::mktd_get_receipt(
+        env,
+        user.principal,
+        user.canister(),
+        &user_canister::mktd_get_receipt::Args { receipt_id: receipt_id.clone() },
+    );
+    let receipt = match exported {
+        user_canister::mktd_get_receipt::Response::Success(receipt) => receipt,
+        other => panic!("finalized receipt export expected Success, got {other:?}"),
+    };
+    let hook_bytes = serde_json::to_string(&receipt).expect("serialize").into_bytes();
+
+    // Download-path bytes: the new http_request route.
+    let receipt_id_hex = hex::encode(&receipt_id);
+    let download = client::http_request(
+        env,
+        user.principal,
+        user.canister(),
+        &HttpRequest {
+            method: "GET".to_string(),
+            url: format!("/mktd_receipt?id={receipt_id_hex}"),
+            headers: Vec::new(),
+            body: Vec::new(),
+        },
+    );
+    assert_eq!(download.status_code, 200, "download must be 200");
+    assert!(
+        download
+            .headers
+            .iter()
+            .any(|h| h.0.eq_ignore_ascii_case("content-disposition") && h.1.contains(".json")),
+        "download must carry an attachment .json filename"
+    );
+    let download_bytes = download.body;
+
+    // ACCEPTANCE: byte-identical (the path must not reshape anything).
+    assert_eq!(
+        sha256::sha256(&download_bytes),
+        sha256::sha256(&hook_bytes),
+        "download-path JSON must be byte-identical to the test-hook export"
+    );
+
+    println!("MKTD_DOWNLOAD_SHA256={}", hex::encode(sha256::sha256(&download_bytes)));
+    println!("MKTD_HOOK_SHA256={}", hex::encode(sha256::sha256(&hook_bytes)));
+
+    if let Ok(path) = std::env::var("MKTD_RECEIPT_EXPORT_PATH") {
+        std::fs::write(path, &hook_bytes).expect("write hook export");
+    }
+    if let Ok(path) = std::env::var("MKTD_RECEIPT_DOWNLOAD_PATH") {
+        std::fs::write(path, &download_bytes).expect("write download export");
+    }
+}
+
+/// Negative-route contract for `/mktd_receipt`: every malformed or non-matching
+/// request must return 404 with no panic path. Covers bad id length, non-hex id,
+/// unknown (well-formed but absent) id, wrong path, and — the load-bearing case —
+/// a non-GET method against a *valid, existing* receipt id, which must still 404
+/// (proving the GET-only method gate, not just a bad id, is what rejects it).
+#[test]
+fn receipt_route_negatives_all_return_404() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv { env, canister_ids, .. } = wrapper.env();
+    let user = register(env, canister_ids);
+
+    // Finalize a real receipt so the wrong-method case uses a valid, existing id.
+    let receipt_id = phase_a(env, &user);
+    let pc = phase_b(env, &user);
+    let response = finalize(env, &user, receipt_id.clone(), pc.certificate);
+    assert!(
+        matches!(response, user_canister::mktd_finalize_deletion::Response::Success),
+        "Phase C expected Success, got {response:?}"
+    );
+    let receipt_id_hex = hex::encode(&receipt_id);
+
+    let req = |method: &str, url: String| {
+        client::http_request(
+            env,
+            user.principal,
+            user.canister(),
+            &HttpRequest { method: method.to_string(), url, headers: Vec::new(), body: Vec::new() },
+        )
+    };
+
+    // Sanity: the valid id over GET is downloadable (200), so the 404s below are
+    // about the negative input, not a broken happy path.
+    assert_eq!(
+        req("GET", format!("/mktd_receipt?id={receipt_id_hex}")).status_code,
+        200,
+        "valid id over GET must still download"
+    );
+
+    // wrong_method: valid, existing id but a non-GET method -> 404 (method gate).
+    assert_eq!(
+        req("POST", format!("/mktd_receipt?id={receipt_id_hex}")).status_code,
+        404,
+        "non-GET method against a valid id must be rejected as 404"
+    );
+
+    // bad length: too-short hex -> 404.
+    assert_eq!(req("GET", "/mktd_receipt?id=deadbeef".to_string()).status_code, 404, "short id must 404");
+
+    // non-hex: correct length (64 chars) but not hex -> 404.
+    assert_eq!(
+        req("GET", format!("/mktd_receipt?id={}", "z".repeat(64))).status_code,
+        404,
+        "non-hex id must 404"
+    );
+
+    // unknown: well-formed 64-hex id that was never finalized -> 404.
+    assert_eq!(
+        req("GET", format!("/mktd_receipt?id={}", "0".repeat(64))).status_code,
+        404,
+        "unknown id must 404"
+    );
+
+    // wrong path: matches no route -> 404.
+    assert_eq!(
+        req("GET", format!("/mktd_recipe?id={receipt_id_hex}")).status_code,
+        404,
+        "wrong path must 404"
+    );
+}
