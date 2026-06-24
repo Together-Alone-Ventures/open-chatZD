@@ -67,6 +67,12 @@
       "wasm": "wasms/proposals_bot.wasm.gz",
       "build": "./scripts/generate-wasm.sh proposals_bot"
     },
+    "receipts": {
+      "type": "custom",
+      "candid": "backend/canisters/receipts/api/can.did",
+      "wasm": "wasms/receipts.wasm.gz",
+      "build": "./scripts/generate-wasm.sh receipts"
+    },
     "airdrop_bot": {
       "type": "custom",
       "candid": "backend/canisters/airdrop_bot/api/can.did",

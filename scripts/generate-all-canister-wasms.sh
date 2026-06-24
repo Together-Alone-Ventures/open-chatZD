@@ -31,6 +31,7 @@ CANISTERS=(
   openchat_installer
   proposal_validation
   proposals_bot
+  receipts
   registry
   sign_in_with_email
   storage_bucket

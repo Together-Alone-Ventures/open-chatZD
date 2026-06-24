@@ -503,6 +503,13 @@ struct Data {
     /// defaults to `false` for canisters upgraded from a pre-P1 wasm.
     #[serde(default)]
     pub pii_tombstoned: bool,
+    /// MKTd02 Phase C: the receipt id of THIS user's finalized CVDR, persisted on
+    /// successful finalize so the pre-uninstall export (P2) can retrieve the
+    /// canonical receipt without an engine enumeration API (the engine only
+    /// exposes `get_receipt(receipt_id)`). `None` until finalized; additive,
+    /// defaults to `None` on upgrade from a pre-P2 wasm.
+    #[serde(default)]
+    pub mktd_finalized_receipt_id: Option<[u8; 32]>,
 }
 
 impl Data {
@@ -574,6 +581,7 @@ impl Data {
             bots: InstalledBots::default(),
             premium_items: PremiumItems::default(),
             pii_tombstoned: false,
+            mktd_finalized_receipt_id: None,
         }
     }
 
@@ -769,8 +777,12 @@ fn assert_write_allowed(state: &RuntimeState) {
 /// `execute_update` and `execute_update_async` funnel here, and E5 verified all
 /// 51 `caller_is_owner` writers (plus c2c writers) go through one of them — so
 /// this single chokepoint is complete. The Phase A wrapper drives the engine
-/// directly (not via these helpers); the Phase C wrapper and P3 recovery use
-/// `mutate_state` directly — so neither self-blocks. See P1 NOTES (W7).
+/// directly (not via these helpers). Post-tombstone host writes are otherwise
+/// blocked: the canister-wide `mutate_state` write-guard (`assert_write_allowed`)
+/// traps once tombstoned. The Phase C wrapper's narrow finalized-receipt-id
+/// pointer capture (needed for post-uninstall export) therefore uses
+/// `mutate_state_bypass` deliberately; it is the only sanctioned post-tombstone
+/// host write. See P1 NOTES (W7).
 fn assert_not_pending_deletion(state: &RuntimeState) {
     if state.data.pii_tombstoned {
         ic_cdk::trap(

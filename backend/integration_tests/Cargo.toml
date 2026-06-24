@@ -37,6 +37,7 @@ openchat_installer_canister = { path = "../canisters/openchat_installer/api" }
 pocket-ic = { workspace = true }
 proposals_bot_canister = { path = "../canisters/proposals_bot/api" }
 rand = { workspace = true }
+receipts_canister = { path = "../canisters/receipts/api" }
 registry_canister = { path = "../canisters/registry/api" }
 reqwest = { workspace = true }
 serde = { workspace = true }

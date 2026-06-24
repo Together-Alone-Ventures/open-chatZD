@@ -11,6 +11,9 @@ pub struct Args {
     pub proposals_bot_canister_id: CanisterId,
     pub airdrop_bot_canister_id: CanisterId,
     pub online_users_canister_id: CanisterId,
+    // P2: durable receipts canister id (§5, env-driven), propagated to
+    // local_user_index. `None` = export disabled.
+    pub receipts_canister_id: Option<CanisterId>,
     pub cycles_dispenser_canister_id: CanisterId,
     pub storage_index_canister_id: CanisterId,
     pub escrow_canister_id: CanisterId,

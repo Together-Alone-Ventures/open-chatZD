@@ -27,6 +27,7 @@ event_store_producer_cdk_runtime = { workspace = true }
 event_store_utils = { workspace = true }
 fire_and_forget_handler = { path = "../../../libraries/fire_and_forget_handler" }
 flate2 = "1.1.2"
+hex = { workspace = true }
 futures = { workspace = true }
 group_canister = { path = "../../group/api" }
 group_canister_c2c_client = { path = "../../group/c2c_client" }
@@ -57,6 +58,8 @@ stable_memory_map = { path = "../../../libraries/stable_memory_map" }
 timer_job_queues = { path = "../../../libraries/timer_job_queues" }
 tracing = { workspace = true }
 types = { path = "../../../libraries/types" }
+receipts_canister = { path = "../../receipts/api" }
+receipts_canister_c2c_client = { path = "../../receipts/c2c_client" }
 user_canister = { path = "../../user/api" }
 user_canister_c2c_client = { path = "../../user/c2c_client" }
 user_ids_set = { path = "../../../libraries/user_ids_set" }

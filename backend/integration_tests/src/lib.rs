@@ -38,6 +38,7 @@ mod mktd_deletion_tests;
 mod notification_tests;
 mod online_users_tests;
 mod p2p_swap_tests;
+mod receipts_tests;
 mod pin_number_tests;
 mod poll_tests;
 mod prize_message_tests;
@@ -121,6 +122,7 @@ pub struct CanisterIds {
     pub notifications_index: CanisterId,
     pub identity: CanisterId,
     pub online_users: CanisterId,
+    pub receipts: CanisterId,
     pub proposals_bot: CanisterId,
     pub airdrop_bot: CanisterId,
     pub storage_index: CanisterId,
@@ -156,6 +158,7 @@ impl Debug for CanisterIds {
         w.field("notifications_index", &self.notifications_index.to_string());
         w.field("identity", &self.identity.to_string());
         w.field("online_users", &self.online_users.to_string());
+        w.field("receipts", &self.receipts.to_string());
         w.field("proposals_bot", &self.proposals_bot.to_string());
         w.field("airdrop_bot", &self.airdrop_bot.to_string());
         w.field("storage_index", &self.storage_index.to_string());

@@ -114,6 +114,7 @@ fn install_canisters(env: &mut PocketIc, controller: Principal) -> CanisterIds {
     let event_store_canister_id = create_canister(env, controller);
     let sign_in_with_email_canister_id = create_canister(env, controller);
     let website_canister_id = create_canister(env, controller);
+    let receipts_canister_id = create_canister(env, controller);
 
     let community_canister_wasm = wasms::COMMUNITY.clone();
     let cycles_dispenser_canister_wasm = wasms::CYCLES_DISPENSER.clone();
@@ -130,6 +131,7 @@ fn install_canisters(env: &mut PocketIc, controller: Principal) -> CanisterIds {
     let openchat_installer_canister_wasm = wasms::OPENCHAT_INSTALLER.clone();
     let proposals_bot_canister_wasm = wasms::PROPOSALS_BOT.clone();
     let airdrop_bot_canister_wasm = wasms::AIRDROP_BOT.clone();
+    let receipts_canister_wasm = wasms::RECEIPTS.clone();
     let registry_canister_wasm = wasms::REGISTRY.clone();
     let sign_in_with_email_canister_wasm = wasms::SIGN_IN_WITH_EMAIL.clone();
     let sns_wasm_canister_wasm = wasms::SNS_WASM.clone();
@@ -152,6 +154,7 @@ fn install_canisters(env: &mut PocketIc, controller: Principal) -> CanisterIds {
         proposals_bot_canister_id,
         airdrop_bot_canister_id,
         online_users_canister_id,
+        receipts_canister_id: Some(receipts_canister_id),
         cycles_dispenser_canister_id,
         storage_index_canister_id,
         escrow_canister_id,
@@ -253,6 +256,24 @@ fn install_canisters(env: &mut PocketIc, controller: Principal) -> CanisterIds {
         online_users_canister_id,
         online_users_canister_wasm,
         online_users_init_args,
+    );
+
+    let receipts_init_args = receipts_canister::init::Args {
+        // The export authority (§2). `controller` exercises the receipts-side
+        // store/idempotency/gating matrix directly. The real OpenChat export
+        // authority is the local_user_index canister(s); see the P2 report for
+        // wiring that dynamic id into the authorized set for the full pipeline.
+        authorized_principals: vec![controller],
+        cycles_dispenser_canister_id,
+        wasm_version,
+        test_mode,
+    };
+    install_canister(
+        env,
+        controller,
+        receipts_canister_id,
+        receipts_canister_wasm,
+        receipts_init_args,
     );
 
     let proposals_bot_init_args = proposals_bot_canister::init::Args {
@@ -497,6 +518,7 @@ fn install_canisters(env: &mut PocketIc, controller: Principal) -> CanisterIds {
         notifications_index: notifications_index_canister_id,
         identity: identity_canister_id,
         online_users: online_users_canister_id,
+        receipts: receipts_canister_id,
         proposals_bot: proposals_bot_canister_id,
         airdrop_bot: airdrop_bot_canister_id,
         storage_index: storage_index_canister_id,

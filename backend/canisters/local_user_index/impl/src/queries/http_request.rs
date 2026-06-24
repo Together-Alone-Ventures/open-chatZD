@@ -70,6 +70,14 @@ fn http_request(request: HttpRequest) -> HttpResponse {
         )
     }
 
+    // P2 remediation (G ruling (b)): NO per-canister HTTP route for parked-export
+    // state. An `http_request` GET arrives as an anonymous query via the IC HTTP
+    // gateway (this handler has no authenticated `caller`), so it cannot be
+    // operator/controller-gated — and G ruled it must not be public. Per-canister
+    // visibility lives in the `error!`/`warn!` logs; the aggregate
+    // `receipt_export_pending_count` metric below is the only exposed surface
+    // (aggregate, no per-canister status — consistent with the public metrics
+    // model).
     match extract_route(&request.url) {
         Route::Errors(since) => get_errors_impl(since),
         Route::Logs(since) => get_logs_impl(since),

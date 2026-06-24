@@ -71,6 +71,10 @@ async fn install_service_canisters_impl(
         proposals_bot_canister_id: canister_ids.proposals_bot,
         airdrop_bot_canister_id: canister_ids.airdrop_bot,
         online_users_canister_id: canister_ids.online_users,
+        // P2: receipts canister wiring for the deploy tool is a separate go-live
+        // step (§12). Left `None` here for the local-first P2 slice; set this
+        // env-driven once the receipts canister id is provisioned.
+        receipts_canister_id: None,
         cycles_dispenser_canister_id: canister_ids.cycles_dispenser,
         storage_index_canister_id: canister_ids.storage_index,
         escrow_canister_id: canister_ids.escrow,

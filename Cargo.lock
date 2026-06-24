@@ -5831,6 +5831,7 @@ dependencies = [
  "pocket-ic",
  "proposals_bot_canister",
  "rand 0.8.5",
+ "receipts_canister",
  "registry_canister",
  "reqwest 0.12.28",
  "serde",
@@ -6407,6 +6408,7 @@ dependencies = [
  "futures",
  "group_canister",
  "group_canister_c2c_client",
+ "hex",
  "http_request",
  "ic-cdk",
  "ic-cdk-timers",
@@ -6425,6 +6427,8 @@ dependencies = [
  "principal_to_user_id_map",
  "proof_of_unique_personhood",
  "rand 0.8.5",
+ "receipts_canister",
+ "receipts_canister_c2c_client",
  "serde",
  "serde_bytes",
  "serde_json",
@@ -8922,6 +8926,52 @@ checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
+]
+
+[[package]]
+name = "receipts_canister"
+version = "0.1.0"
+dependencies = [
+ "candid",
+ "serde",
+ "types",
+]
+
+[[package]]
+name = "receipts_canister_c2c_client"
+version = "0.1.0"
+dependencies = [
+ "canister_client",
+ "ic-cdk",
+ "msgpack",
+ "receipts_canister",
+ "tracing",
+ "types",
+]
+
+[[package]]
+name = "receipts_canister_impl"
+version = "0.1.0"
+dependencies = [
+ "candid",
+ "canister_api_macros",
+ "canister_logger",
+ "canister_state_macros",
+ "canister_tracing_macros",
+ "http_request",
+ "ic-cdk",
+ "ic-cdk-timers",
+ "ic-stable-structures 0.7.0",
+ "mktd02",
+ "msgpack",
+ "rand 0.8.5",
+ "receipts_canister",
+ "serde",
+ "serde_json",
+ "stable_memory",
+ "tracing",
+ "types",
+ "utils",
 ]
 
 [[package]]
@@ -12381,6 +12431,7 @@ dependencies = [
  "search",
  "serde",
  "serde_bytes",
+ "serde_json",
  "sha256",
  "sns_governance_canister",
  "sns_governance_canister_c2c_client",

@@ -23,6 +23,7 @@ fn init(args: Args) {
         args.proposals_bot_canister_id,
         args.airdrop_bot_canister_id,
         args.online_users_canister_id,
+        args.receipts_canister_id,
         args.cycles_dispenser_canister_id,
         args.storage_index_canister_id,
         args.escrow_canister_id,

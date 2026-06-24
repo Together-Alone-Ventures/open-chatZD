@@ -502,6 +502,8 @@ impl RuntimeState {
             recent_community_upgrades: community_upgrades_metrics.recently_competed,
             user_events_queue_length: self.data.user_event_sync_queue.len(),
             users_to_delete_queue_length: self.data.users_to_delete_queue.len(),
+            receipt_export_pending_count: self.data.export_pending.len(),
+            receipt_export_uninstall_pending_count: self.data.export_pending.uninstall_pending_count(),
             referral_codes: self.data.referral_codes.metrics(now),
             event_store_client_info,
             notification_pushers: self.data.notification_pushers.iter().copied().collect(),
@@ -559,6 +561,11 @@ struct Data {
     pub cycles_dispenser_canister_id: CanisterId,
     pub escrow_canister_id: CanisterId,
     pub online_users_canister_id: CanisterId,
+    /// P2: durable receipts canister for the pre-uninstall CVDR export (§5,
+    /// env-driven). `None` = export disabled. Additive; defaults to `None` on
+    /// upgrade from a pre-P2 wasm.
+    #[serde(default)]
+    pub receipts_canister_id: Option<CanisterId>,
     pub internet_identity_canister_id: CanisterId,
     pub website_canister_id: CanisterId,
     pub users_requiring_upgrade: CanistersRequiringUpgrade,
@@ -585,6 +592,11 @@ struct Data {
     pub event_store_client: EventStoreClient<CdkRuntime>,
     pub event_deduper: EventDeduper,
     pub users_to_delete_queue: VecDeque<UserToDelete>,
+    /// P2 remediation: durable, upgrade-surviving parked-export set. Backed by its
+    /// own stable-memory map (`#[serde(skip)]`), so it does NOT ride the heap
+    /// `Data` msgpack blob and survives a `local_user_index` upgrade independently.
+    #[serde(skip, default)]
+    pub export_pending: crate::model::export_pending::ExportPending,
     pub events_for_remote_users: Vec<(UserId, UserEvent)>,
     pub cycles_balance_check_queue: VecDeque<CanisterId>,
     pub fire_and_forget_handler: FireAndForgetHandler,
@@ -626,6 +638,7 @@ impl Data {
         escrow_canister_id: CanisterId,
         event_relay_canister_id: CanisterId,
         online_users_canister_id: CanisterId,
+        receipts_canister_id: Option<CanisterId>,
         internet_identity_canister_id: CanisterId,
         website_canister_id: CanisterId,
         canister_pool_target_size: u16,
@@ -649,6 +662,7 @@ impl Data {
             cycles_dispenser_canister_id,
             escrow_canister_id,
             online_users_canister_id,
+            receipts_canister_id,
             internet_identity_canister_id,
             website_canister_id,
             users_requiring_upgrade: CanistersRequiringUpgrade::default(),
@@ -678,6 +692,7 @@ impl Data {
                 .build(),
             event_deduper: EventDeduper::default(),
             users_to_delete_queue: VecDeque::new(),
+            export_pending: crate::model::export_pending::ExportPending::default(),
             events_for_remote_users: Vec::new(),
             cycles_balance_check_queue: VecDeque::new(),
             bots: BotsMap::default(),
@@ -733,6 +748,8 @@ pub struct Metrics {
     pub max_concurrent_community_upgrades: u32,
     pub user_events_queue_length: usize,
     pub users_to_delete_queue_length: usize,
+    pub receipt_export_pending_count: u64,
+    pub receipt_export_uninstall_pending_count: u64,
     pub referral_codes: HashMap<ReferralType, ReferralTypeMetrics>,
     pub event_store_client_info: EventStoreClientInfo,
     pub user_versions: BTreeMap<String, u32>,

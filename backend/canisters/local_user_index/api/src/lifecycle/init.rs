@@ -15,6 +15,10 @@ pub struct Args {
     pub escrow_canister_id: CanisterId,
     pub event_relay_canister_id: CanisterId,
     pub online_users_canister_id: CanisterId,
+    // P2: durable receipts canister for the pre-uninstall CVDR export. `None`
+    // disables export (retained-copy-first still blocks uninstall if a finalized
+    // receipt exists but there is nowhere to export it). Explicit + env-driven (§5).
+    pub receipts_canister_id: Option<CanisterId>,
     pub internet_identity_canister_id: CanisterId,
     pub website_canister_id: CanisterId,
     pub video_call_operators: Vec<Principal>,

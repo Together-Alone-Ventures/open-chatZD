@@ -11,6 +11,9 @@ pub mod upgrade_users;
 
 pub(crate) fn start(state: &RuntimeState) {
     delete_users::start_job_if_required(state, None);
+    // P2 remediation: resume draining the DURABLE parked-export set after an
+    // upgrade (self-healing survives `local_user_index` upgrade).
+    delete_users::start_parked_retry_job_if_required(state);
     topup_canister_pool::start_job_if_required(state, None);
     topup_canisters::start_job();
     upgrade_communities::start_job_if_required(state);

@@ -5,6 +5,7 @@ use user_canister::*;
 generate_c2c_call!(c2c_bot_chat_summary);
 generate_c2c_call!(c2c_can_issue_access_token_v2);
 generate_c2c_call!(c2c_groups_and_communities);
+generate_c2c_call!(c2c_mktd_export_receipt);
 
 // Updates
 generate_c2c_call!(c2c_bot_add_reaction);
