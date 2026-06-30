@@ -15,6 +15,7 @@ mod change_group_role_tests;
 mod chit_tests;
 mod client;
 mod communities;
+mod cvdr_tests;
 mod cycles_dispenser_tests;
 mod delete_direct_chat_tests;
 mod delete_group_tests;

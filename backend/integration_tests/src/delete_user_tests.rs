@@ -91,6 +91,29 @@ fn deleted_user_removed_from_groups_and_communities() {
 
     client::identity::happy_path::delete_user(env, &user2_auth, canister_ids.identity);
 
+    // v5: membership-removal (NotifyOfUserDeleted) is gated on `complete_deletion`, which the
+    // index only runs once the releasable CVDR is stored. Drive the external finalizer: let the
+    // leg reach AwaitingCertificate, capture the certified-data, and relay it via finalize_cvdr.
+    tick_many(env, 10);
+    match client::local_user_index::cvdr_data_certificate(env, Principal::anonymous(), user2.local_user_index, &Empty {}) {
+        local_user_index_canister::cvdr_data_certificate::Response::Success(pending) => {
+            let response = client::local_user_index::finalize_cvdr(
+                env,
+                Principal::anonymous(),
+                user2.local_user_index,
+                &local_user_index_canister::finalize_cvdr::Args {
+                    receipt_id: pending.receipt_id,
+                    certificate: pending.certificate,
+                },
+            );
+            assert!(
+                matches!(response, local_user_index_canister::finalize_cvdr::Response::Success),
+                "finalize_cvdr expected Success, got {response:?}"
+            );
+        }
+        other => panic!("expected a pending CVDR certificate to finalize, got {other:?}"),
+    }
+
     tick_many(env, 20);
 
     let group_summary = client::group::happy_path::selected_initial(env, user1.principal, group_id);

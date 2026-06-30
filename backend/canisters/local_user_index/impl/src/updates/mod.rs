@@ -28,6 +28,7 @@ pub mod c2c_user_canister;
 pub mod c2c_verify_sign_in_proof;
 pub mod c2c_verify_signature;
 pub mod claim_prize;
+pub mod finalize_cvdr;
 pub mod install_bot;
 pub mod invite_users_to_channel;
 pub mod invite_users_to_community;

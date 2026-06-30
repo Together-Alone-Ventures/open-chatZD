@@ -108,6 +108,9 @@ fn prepare(args: &Args, state: &mut RuntimeState) -> Result<PrepareResult, Respo
             user_canister_wasm_hash: user_canister_wasm.wasm_hash,
             init_args: local_user_index_canister::init::Args {
                 wasm_version: canister_wasm.wasm.version,
+                // CVDR v5: deploy-supplied executor provenance — the index's own deployed module
+                // hash (gzip upload hash) at install.
+                executor_module_hash: canister_wasm.wasm_hash,
                 user_index_canister_id: state.env.canister_id(),
                 group_index_canister_id: state.data.group_index_canister_id,
                 notifications_index_canister_id: state.data.notifications_index_canister_id,

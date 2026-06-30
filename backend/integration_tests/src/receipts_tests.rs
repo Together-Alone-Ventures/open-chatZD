@@ -592,6 +592,7 @@ fn drive_to_parked(env: &mut PocketIc, lui: CanisterId, baseline: u64) -> bool {
 /// as a finalized receipt — the CVDR-Verify V1 structural acceptance) AFTER the
 /// source canister is destroyed. Waits for the actual uninstall condition.
 #[test]
+#[ignore = "Superseded by CVDR-on-Index v5; P2 LUI→receipts export path banked."]
 fn finalized_receipt_survives_uninstall_and_is_fetchable() {
     let mut wrapper = ENV.deref().get();
     let TestEnv { env, canister_ids, controller } = wrapper.env();
@@ -646,6 +647,7 @@ fn finalized_receipt_survives_uninstall_and_is_fetchable() {
 /// uninstall stays unreachable, the tombstone/finalization never rolls back, and
 /// nothing is stored.
 #[test]
+#[ignore = "Superseded by CVDR-on-Index v5; P2 LUI→receipts export path banked."]
 fn export_failure_reaches_durable_parked_state() {
     let mut wrapper = ENV.deref().get();
     let TestEnv { env, canister_ids, controller } = wrapper.env();
@@ -692,6 +694,7 @@ fn export_failure_reaches_durable_parked_state() {
 /// G's hard point: the parked record lives in STABLE memory and must survive a
 /// `local_user_index` upgrade (not heap/job-queue state).
 #[test]
+#[ignore = "Superseded by CVDR-on-Index v5; P2 LUI→receipts export path banked."]
 fn parked_export_survives_local_user_index_upgrade() {
     let mut wrapper = ENV.deref().get();
     let TestEnv { env, canister_ids, controller } = wrapper.env();
@@ -741,6 +744,7 @@ fn parked_export_survives_local_user_index_upgrade() {
 /// remove the durable record, and — leaning on store idempotency — create no
 /// duplicate divergent record.
 #[test]
+#[ignore = "Superseded by CVDR-on-Index v5; P2 LUI→receipts export path banked."]
 fn parked_export_resumes_after_authorization() {
     let mut wrapper = ENV.deref().get();
     let TestEnv { env, canister_ids, controller } = wrapper.env();
@@ -810,6 +814,7 @@ fn parked_export_resumes_after_authorization() {
 ///  - re-enabling uninstall → the drain completes uninstall, removes the record,
 ///    and runs bookkeeping; idempotent (no duplicate divergent receipt).
 #[test]
+#[ignore = "Superseded by CVDR-on-Index v5; P2 LUI→receipts export path banked."]
 fn exported_uninstall_pending_lifecycle() {
     let mut wrapper = ENV.deref().get();
     let TestEnv { env, canister_ids, controller } = wrapper.env();

@@ -1,11 +1,15 @@
 use candid::{CandidType, Principal};
 use serde::{Deserialize, Serialize};
-use types::{BuildVersion, CanisterId};
+use types::{BuildVersion, CanisterId, Hash};
 
 #[derive(CandidType, Serialize, Deserialize, Debug)]
 pub struct Args {
     // The wasm version running on this canister
     pub wasm_version: BuildVersion,
+    // CVDR v5: this index's OWN deployed module hash (gzip upload hash), supplied by the deploy
+    // pipeline — the captured H_index executor provenance. Not read from inside the canister,
+    // not computed from receipt fields.
+    pub executor_module_hash: Hash,
     pub user_index_canister_id: CanisterId,
     pub group_index_canister_id: CanisterId,
     pub notifications_index_canister_id: CanisterId,

@@ -10,10 +10,10 @@ pub mod upgrade_groups;
 pub mod upgrade_users;
 
 pub(crate) fn start(state: &RuntimeState) {
+    // v5 CVDR delete leg. The job drives in-flight deletions forward from their durable
+    // drafts (any draft mid-flight after an upgrade resumes via the queue / draft state);
+    // there is no separate parked-retry timer in v5.
     delete_users::start_job_if_required(state, None);
-    // P2 remediation: resume draining the DURABLE parked-export set after an
-    // upgrade (self-healing survives `local_user_index` upgrade).
-    delete_users::start_parked_retry_job_if_required(state);
     topup_canister_pool::start_job_if_required(state, None);
     topup_canisters::start_job();
     upgrade_communities::start_job_if_required(state);

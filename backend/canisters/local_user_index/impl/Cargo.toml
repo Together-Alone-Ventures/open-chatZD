@@ -32,7 +32,10 @@ futures = { workspace = true }
 group_canister = { path = "../../group/api" }
 group_canister_c2c_client = { path = "../../group/c2c_client" }
 http_request = { path = "../../../libraries/http_request" }
+ic-cbor = { workspace = true }
 ic-cdk = { workspace = true }
+ic-certificate-verification = { workspace = true }
+ic-certification = { workspace = true }
 ic-cdk-timers = { workspace = true }
 ic-stable-structures = { workspace = true }
 itertools = { workspace = true }

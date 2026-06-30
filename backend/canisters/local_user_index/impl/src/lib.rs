@@ -504,6 +504,9 @@ impl RuntimeState {
             users_to_delete_queue_length: self.data.users_to_delete_queue.len(),
             receipt_export_pending_count: self.data.export_pending.len(),
             receipt_export_uninstall_pending_count: self.data.export_pending.uninstall_pending_count(),
+            cvdr_drafts_in_flight: self.data.cvdr.draft_count(),
+            cvdr_released_count: self.data.cvdr.released_count(),
+            cvdr_awaiting_certificate: self.data.cvdr_awaiting_receipt_id.is_some(),
             referral_codes: self.data.referral_codes.metrics(now),
             event_store_client_info,
             notification_pushers: self.data.notification_pushers.iter().copied().collect(),
@@ -553,6 +556,11 @@ struct Data {
     pub child_canister_wasms: ChildCanisterWasms<ChildCanisterType>,
     #[serde(default)]
     pub user_canister_module_hash: Hash,
+    // CVDR v5: this index's OWN deployed module hash (gzip upload hash), deploy-supplied at init
+    // and refreshed on every post_upgrade. The captured H_index executor provenance — never read
+    // from inside the canister, never computed from receipt fields.
+    #[serde(default)]
+    pub executor_module_hash: Hash,
     pub user_index_canister_id: CanisterId,
     pub group_index_canister_id: CanisterId,
     pub notifications_index_canister_id: CanisterId,
@@ -597,6 +605,19 @@ struct Data {
     /// `Data` msgpack blob and survives a `local_user_index` upgrade independently.
     #[serde(skip, default)]
     pub export_pending: crate::model::export_pending::ExportPending,
+    /// v5 CVDR-on-Index: stable-backed released-CVDR store + secondary index +
+    /// in-flight draft map. `#[serde(skip)]` like `export_pending` — the maps live in
+    /// dedicated stable memory and survive a local_user_index upgrade independently.
+    #[serde(skip, default)]
+    pub cvdr: crate::model::cvdr::CvdrStore,
+    /// v5: monotonic index-side deletion sequence (heap-persisted across upgrades).
+    #[serde(default)]
+    pub cvdr_next_deletion_seq: u64,
+    /// v5 single-slot guard: the `receipt_id` whose commitment currently occupies the
+    /// IC certified-data slot (AwaitingCertificate). `Some` blocks any other deletion
+    /// from publishing a new commitment until the pending certificate is captured.
+    #[serde(default)]
+    pub cvdr_awaiting_receipt_id: Option<[u8; 32]>,
     pub events_for_remote_users: Vec<(UserId, UserEvent)>,
     pub cycles_balance_check_queue: VecDeque<CanisterId>,
     pub fire_and_forget_handler: FireAndForgetHandler,
@@ -654,6 +675,7 @@ impl Data {
             global_users: GlobalUserMap::default(),
             child_canister_wasms: ChildCanisterWasms::default(),
             user_canister_module_hash: Hash::default(),
+            executor_module_hash: Hash::default(),
             user_index_canister_id,
             group_index_canister_id,
             notifications_index_canister_id,
@@ -693,6 +715,9 @@ impl Data {
             event_deduper: EventDeduper::default(),
             users_to_delete_queue: VecDeque::new(),
             export_pending: crate::model::export_pending::ExportPending::default(),
+            cvdr: crate::model::cvdr::CvdrStore::default(),
+            cvdr_next_deletion_seq: 0,
+            cvdr_awaiting_receipt_id: None,
             events_for_remote_users: Vec::new(),
             cycles_balance_check_queue: VecDeque::new(),
             bots: BotsMap::default(),
@@ -750,6 +775,9 @@ pub struct Metrics {
     pub users_to_delete_queue_length: usize,
     pub receipt_export_pending_count: u64,
     pub receipt_export_uninstall_pending_count: u64,
+    pub cvdr_drafts_in_flight: u64,
+    pub cvdr_released_count: u64,
+    pub cvdr_awaiting_certificate: bool,
     pub referral_codes: HashMap<ReferralType, ReferralTypeMetrics>,
     pub event_store_client_info: EventStoreClientInfo,
     pub user_versions: BTreeMap<String, u32>,

@@ -19,7 +19,7 @@ fn init(args: Args) {
     let env = init_env(args.rng_seed);
     let canister_pool_target_size = if args.test_mode { 3_u16 } else { CANISTER_POOL_TARGET_SIZE };
 
-    let data = Data::new(
+    let mut data = Data::new(
         args.user_index_canister_id,
         args.group_index_canister_id,
         args.notifications_index_canister_id,
@@ -38,6 +38,8 @@ fn init(args: Args) {
         args.openai_api_key,
         args.test_mode,
     );
+    // CVDR v5: capture the deploy-supplied executor module hash (H_index provenance).
+    data.executor_module_hash = args.executor_module_hash;
 
     init_state(env, data, args.wasm_version);
 

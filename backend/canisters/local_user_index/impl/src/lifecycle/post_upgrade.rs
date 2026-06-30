@@ -33,6 +33,11 @@ fn post_upgrade(args: Args) {
         }
     }
 
+    // CVDR v5: refresh the deploy-supplied executor module hash (H_index provenance) to the
+    // newly-installed wasm. Any draft captured before this upgrade keeps its PRE-upgrade hash
+    // (the captured value is authoritative — see finalize_cvdr corroboration).
+    data.executor_module_hash = args.executor_module_hash;
+
     canister_logger::init_with_logs(data.test_mode, errors, logs, traces);
 
     let env = init_env(data.rng_seed);
