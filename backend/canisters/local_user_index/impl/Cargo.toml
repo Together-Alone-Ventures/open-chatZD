@@ -54,6 +54,10 @@ proof_of_unique_personhood = { path = "../../../libraries/proof_of_unique_person
 rand = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
+# Spec §2 witness format: IC HashTree CBOR, stored byte-for-byte. serde_cbor is the exact
+# encoder ic-certification itself uses (byte-identical output). Existing WORKSPACE dep — this
+# is a leaf-crate reference, not a workspace/version change or a CDK bump.
+serde_cbor = { workspace = true }
 serde_json = { workspace = true }
 sha256 = { path = "../../../libraries/sha256" }
 stable_memory = { path = "../../../libraries/stable_memory" }

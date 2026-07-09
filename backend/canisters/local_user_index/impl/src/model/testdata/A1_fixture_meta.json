@@ -1,0 +1,8 @@
+{
+  "canister_id": "iplx4-aiaaa-aaaap-quuuq-cai",
+  "certified_root_hex": "0e2812673391d7f7b6f3ab4edb45024988e91e55ba58b2b0f6137f4d6ea1d8d3",
+  "receipt": {
+    "commit_time_ns": 1783058017047703691,
+    "commitment_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+  }
+}

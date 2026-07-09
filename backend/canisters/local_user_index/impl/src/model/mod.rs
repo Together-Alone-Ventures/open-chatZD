@@ -4,6 +4,7 @@ pub mod cvdr;
 pub mod export_pending;
 pub mod global_user_map;
 pub mod group_event_batch;
+pub mod http_outcall;
 pub mod local_community_map;
 pub mod local_group_map;
 pub mod local_user_map;

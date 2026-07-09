@@ -505,8 +505,8 @@ impl RuntimeState {
             receipt_export_pending_count: self.data.export_pending.len(),
             receipt_export_uninstall_pending_count: self.data.export_pending.uninstall_pending_count(),
             cvdr_drafts_in_flight: self.data.cvdr.draft_count(),
-            cvdr_released_count: self.data.cvdr.released_count(),
-            cvdr_awaiting_certificate: self.data.cvdr_awaiting_receipt_id.is_some(),
+            cvdr_released_count: self.data.cvdr.frozen_package_count(),
+            cvdr_awaiting_certificate: self.data.cvdr.awaiting_certificate_count() > 0,
             referral_codes: self.data.referral_codes.metrics(now),
             event_store_client_info,
             notification_pushers: self.data.notification_pushers.iter().copied().collect(),
@@ -613,11 +613,13 @@ struct Data {
     /// v5: monotonic index-side deletion sequence (heap-persisted across upgrades).
     #[serde(default)]
     pub cvdr_next_deletion_seq: u64,
-    /// v5 single-slot guard: the `receipt_id` whose commitment currently occupies the
-    /// IC certified-data slot (AwaitingCertificate). `Some` blocks any other deletion
-    /// from publishing a new commitment until the pending certificate is captured.
-    #[serde(default)]
-    pub cvdr_awaiting_receipt_id: Option<[u8; 32]>,
+    /// CVDR finalization rework (spec §2): the certified receipt tree — many receipts under one
+    /// root, replacing the single-slot commitment + global single-flight guard. Heap-resident
+    /// (`certified_data` is cleared on upgrade); rebuilt from durable state in `post_upgrade`
+    /// (spec §4). `#[serde(skip)]`: never serialized — the durable source is the frozen store +
+    /// in-flight drafts.
+    #[serde(skip, default)]
+    pub cvdr_receipt_tree: crate::model::cvdr::ReceiptTree,
     pub events_for_remote_users: Vec<(UserId, UserEvent)>,
     pub cycles_balance_check_queue: VecDeque<CanisterId>,
     pub fire_and_forget_handler: FireAndForgetHandler,
@@ -717,7 +719,7 @@ impl Data {
             export_pending: crate::model::export_pending::ExportPending::default(),
             cvdr: crate::model::cvdr::CvdrStore::default(),
             cvdr_next_deletion_seq: 0,
-            cvdr_awaiting_receipt_id: None,
+            cvdr_receipt_tree: crate::model::cvdr::ReceiptTree::default(),
             events_for_remote_users: Vec::new(),
             cycles_balance_check_queue: VecDeque::new(),
             bots: BotsMap::default(),

@@ -43,7 +43,7 @@ fn delete_user_succeeds_if_signed_in_recently(delay: Milliseconds, should_delete
         ));
     }
 
-    tick_many(env, 5);
+    tick_many(env, 10);
 
     let current_user_response = client::user_index::current_user(env, user.principal, canister_ids.user_index, &Empty {});
 
@@ -91,36 +91,21 @@ fn deleted_user_removed_from_groups_and_communities() {
 
     client::identity::happy_path::delete_user(env, &user2_auth, canister_ids.identity);
 
-    // v5: membership-removal (NotifyOfUserDeleted) is gated on `complete_deletion`, which the
-    // index only runs once the releasable CVDR is stored. Drive the external finalizer: let the
-    // leg reach AwaitingCertificate, capture the certified-data, and relay it via finalize_cvdr.
-    tick_many(env, 10);
-    match client::local_user_index::cvdr_data_certificate(env, Principal::anonymous(), user2.local_user_index, &Empty {}) {
-        local_user_index_canister::cvdr_data_certificate::Response::Success(pending) => {
-            let response = client::local_user_index::finalize_cvdr(
-                env,
-                Principal::anonymous(),
-                user2.local_user_index,
-                &local_user_index_canister::finalize_cvdr::Args {
-                    receipt_id: pending.receipt_id,
-                    certificate: pending.certificate,
-                },
-            );
-            assert!(
-                matches!(response, local_user_index_canister::finalize_cvdr::Response::Success),
-                "finalize_cvdr expected Success, got {response:?}"
-            );
-        }
-        other => panic!("expected a pending CVDR certificate to finalize, got {other:?}"),
-    }
-
+    // Spec §8 cleanup split (DoD: cleanup with certificate capture entirely absent). Membership
+    // removal (NotifyOfUserDeleted) now runs inside the delete JOB — after uninstall + receipt
+    // publish — INDEPENDENTLY of certificate capture. No finalizer is driven here and, in Slice 1,
+    // CVDR finalization never runs at all (finalize_cvdr is an inert stub, spec §8b); the user must
+    // still be fully removed from groups and communities.
     tick_many(env, 20);
 
     let group_summary = client::group::happy_path::selected_initial(env, user1.principal, group_id);
     let community_summary = client::community::happy_path::selected_initial(env, user1.principal, community_id);
 
-    assert!(group_summary.basic_members.is_empty());
-    assert!(community_summary.basic_members.is_empty());
+    assert!(group_summary.basic_members.is_empty(), "membership removed with certificate capture absent");
+    assert!(
+        community_summary.basic_members.is_empty(),
+        "membership removed with certificate capture absent"
+    );
 }
 
 #[test]

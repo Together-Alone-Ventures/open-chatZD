@@ -1,26 +1,37 @@
-//! v5 CVDR-on-Index delete leg.
+//! CVDR-on-Index delete leg (CVDR finalization rework — spec §2/§3/§5/§8).
 //!
 //! The local_user_index drives a user deletion through a forward-only, durable,
-//! upgrade-surviving state machine and ends by publishing a single IC-certified
-//! commitment over the deletion. Completion (mapping removal + membership-removal
-//! notifications) is performed by the external-finalizer-driven `finalize_cvdr`
-//! update once the IC `data_certificate()` is captured — NOT by this job.
+//! upgrade-surviving state machine. **OpenChat-native user deletion completes inside THIS job,
+//! independently of certificate capture** (spec §8, the cleanup split): after `uninstall_code`
+//! and the receipt publish, the job itself performs the cleanup (global/local user-mapping
+//! removal + membership-removal notifications) — it is NOT gated on any finalizer. The receipt's
+//! claim is "targets captured; notification attempted or queued" (never "confirmed erased").
 //!
-//! Leg order (CD §1), per in-flight [`CvdrDraft`] `stage`:
+//! CVDR finalization (capturing the IC certificate into the immutable frozen package) is a
+//! SEPARATE, CVDR-only step that never holds the user deletion half-open. Its store is gated on
+//! FULL on-chain verification BEFORE store (spec §6 hard security rule — full BLS -> NNS + witness
+//! binding; a response failing verification is discarded and retried, never stored, so a single
+//! untrusted node cannot poison the first-wins slot). In Slice 1 the self-finalization loop (spec
+//! §6) and the `finalize_cvdr` backstop (spec §7) are not yet built — `finalize_cvdr` is an inert
+//! compile-safe stub (spec §8b). A published receipt therefore rests at `AwaitingCertificate`
+//! meaning "user fully deleted; only the CVDR certificate is still pending".
+//!
+//! Leg order, per in-flight [`CvdrDraft`] `stage`:
 //! 1. `Captured`            capture H_user_pre (`canister_status` module hash) + targets +
-//!                          record_id, allocate `deletion_seq` + nonce, persist the draft
-//!                          BEFORE any destructive step.
-//! 2. (Captured -> )        `uninstall_code`, then confirm no-module via `canister_status`.
-//! 3. `Uninstalled`         single-slot guard: if the certified-data slot is free (or
-//!                          already ours) publish the commitment via `certified_data_set`,
-//!                          claim the slot, advance to `AwaitingCertificate`.
-//! 4. `AwaitingCertificate` wait for the external finalizer. `finalize_cvdr` verifies the
-//!                          certificate binds the commitment, stores the releasable CVDR,
-//!                          then runs `complete_deletion` and frees the slot.
+//!                          record_id + `salt` (raw_rand), allocate `deletion_seq` + nonce,
+//!                          persist the draft BEFORE any destructive step.
+//! 2. (Captured -> )        `uninstall_code`, confirm no-module, record `uninstall_completed_at`.
+//! 3. `Uninstalled`         ATOMIC publish (spec §3): insert the receipt leaf into the certified
+//!                          receipt tree + `certified_data_set(root)` + record
+//!                          `receipt_committed_at`, all in one message with no `await` between;
+//!                          then run the cleanup (spec §8); advance to `AwaitingCertificate`.
+//!                          No single-slot guard — the tree holds many receipts under one root.
+//! 4. `AwaitingCertificate` user deletion is DONE. Awaiting only the CVDR certificate, captured
+//!                          by the CVDR-only finalization step (Slice 2).
 //!
 //! Forward-recovery only: every stage is idempotent and resumable from the persisted
-//! draft; nothing rolls back. The durable draft is stable-backed (survives upgrades),
-//! so there is no upgrade-trapping heap lock.
+//! draft; nothing rolls back. The durable draft is stable-backed (survives upgrades); the
+//! certified receipt tree is heap-resident and rebuilt in post_upgrade (spec §4).
 
 use crate::model::cvdr::{self, CvdrDraft, DraftStage};
 use crate::{RuntimeState, UserIndexEvent, UserToDelete, mutate_state, read_state};
@@ -82,11 +93,13 @@ async fn process_user(user: UserToDelete) {
 /// drives the draft up to `AwaitingCertificate` or re-queues a retry.
 fn apply_outcome(state: &mut RuntimeState, user: &UserToDelete, outcome: ProcessOutcome) {
     match outcome {
-        // Commitment published; the durable draft is AwaitingCertificate. Drop from the
-        // active queue — completion is performed externally by `finalize_cvdr`.
-        ProcessOutcome::AwaitingFinalizer => {}
-        // Transient failure or the single certified-data slot is occupied by another
-        // in-flight deletion: re-queue on the fast interval (forward-only; no rollback).
+        // Receipt published AND user deletion completed (cleanup ran in the job, spec §8). Drop
+        // from the active queue — only the CVDR certificate is still pending. Kick the
+        // self-finalization loop (spec §6) to capture + store it.
+        ProcessOutcome::AwaitingCertificate => {
+            crate::jobs::self_finalize_cvdr::start_if_required(state);
+        }
+        // Transient failure: re-queue on the fast interval (forward-only; no rollback).
         ProcessOutcome::Retry { error_class } => {
             let attempt = (user.attempt as u32).saturating_add(1);
             if attempt >= WARN_THRESHOLD {
@@ -108,9 +121,12 @@ fn apply_outcome(state: &mut RuntimeState, user: &UserToDelete, outcome: Process
     }
 }
 
-/// Deletion bookkeeping, reached ONLY once the releasable CVDR is durably stored (gated
-/// by `finalize_cvdr`). Removes the local/global mappings and fires the membership-removal
-/// notification chain. `pub(crate)` so the finalize update can complete from the draft.
+/// OpenChat-native deletion cleanup: removes the local/global mappings and fires the
+/// membership-removal notification chain. Per spec §8 this runs from the delete JOB, after
+/// uninstall + receipt publish, **independently of certificate capture** — never from the
+/// finalization path. Called exactly once per deletion (on the first `Uninstalled ->
+/// AwaitingCertificate` transition), so the `NotifyOfUserDeleted` chain is not re-fired on
+/// idempotent re-publish/resume.
 pub(crate) fn complete_deletion(state: &mut RuntimeState, user_id: UserId, canisters_to_notify: Vec<CanisterId>) {
     state.data.global_users.remove(&user_id);
     state.data.local_users.remove(&user_id);
@@ -174,6 +190,12 @@ async fn capture_draft(user: &UserToDelete, canister_id: CanisterId) -> Result<C
     let commitment = cvdr::commitment(&record_id, deletion_seq, &h_user_pre, &h_index, canister_id);
     let receipt_id = cvdr::receipt_id_for(&record_id, deletion_seq, &nonce);
 
+    // Fresh salt for TARGETS_COMMITMENT_V1 (spec §2), from management-canister raw_rand during
+    // pre-commitments (await is fine here — the §3 atomicity rule covers only the publish message).
+    // Never reused across deletions; committed into the receipt body and handed back in the
+    // user-held reveal package (later slice).
+    let salt = utils::canister::get_random_seed().await;
+
     let draft = CvdrDraft {
         user_id: user.user_id,
         user_canister_id: canister_id,
@@ -187,7 +209,12 @@ async fn capture_draft(user: &UserToDelete, canister_id: CanisterId) -> Result<C
         h_user_pre,
         h_index,
         commitment,
+        salt,
         canisters_to_notify,
+        uninstall_completed_at: 0,
+        receipt_committed_at: 0,
+        finalize_attempt: 0,
+        finalize_last_attempt_at: 0,
         created_at: now,
         attempt: user.attempt as u32,
         stage: DraftStage::Captured,
@@ -207,8 +234,19 @@ async fn advance_draft(draft: CvdrDraft) -> ProcessOutcome {
             }
             match ic_cdk::management_canister::canister_status(&CanisterStatusArgs { canister_id }).await {
                 Ok(status) if status.module_hash.is_none() => {
-                    match mutate_state(|state| advance_stage(state, canister_id, DraftStage::Uninstalled)) {
-                        Some(advanced) => advance_publish(advanced),
+                    // Record uninstall_completed_at (IC consensus ns, spec §5) and advance.
+                    let now_ns = ic_cdk::api::time();
+                    let advanced = mutate_state(|state| {
+                        let mut d = state.data.cvdr.get_draft(&canister_id)?;
+                        if d.uninstall_completed_at == 0 {
+                            d.uninstall_completed_at = now_ns;
+                        }
+                        d.stage = DraftStage::Uninstalled;
+                        state.data.cvdr.upsert_draft(d);
+                        Some(())
+                    });
+                    match advanced {
+                        Some(()) => advance_publish(canister_id),
                         None => ProcessOutcome::Retry { error_class: "draft_lost" },
                     }
                 }
@@ -216,71 +254,82 @@ async fn advance_draft(draft: CvdrDraft) -> ProcessOutcome {
                 Err(_) => ProcessOutcome::Retry { error_class: "status_unavailable" },
             }
         }
-        DraftStage::Uninstalled => advance_publish(draft),
-        // Already published. Re-run the publish (idempotent — the slot is already ours) so
-        // certified_data is re-set if this attempt follows an upgrade that cleared it; then
-        // wait for `finalize_cvdr`.
-        DraftStage::AwaitingCertificate => advance_publish(draft),
-    }
-}
-
-/// Single-slot guard + certified-commitment publish. Publishes ONLY if the certified-data
-/// slot is free or already held by THIS draft; otherwise the later deletion waits (no
-/// overwrite of a pending commitment before its certificate is captured — CD §4).
-fn advance_publish(draft: CvdrDraft) -> ProcessOutcome {
-    let canister_id = draft.user_canister_id;
-    let publish = mutate_state(|state| match state.data.cvdr_awaiting_receipt_id {
-        Some(receipt_id) if receipt_id != draft.receipt_id => false,
-        _ => {
-            state.data.cvdr_awaiting_receipt_id = Some(draft.receipt_id);
-            advance_stage(state, canister_id, DraftStage::AwaitingCertificate);
-            true
+        DraftStage::Uninstalled => advance_publish(canister_id),
+        // Already published. Re-assert the certified root (idempotent — recomputes the same leaf)
+        // in case an upgrade cleared certified_data; cleanup already ran and is NOT repeated.
+        DraftStage::AwaitingCertificate => advance_publish(canister_id),
+        // Terminal finalization states (spec §6 self-loop / §7 backstop): user deletion is long
+        // done; the delete job has nothing left to do. Drop from the active queue. `LateFinalized`
+        // is a backstop-stored late capture (spec §7 rule 8) — also terminal here.
+        DraftStage::CertificateCaptured | DraftStage::LateFinalized | DraftStage::FailedStuck => {
+            ProcessOutcome::AwaitingCertificate
         }
-    });
-
-    if publish {
-        // Publish the commitment to certified_data; the cert is readable next round via
-        // the `cvdr_data_certificate` query and returned to `finalize_cvdr`.
-        ic_cdk::api::certified_data_set(&draft.commitment);
-        ProcessOutcome::AwaitingFinalizer
-    } else {
-        ProcessOutcome::Retry { error_class: "certified_slot_busy" }
     }
 }
 
-/// Persist a forward stage transition on the durable draft, returning the updated draft.
-fn advance_stage(state: &mut RuntimeState, canister_id: CanisterId, stage: DraftStage) -> Option<CvdrDraft> {
-    let mut draft = state.data.cvdr.get_draft(&canister_id)?;
-    draft.stage = stage;
-    state.data.cvdr.upsert_draft(draft.clone());
-    Some(draft)
+/// ATOMIC receipt publish (spec §3) + cleanup split (spec §8), in a SINGLE message with no
+/// `await` between read-root and set-root: record `receipt_committed_at`, insert the receipt
+/// leaf into the certified receipt tree, and `certified_data_set(root)`. On the FIRST publish
+/// only, run the OpenChat-native cleanup (mapping removal + membership notifications) so user
+/// deletion completes independently of certificate capture. No single-slot guard — the tree
+/// holds many receipts under one root, so concurrent deletions never serialize.
+fn advance_publish(canister_id: CanisterId) -> ProcessOutcome {
+    let now_ns = ic_cdk::api::time();
+    mutate_state(|state| {
+        let Some(mut draft) = state.data.cvdr.get_draft(&canister_id) else {
+            return ProcessOutcome::Retry { error_class: "draft_lost" };
+        };
+        let first_publish = draft.stage != DraftStage::AwaitingCertificate;
+        if draft.receipt_committed_at == 0 {
+            draft.receipt_committed_at = now_ns;
+        }
+        // --- spec §3 atomicity: tree mutation + certified_data_set(root) + receipt_committed_at,
+        //     one message, no await between ---
+        let receipt_hash = draft.receipt_hash();
+        state.data.cvdr_receipt_tree.insert(&draft.receipt_id, &receipt_hash);
+        ic_cdk::api::certified_data_set(state.data.cvdr_receipt_tree.root());
+        draft.stage = DraftStage::AwaitingCertificate;
+        state.data.cvdr.upsert_draft(draft.clone());
+        // --- spec §8 cleanup split: user deletion completes HERE, cert-independent (once) ---
+        if first_publish {
+            complete_deletion(state, draft.user_id, draft.canisters_to_notify.clone());
+        }
+        ProcessOutcome::AwaitingCertificate
+    })
 }
 
 enum ProcessOutcome {
-    /// Commitment published; the draft is AwaitingCertificate. Completion is external.
-    AwaitingFinalizer,
-    /// Transient failure or certified-data slot busy → re-queue (forward-only).
+    /// Receipt published AND user deletion completed (cleanup ran, spec §8). The draft rests at
+    /// `AwaitingCertificate` pending only the CVDR certificate (captured by the CVDR-only
+    /// finalization step, Slice 2). Renamed from `AwaitingFinalizer` — there is no finalizer.
+    AwaitingCertificate,
+    /// Transient failure → re-queue (forward-only).
     Retry { error_class: &'static str },
 }
 
-/// Resume in-flight CVDR deletions after a local_user_index upgrade. The durable drafts
-/// (stable memory) survive the upgrade, but two things do not: the IC `certified_data`
-/// (cleared on upgrade) and any user already popped off the volatile delete queue. This
-/// re-publishes the one pending commitment and re-enqueues lost drafts so the forward-only
-/// job drives them to completion. Called from `init_state`; a no-op on a fresh install.
+/// Post-upgrade CVDR recovery. Two pieces of state do not survive a local_user_index upgrade:
+/// the heap-resident certified receipt tree, and the IC `certified_data` (cleared on upgrade).
+///
+/// Per spec §4, rebuild the receipt tree from durable state — every frozen package PLUS every
+/// in-flight `AwaitingCertificate` draft (published-but-unfinalized receipts must stay in the
+/// tree so their certificate can still be captured) — then re-assert `certified_data_set(root)`.
+/// Also re-enqueue any draft whose user was popped off the volatile delete queue before the
+/// upgrade, so the forward-only job drives it to completion. Called from `init_state`; on a
+/// fresh install the stores are empty and this is a no-op.
 pub(crate) fn resume_in_flight_drafts(state: &mut RuntimeState) {
-    let drafts = state.data.cvdr.all_drafts();
-    if drafts.is_empty() {
-        return;
+    // Finalized receipts (frozen packages) — reuse the stored receipt_hash verbatim.
+    for (receipt_id, receipt_hash) in state.data.cvdr.frozen_receipt_leaves() {
+        state.data.cvdr_receipt_tree.insert(&receipt_id, &receipt_hash);
     }
 
+    let drafts = state.data.cvdr.all_drafts();
     let queued: std::collections::HashSet<UserId> =
         state.data.users_to_delete_queue.iter().map(|u| u.user_id).collect();
 
-    for draft in drafts {
-        // Re-publish the pending certified commitment for the single draft holding the slot.
-        if draft.stage == DraftStage::AwaitingCertificate && state.data.cvdr_awaiting_receipt_id == Some(draft.receipt_id) {
-            ic_cdk::api::certified_data_set(&draft.commitment);
+    for draft in &drafts {
+        // Published-but-unfinalized receipts: recompute the leaf and re-insert.
+        if draft.stage == DraftStage::AwaitingCertificate {
+            state.data.cvdr_receipt_tree.insert(&draft.receipt_id, &draft.receipt_hash());
         }
         // Re-enqueue any draft the queue lost when its user was popped before the upgrade.
         if !queued.contains(&draft.user_id) {
@@ -291,5 +340,10 @@ pub(crate) fn resume_in_flight_drafts(state: &mut RuntimeState) {
                 attempt: draft.attempt as usize,
             });
         }
+    }
+
+    // Re-assert the certified root over the rebuilt tree (spec §4 upgrade rule).
+    if !state.data.cvdr_receipt_tree.is_empty() {
+        ic_cdk::api::certified_data_set(state.data.cvdr_receipt_tree.root());
     }
 }

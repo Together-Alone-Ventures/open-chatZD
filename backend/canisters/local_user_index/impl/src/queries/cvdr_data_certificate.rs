@@ -1,25 +1,14 @@
-use crate::{RuntimeState, read_state};
 use ic_cdk::query;
 use local_user_index_canister::cvdr_data_certificate::{Response::*, *};
 
-// Public query — the certificate certifies a public commitment and is itself NNS-signed, so
-// there is nothing to gate. The external finalizer polls this, then relays via `finalize_cvdr`.
+// SLICE 1 — INERT (spec §8b). This was the external-finalizer polling query: it returned the IC
+// `data_certificate()` bound to the single pending receipt via the global single-flight guard
+// (`cvdr_awaiting_receipt_id`). Spec §2 removes that guard (the certified receipt tree holds many
+// receipts under one root), and spec §6 replaces this polling interface with the Slice 2
+// self-finalization route — the canister's own raw-domain `GET /cvdr/<receipt_id>` query returning
+// `{receipt, witness, data_certificate()}`. Until that lands, this endpoint returns `NotAvailable`.
+// Interim, dev-branch-only; never ships.
 #[query]
 fn cvdr_data_certificate(_args: Args) -> Response {
-    // `data_certificate()` only returns the certificate in a (non-replicated) query context.
-    let Some(certificate) = ic_cdk::api::data_certificate() else {
-        return NotAvailable;
-    };
-    read_state(|state| cvdr_data_certificate_impl(certificate, state))
-}
-
-fn cvdr_data_certificate_impl(certificate: Vec<u8>, state: &RuntimeState) -> Response {
-    match (state.data.cvdr_awaiting_receipt_id, state.data.cvdr.awaiting_certificate_draft()) {
-        (Some(receipt_id), Some(draft)) if draft.receipt_id == receipt_id => Success(SuccessResult {
-            receipt_id,
-            commitment: draft.commitment,
-            certificate,
-        }),
-        _ => NotAvailable,
-    }
+    NotAvailable
 }

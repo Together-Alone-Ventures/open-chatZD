@@ -70,20 +70,32 @@ fn http_request(request: HttpRequest) -> HttpResponse {
         )
     }
 
-    // v5 CVDR public fetch route: `/cvdr?receipt_id=<64 hex chars>`. Keyed by the unguessable
-    // receipt_id only (the public capability); the record_id path is restricted and NOT served.
-    fn get_cvdr_http(qs: HashMap<String, String>, state: &RuntimeState) -> HttpResponse {
-        let Some(receipt_id) = qs.get("receipt_id").and_then(|h| hex::decode(h).ok()).and_then(|b| {
-            let arr: Result<[u8; 32], _> = b.try_into();
-            arr.ok()
-        }) else {
+    // CVDR public serving route `/cvdr?receipt_id=<hex>` — the frozen-package delivery leg
+    // (spec §4 Delivery: bearer-route shape + exposure policy) is a later slice. The legacy
+    // ReleasedCvdr store this served is stripped (never written since the finalization rework);
+    // until the delivery leg lands, this returns NotFound. Dev-branch interim, same class as the
+    // finalize_cvdr stub.
+    fn get_cvdr_http(_qs: HashMap<String, String>, _state: &RuntimeState) -> HttpResponse {
+        HttpResponse::not_found()
+    }
+
+    // Self-finalization live route (spec §6): GET /cvdr_live/<receipt_id hex>. Raw-domain QUERY;
+    // returns {receipt_body, witness, data_certificate()} for the canister's own non-replicated
+    // outcall loop. Distinct from the delivery-leg /cvdr serving route. `data_certificate()` is
+    // Some() only in a (non-replicated) query context — the property A1 proved on mainnet.
+    fn get_cvdr_live(receipt_id_hex: &str, state: &RuntimeState) -> HttpResponse {
+        let Some(receipt_id) = hex::decode(receipt_id_hex).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()) else {
             return HttpResponse::not_found();
         };
-
-        match state.data.cvdr.get_by_receipt_id(&receipt_id) {
-            Some(cvdr) => build_json_response(&CvdrHttp::from(&cvdr)),
-            None => HttpResponse::not_found(),
-        }
+        let Some(draft) = state.data.cvdr.find_draft_by_receipt_id(&receipt_id) else {
+            return HttpResponse::not_found();
+        };
+        build_json_response(&CvdrLiveHttp {
+            receipt_id: hex::encode(receipt_id),
+            receipt_body: hex::encode(draft.receipt_body()),
+            witness_cbor: hex::encode(state.data.cvdr_receipt_tree.witness_cbor(&receipt_id)),
+            certificate: ic_cdk::api::data_certificate().map(hex::encode),
+        })
     }
 
     // P2 remediation (G ruling (b)): NO per-canister HTTP route for parked-export
@@ -94,6 +106,12 @@ fn http_request(request: HttpRequest) -> HttpResponse {
     // `receipt_export_pending_count` metric below is the only exposed surface
     // (aggregate, no per-canister status — consistent with the public metrics
     // model).
+    // `/cvdr_live/<receipt_id>` is a path-segment route (spec §6), handled before the
+    // query-string router.
+    if let Some(hex_id) = request.url.split('?').next().and_then(|p| p.strip_prefix("/cvdr_live/")) {
+        return read_state(|state| get_cvdr_live(hex_id, state));
+    }
+
     match extract_route(&request.url) {
         Route::Errors(since) => get_errors_impl(since),
         Route::Logs(since) => get_logs_impl(since),
@@ -107,45 +125,16 @@ fn http_request(request: HttpRequest) -> HttpResponse {
     }
 }
 
-/// Hex-encoded JSON view of a released CVDR for the public `/cvdr` route (hashes + certificate
-/// as hex strings rather than raw byte arrays).
+/// Hex-encoded payload of the `/cvdr_live/<receipt_id>` self-finalization route (spec §6):
+/// the RECEIPT_BODY_V1 bytes, the IC HashTree CBOR witness, and the IC `data_certificate()`
+/// (absent only outside a query context). The canister's own non-replicated outcall parses this
+/// and runs the store-gate.
 #[derive(Serialize)]
-struct CvdrHttp {
-    encoder_version: String,
+struct CvdrLiveHttp {
     receipt_id: String,
-    record_id: String,
-    deletion_seq: u64,
-    user_canister_id: CanisterId,
-    index_canister_id: CanisterId,
-    module_hash_pre: String,
-    executor_module_hash: String,
-    h_user_pre: String,
-    h_index: String,
-    commitment: String,
-    certificate: String,
-    created_at: TimestampMillis,
-    finalized_at: TimestampMillis,
-}
-
-impl From<&crate::model::cvdr::ReleasedCvdr> for CvdrHttp {
-    fn from(c: &crate::model::cvdr::ReleasedCvdr) -> Self {
-        CvdrHttp {
-            encoder_version: c.encoder_version.clone(),
-            receipt_id: hex::encode(c.receipt_id),
-            record_id: hex::encode(c.record_id),
-            deletion_seq: c.deletion_seq,
-            user_canister_id: c.user_canister_id,
-            index_canister_id: c.index_canister_id,
-            module_hash_pre: hex::encode(&c.module_hash_pre),
-            executor_module_hash: hex::encode(&c.executor_module_hash),
-            h_user_pre: hex::encode(c.h_user_pre),
-            h_index: hex::encode(c.h_index),
-            commitment: hex::encode(c.commitment),
-            certificate: hex::encode(&c.certificate),
-            created_at: c.created_at,
-            finalized_at: c.finalized_at,
-        }
-    }
+    receipt_body: String,
+    witness_cbor: String,
+    certificate: Option<String>,
 }
 
 #[derive(Serialize)]

@@ -6436,6 +6436,7 @@ dependencies = [
  "receipts_canister_c2c_client",
  "serde",
  "serde_bytes",
+ "serde_cbor",
  "serde_json",
  "sha256",
  "stable_memory",
