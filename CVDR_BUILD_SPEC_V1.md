@@ -249,11 +249,12 @@ the DoD's cert-absent test.
 
 Two read surfaces, identical state semantics:
 
-1. **HTTP (canonical for users):** `GET /cvdr/<receipt_id>` on the raw domain
+1. **HTTP (canonical for users and frontend V1):** `GET /cvdr/<receipt_id>` on the raw domain
    (`<index_canister_id>.raw.icp0.io`). Path form is canonical. The query form
    (`/cvdr?receipt_id=...`) is NOT served; any doc using it is corrected in the
    docs pass.
-2. **Candid (canonical for frontend):** `get_cvdr(receipt_id)` query on
+2. **Candid (canonical for canister-to-canister, test, and
+   byte-equality surfaces):** `get_cvdr(receipt_id)` query on
    `local_user_index`. The dormant `CvdrReceipt` API shape is replaced: the
    response payload IS the FrozenWire package (P0 interface lock — the public
    API serves FrozenWire verbatim, never a re-projection).
@@ -262,6 +263,9 @@ Two read surfaces, identical state semantics:
 (64 lowercase hex chars). There is no lookup by `record_id`, user, or
 principal on any public surface. Support-path lookup remains gated and
 out of scope for this contract.
+
+No new frontend candid wiring in V1: the de-registered user path
+must not depend on authenticated frontend or candid access.
 
 ### 11.2 Response states (both surfaces)
 
@@ -283,9 +287,17 @@ Notes:
 - **Pending body leaks nothing.** It contains no draft contents, no
   timestamps derived from the draft, no target data — status and retry
   hint only. Distinguishing Pending from Unknown is safe because
-  `receipt_id` is 256-bit unguessable and issued only in the deletion
-  response; only the legitimate holder (or a link thief, 11.6) can
-  observe the distinction.
+  `receipt_id` is 256-bit unguessable and issued only by
+  `prepare_account_deletion`; only the legitimate holder (or a link
+  thief, 11.6) can observe the distinction.
+  Carve-out: the /cvdr_live route is a finalization-only surface.
+  For a finalizable committed draft, it may serve the draft receipt
+  body, including targets_count and targets_commitment, to the bearer
+  so the IC certificate can be captured. It never serves salt or raw
+  target data. The 'Pending leaks nothing' rule applies to the
+  /cvdr/<receipt_id> pending response body, not to /cvdr_live.
+  Prepared-but-not-deleted drafts are not finalizable and are not
+  served by /cvdr_live.
 - **Facts, not verdicts.** No surface reports VerifiedFinal /
   LateFinalized / any tier. Tiers are verifier-derived (CVDR-Verify)
   from `certificate_time` vs the window. The serving layer never
@@ -326,19 +338,34 @@ draft. It never touches the frozen package. Therefore:
   (including `targets_count` and `targets_commitment`) is served
   forever (subject to storage policy, out of scope here).
 - No post-deletion read surface serves reveal material. The reveal
-  package is handed exactly once, in the deletion response, strictly
-  BEFORE scrub (hard sequencing invariant, G-ruled). After scrub it is
-  unrecoverable by design.
+  package is handed in the deletion flow, strictly before the
+  irreversible deletion step (hard sequencing invariant, G-ruled):
+  `prepare_account_deletion` returns `{ receipt_id, RevealWire }` and
+  creates the draft, and the UX must require the user to save or
+  acknowledge the reveal package before the irreversible delete step is
+  enabled. It is not recoverable after deletion commits and
+  scrub-at-capture runs.
 - The e2e scrub test asserts: post-capture, no live route (HTTP or
   candid) returns salt or raw target data for the deleted user —
   distinct from and compatible with Pending/Available semantics above.
 
+Prepared-draft lifecycle (G-ruled):
+
+- Prepared-but-not-deleted drafts are TTL-purged; purge scrubs the
+  draft material and thereafter the receipt_id serves Unknown.
+- Re-issue of the reveal package is permitted before deletion
+  commits. Once deletion commits, the reveal is once-only: no
+  regeneration, no second handover.
+- Prepared-but-not-deleted drafts are not finalizable and are not
+  served by /cvdr_live.
+
 ### 11.5 Removal of `cvdr_data_certificate`
 
 The obsolete external-finalizer query `cvdr_data_certificate` is
-REMOVED (G-ruled): deleted from `api` and `impl` query modules, candid
-regenerated, and `.did.ts` updated by hand (commit message must state
-"manual edit — not regenerated"). No route, method, or type of that
+REMOVED (G-ruled): deleted from the `api` and `impl` query modules
+(both mod.rs registrations) and the integration-test client. This
+canister has no can.did and no .did.ts; no candid regeneration
+applies. No route, method, or type of that
 name survives. Rationale: implementation is permanently
 `NotAvailable`; the name describes a flow that no longer exists;
 pending-state signalling belongs to the canonical route (11.2).
