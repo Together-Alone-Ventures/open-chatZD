@@ -210,19 +210,18 @@ attempted or queued" (never "confirmed erased").
 this commit — retracted; it was run without access to the actual tree. Verdicts must
 state which tree/commit was read.)
 
-## 8b. Slice-1 interim state (Ruling B — scope of "existing tests pass")
+## 8b. Slice-1→3 resolution (Ruling B — scope of "existing tests pass")
 
-Slice 1 necessarily breaks the committed finalize-gated flow (`certified_data` becomes
-the tree root, so `finalize_cvdr`'s `certified_data == commitment` binding cannot hold).
-Ruling: in Slice 1, `finalize_cvdr` becomes an **inert, compile-safe stub** returning an
-explicit error ("pending Slice 2/3 rework") — do NOT half-adapt it to the tree (its full
-rework, with the §7 acceptance rules, is Slice 3; the primary store path is Slice 2's
-self-finalization). "Existing tests pass" = crate unit/derivation tests (the committed
-hash chain carries forward unchanged). The finalize-gated integration tests
-(`cvdr_tests.rs`, `delete_user_tests.rs`) are **updated in Slice 1** to the new baseline:
-deletion (uninstall + cleanup + notifications) completes with certificate capture entirely
-absent — which is precisely the DoD's cert-absent test. This interim state is
-dev-branch-only, documented in-code, and never shipped.
+Slice 1 changed `certified_data` to the receipt-tree root, so the committed finalize-gated
+flow (`finalize_cvdr`'s `certified_data == commitment` binding) no longer applies. That
+rework is complete: the primary store path is the implemented self-finalization of §6, and
+`finalize_cvdr` is the implemented permissionless backstop of §7.
+
+Ruling B (scope of "existing tests pass"), as applied: the crate unit/derivation tests carry
+the committed hash chain forward unchanged; and the former finalize-gated integration tests
+(`cvdr_tests.rs`, `delete_user_tests.rs`) were rebased to the new baseline, where deletion
+(uninstall + cleanup + notifications) completes with certificate capture entirely absent —
+the DoD's cert-absent test.
 
 ## 9. Verifier reject list (CVDR-Verify — MUST reject if any)
 
@@ -242,3 +241,135 @@ dev-branch-only, documented in-code, and never shipped.
   remediation (ladder: retries → operator-fetched cert via backstop → stays
   `AwaitingCertificate` + escalation).
 - CC does not certify its own work; CD verifies from source with file:line evidence.
+
+## 11. CVDR Delivery Endpoint Contract (V1) — G-countersigned
+
+
+### 11.1 Canonical surfaces
+
+Two read surfaces, identical state semantics:
+
+1. **HTTP (canonical for users):** `GET /cvdr/<receipt_id>` on the raw domain
+   (`<index_canister_id>.raw.icp0.io`). Path form is canonical. The query form
+   (`/cvdr?receipt_id=...`) is NOT served; any doc using it is corrected in the
+   docs pass.
+2. **Candid (canonical for frontend):** `get_cvdr(receipt_id)` query on
+   `local_user_index`. The dormant `CvdrReceipt` API shape is replaced: the
+   response payload IS the FrozenWire package (P0 interface lock — the public
+   API serves FrozenWire verbatim, never a re-projection).
+
+`receipt_id` is a bearer capability: 32 bytes, hex-encoded in the URL
+(64 lowercase hex chars). There is no lookup by `record_id`, user, or
+principal on any public surface. Support-path lookup remains gated and
+out of scope for this contract.
+
+### 11.2 Response states (both surfaces)
+
+| State | Condition (from durable state) | HTTP | Candid variant | Body |
+|---|---|---|---|---|
+| **Available** | Frozen package stored for this `receipt_id` | `200` | `Available(FrozenWire)` | The stored FrozenWire package, byte-for-byte (11.3) |
+| **Pending** | Draft exists for this `receipt_id`; no frozen package yet | `202` | `Pending(PendingInfo)` | Minimal JSON: `{"schema":"openchatzd.cvdr.status","version":1,"status":"pending","retry_after_secs":N}` |
+| **Unknown** | No draft and no package for this `receipt_id` (or malformed id) | `404` (`400` if malformed) | `NotFound` | Minimal JSON error body; constant-shape, no detail |
+| **Scrubbed-unavailable** | Applies to sensitive reveal material only, never to the frozen package — see 11.4 | `404` on any route that would expose reveal data | n/a (no candid surface serves reveal data) | Same constant-shape 404 as Unknown |
+
+Notes:
+
+- **Pending covers stuck.** A draft past the 24 h window that has not
+  finalized still reports Pending (the permissionless backstop can still
+  rescue it into LateFinalized). Age/monitoring of stuck drafts is a
+  runbook concern (`AwaitingCertificate` monitoring), not a distinct
+  public state. `retry_after_secs` is a client politeness hint
+  (suggested: 5), not a promise.
+- **Pending body leaks nothing.** It contains no draft contents, no
+  timestamps derived from the draft, no target data — status and retry
+  hint only. Distinguishing Pending from Unknown is safe because
+  `receipt_id` is 256-bit unguessable and issued only in the deletion
+  response; only the legitimate holder (or a link thief, 11.6) can
+  observe the distinction.
+- **Facts, not verdicts.** No surface reports VerifiedFinal /
+  LateFinalized / any tier. Tiers are verifier-derived (CVDR-Verify)
+  from `certificate_time` vs the window. The serving layer never
+  classifies.
+- **Pending is served as HTTP `202` (fixed).** CC probes IC HTTP
+  gateway behaviour before implementation; only if `202` is proven
+  undeliverable end-to-end is the fallback (`200` with the
+  `"status":"pending"` body and NO FrozenWire fields) adopted — by
+  spec erratum to this section, before build. In either case the
+  invariant is machine-distinguishability of Pending from both
+  Available and Unknown by body schema.
+
+### 11.3 Byte-for-byte serving invariant (acceptance test)
+
+The Available body is the stored frozen package canonically serialized
+to the portable schema (FrozenWire, `package.rs`), served verbatim:
+
+```
+SHA-256(stored package, canonical FrozenWire serialization)
+  == SHA-256(HTTP 200 response body bytes)
+  == SHA-256(candid Available payload re-serialized)
+```
+
+stable across repeated fetches. The package is never re-derived
+from draft/source state, re-projected into an old API shape, or
+enriched inside the package bytes; canonical serialization of the
+stored FrozenWire object is allowed and required. A fresh read-time certificate is
+an OPTIONAL extra delivered outside the package bytes (e.g. a separate
+header/field), never merged into them. This equality is the Definition
+of Done gate for the delivery leg (per Delivery-Leg Preconditions v1).
+
+### 11.4 Scrub semantics vs serving
+
+Scrub-at-capture removes reveal material (salt + target list) from the
+draft. It never touches the frozen package. Therefore:
+
+- Available responses are unaffected by scrub — the frozen package
+  (including `targets_count` and `targets_commitment`) is served
+  forever (subject to storage policy, out of scope here).
+- No post-deletion read surface serves reveal material. The reveal
+  package is handed exactly once, in the deletion response, strictly
+  BEFORE scrub (hard sequencing invariant, G-ruled). After scrub it is
+  unrecoverable by design.
+- The e2e scrub test asserts: post-capture, no live route (HTTP or
+  candid) returns salt or raw target data for the deleted user —
+  distinct from and compatible with Pending/Available semantics above.
+
+### 11.5 Removal of `cvdr_data_certificate`
+
+The obsolete external-finalizer query `cvdr_data_certificate` is
+REMOVED (G-ruled): deleted from `api` and `impl` query modules, candid
+regenerated, and `.did.ts` updated by hand (commit message must state
+"manual edit — not regenerated"). No route, method, or type of that
+name survives. Rationale: implementation is permanently
+`NotAvailable`; the name describes a flow that no longer exists;
+pending-state signalling belongs to the canonical route (11.2).
+
+No `cvdr_status` endpoint is added in V1. If frontend/typebox work
+demonstrates a concrete need for a status-only query, a `cvdr_status`
+contract is drafted for G countersign before build (G's stated
+fallback); the default path is that the canonical surfaces suffice.
+
+### 11.6 Transport and logging rules (ops-binding)
+
+- HTTPS only (raw domain is HTTPS; no plaintext alternative is
+  documented or linked).
+- The full `receipt_id` MUST NOT be written to logs, metrics, traces,
+  or error messages on any server-side path. Where correlation is
+  needed, log at most a truncated prefix (first 8 hex chars).
+- Responses carry `Cache-Control: no-store` — bearer-URL content must
+  not be cached by intermediaries.
+- User-facing copy treats the link as a secret: "Treat this link like
+  a password."
+
+### 11.7 Test obligations bound to this contract
+
+1. Byte-equality gate (11.3) — HTTP and candid.
+2. Pending → Available transition observed across finalization on the
+   same `receipt_id` (no 404 in the gap).
+3. Unknown returns `404`, malformed id returns `400` — necessarily
+   distinguishable by status code; both bodies are constant-shape and
+   echo no detail (no id reflection, no reason strings).
+4. E2e scrub assertion (11.4).
+5. Reveal-package round-trip against CVDR-Verify `--reveal` mode.
+6. Un-ignore candidates from CD's 11-test inventory mapped to the
+   above (exact list proposed by C separately; the 5 banked P2
+   `receipts_tests` stay banked).
