@@ -1306,6 +1306,18 @@ function getAction(
                 config.icUrl,
             );
 
+        case "mktdExecuteDeletion":
+            return agent.userClient.mktdExecuteDeletion();
+
+        case "mktdPendingCertificate":
+            return agent.userClient.mktdPendingCertificate();
+
+        case "mktdFinalizeDeletion":
+            return agent.userClient.mktdFinalizeDeletion(payload.receiptId, payload.certificate);
+
+        case "mktdPendingDeletionState":
+            return agent.userClient.mktdPendingDeletionState();
+
         case "getSignInProof":
             return getSignInProof(
                 payload.identityKey,

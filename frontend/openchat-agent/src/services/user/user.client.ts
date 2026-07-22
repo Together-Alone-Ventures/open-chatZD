@@ -50,6 +50,10 @@ import {
     type Message,
     type MessageActivityFeedResponse,
     type MessageContext,
+    type MktdDeletionState,
+    type MktdExecuteDeletionResponse,
+    type MktdFinalizeDeletionResponse,
+    type MktdPendingCertificateResponse,
     type NamedAccount,
     type OptionUpdate,
     type PayForStreakInsuranceResponse,
@@ -171,6 +175,11 @@ import {
     UserUpdatesArgs,
     UserUpdatesResponse,
     UserWithdrawBtcArgs,
+    UserMktdExecuteDeletionResponse,
+    UserMktdFinalizeDeletionArgs,
+    UserMktdFinalizeDeletionResponse,
+    UserMktdPendingCertificateResponse,
+    UserMktdPendingDeletionStateResponse,
     UserWithdrawBtcResponse,
     UserWithdrawCryptoArgs,
     UserWithdrawCryptoResponse,
@@ -220,6 +229,10 @@ import {
     getUpdatesResponse,
     initialStateResponse,
     messageActivityFeedResponse,
+    mktdExecuteDeletionResponse,
+    mktdFinalizeDeletionResponse,
+    mktdPendingCertificateResponse,
+    mktdPendingDeletionStateResponse,
     publicProfileResponse,
     savedCryptoAccountsResponse,
     searchDirectChatSuccess,
@@ -687,6 +700,65 @@ export class UserClient
             savedCryptoAccountsResponse,
             TEmpty,
             UserSavedCryptoAccountsResponse,
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // MKTd02 full-delete (OpenChatZD) — owner-driven A→B→C deletion receipt.
+    // These run against the user's OWN canister (owner-guarded wrappers); Phase B
+    // MUST be a query (data_certificate is only available in query context).
+    // -----------------------------------------------------------------------
+
+    /** Phase A (update): tombstone PII, set certified_data, take the finalization
+     * lock, return the pending receipt id. POINT OF NO RETURN. */
+    mktdExecuteDeletion(): Promise<MktdExecuteDeletionResponse> {
+        return this.update(
+            "mktd_execute_deletion",
+            {},
+            mktdExecuteDeletionResponse,
+            TEmpty,
+            UserMktdExecuteDeletionResponse,
+        );
+    }
+
+    /** Phase B (ingress query): read the BLS certificate for the pending receipt. */
+    mktdPendingCertificate(): Promise<MktdPendingCertificateResponse> {
+        return this.query(
+            "mktd_pending_certificate",
+            {},
+            mktdPendingCertificateResponse,
+            TEmpty,
+            UserMktdPendingCertificateResponse,
+        );
+    }
+
+    /** Phase C (owner-authorized update): embed the cert and finalize; this sets the
+     * durable `mktd_finalized_receipt_id` the P2 backend export reads. */
+    mktdFinalizeDeletion(
+        receiptId: Uint8Array,
+        certificate: Uint8Array,
+    ): Promise<MktdFinalizeDeletionResponse> {
+        return this.update(
+            "mktd_finalize_deletion",
+            // Plain Rust `Vec<u8>` decodes from a msgpack array, so the args must be
+            // number[] (a Uint8Array would serialise as a msgpack `bin` and fail to
+            // decode). The schema is `Type.Array(Type.Number())` to match.
+            { receipt_id: Array.from(receiptId), certificate: Array.from(certificate) },
+            mktdFinalizeDeletionResponse,
+            UserMktdFinalizeDeletionArgs,
+            UserMktdFinalizeDeletionResponse,
+        );
+    }
+
+    /** Low-sensitivity status (no PII) used by the serialization guard and recovery
+     * tooling to detect tombstoned-pending vs finalized vs not-started. */
+    mktdPendingDeletionState(): Promise<MktdDeletionState> {
+        return this.query(
+            "mktd_pending_deletion_state",
+            {},
+            mktdPendingDeletionStateResponse,
+            TEmpty,
+            UserMktdPendingDeletionStateResponse,
         );
     }
 

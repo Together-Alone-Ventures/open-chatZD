@@ -37,6 +37,7 @@
         fontSize,
         identityStateStore,
         inititaliseLogger,
+        mktdDeletionCorridorStore,
         notFoundStore,
         routeForChatIdentifier,
         routeForScope,
@@ -54,6 +55,7 @@
     import Snow from "@shared_components/Snow.svelte";
     import UpgradeBanner from "./UpgradeBanner.svelte";
     import Witch from "@shared_components/Witch.svelte";
+    import ConfirmDeleteAccount from "./home/profile/ConfirmDeleteAccount.svelte";
     import InstallPrompt from "./home/InstallPrompt.svelte";
     import NotificationsBar from "./home/NotificationsBar.svelte";
     import ActiveCall from "./home/video/ActiveCall.svelte";
@@ -118,6 +120,8 @@
     let profileTrace = client.showTrace();
     // I can't (yet) find a way to avoid using "any" here. Will try to improve but need to commit this crime for the time being
     let videoCallElement: any;
+    // MKTd02 deletion-corridor: bound `deleting` flag for the shell-mounted recovery.
+    let corridorDeleting = $state(false);
     let landingPageRoute = $derived(isLandingPageRoute($routeStore));
     let homeRoute = $derived($routeStore.kind === "home_route");
     let showLandingPage = $derived(
@@ -275,6 +279,8 @@
     function onUserLoggedIn(userId: string) {
         setupNativeApp();
         broadcastLoggedInUser(userId);
+        // Shell-level deletion-corridor guard (G ruling b): one-shot, no polling.
+        client.checkMktdDeletionCorridor();
     }
 
     function addHotGroupExclusion(chatId: string): void {
@@ -653,6 +659,14 @@
     {#if !$isLoading || $reviewingTranslations}
         <Router {showLandingPage} />
     {/if}
+{/if}
+
+<!-- Shell-level deletion-corridor (G ruling b): a tombstoned user is steered into
+     the existing delete-flow recovery, mounted as a non-dismissable overlay over the
+     app so normal profile/chat/navigation is blocked until teardown completes (which
+     logs out). Only on CONFIRMED tombstoned state ("blocked"); "unknown" never traps. -->
+{#if $identityStateStore.kind === "logged_in" && $mktdDeletionCorridorStore === "blocked"}
+    <ConfirmDeleteAccount bind:deleting={corridorDeleting} onClose={() => {}} />
 {/if}
 
 {#if profileTrace}

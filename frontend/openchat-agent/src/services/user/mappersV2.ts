@@ -57,6 +57,10 @@ import type {
 import {
     CommonResponses,
     encodeIcrcAccount,
+    type MktdDeletionState,
+    type MktdExecuteDeletionResponse,
+    type MktdFinalizeDeletionResponse,
+    type MktdPendingCertificateResponse,
     nullMembership,
     ROLE_OWNER,
     toBigInt32,
@@ -91,6 +95,10 @@ import type {
     UserInitialStateFavouriteChatsInitial,
     UserInitialStateGroupChatsInitial,
     UserInitialStateResponse,
+    UserMktdExecuteDeletionResponse,
+    UserMktdFinalizeDeletionResponse,
+    UserMktdPendingCertificateResponse,
+    UserMktdPendingDeletionStateResponse,
     UserMessageActivity,
     UserMessageActivityEvent,
     UserMessageActivityFeedResponse,
@@ -1064,4 +1072,52 @@ export function apiVerification(domain: Verification): UserSetPinNumberPinNumber
         case "reauthenticated":
             return { Reauthenticated: domain.signInProofJwt };
     }
+}
+
+// ---------------------------------------------------------------------------
+// MKTd02 full-delete (OpenChatZD) — A→B→C deletion-receipt response mappers.
+// ---------------------------------------------------------------------------
+
+export function mktdExecuteDeletionResponse(
+    value: UserMktdExecuteDeletionResponse,
+): MktdExecuteDeletionResponse {
+    if ("Success" in value) {
+        return { kind: "success", receiptId: new Uint8Array(value.Success) };
+    }
+    return { kind: "error", error: value.Error };
+}
+
+export function mktdPendingCertificateResponse(
+    value: UserMktdPendingCertificateResponse,
+): MktdPendingCertificateResponse {
+    if (typeof value === "object" && "Success" in value) {
+        return {
+            kind: "success",
+            certificate: {
+                receiptId: new Uint8Array(value.Success.receipt_id),
+                certifiedCommitment: new Uint8Array(value.Success.certified_commitment),
+                certificate: new Uint8Array(value.Success.certificate),
+            },
+        };
+    }
+    return { kind: "not_pending" };
+}
+
+export function mktdFinalizeDeletionResponse(
+    value: UserMktdFinalizeDeletionResponse,
+): MktdFinalizeDeletionResponse {
+    if (typeof value === "object" && "Error" in value) {
+        return { kind: "error", error: value.Error };
+    }
+    return { kind: "success" };
+}
+
+export function mktdPendingDeletionStateResponse(
+    value: UserMktdPendingDeletionStateResponse,
+): MktdDeletionState {
+    return {
+        pending: value.pending,
+        tombstoned: value.tombstoned,
+        receiptId: value.receipt_id !== undefined ? new Uint8Array(value.receipt_id) : undefined,
+    };
 }

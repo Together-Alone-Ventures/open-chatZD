@@ -643,6 +643,34 @@ pub struct FrozenCvdrPackage {
     pub certificate_time: u64,
 }
 
+/// The ONE construction path from the stored package to the served wire shape (spec §11.3).
+/// Both surfaces go through here — the HTTP `200` body is `FrozenWire::from(&pkg)
+/// .to_canonical_json()`, and the candid `Available` payload is `FrozenWire::from(&pkg)` — so
+/// "never a re-projection" holds by construction, not by convention. The package bytes are
+/// never re-derived from draft state and never enriched.
+impl From<&FrozenCvdrPackage> for local_user_index_canister::get_cvdr::FrozenWire {
+    fn from(p: &FrozenCvdrPackage) -> Self {
+        use local_user_index_canister::get_cvdr::{FROZEN_SCHEMA_ID, WIRE_ENCODING, WIRE_VERSION};
+        Self {
+            schema: FROZEN_SCHEMA_ID.to_string(),
+            version: WIRE_VERSION,
+            encoding: WIRE_ENCODING.to_string(),
+            receipt_body: p.receipt_body.clone(),
+            receipt_hash: p.receipt_hash,
+            tree_root: p.tree_root,
+            witness_bytes: p.witness_bytes.clone(),
+            certificate_bytes: p.certificate_bytes.clone(),
+            certificate_time: p.certificate_time,
+        }
+    }
+}
+
+/// §11.6: the full `receipt_id` MUST NOT reach logs, metrics, traces, or error messages. Where
+/// correlation is needed, log at most this truncated prefix (first 8 hex chars = 4 bytes).
+pub fn receipt_id_prefix(receipt_id: &Hash) -> String {
+    hex::encode(&receipt_id[..4])
+}
+
 impl Storable for FrozenCvdrPackage {
     fn to_bytes(&self) -> Cow<'_, [u8]> {
         Cow::Owned(candid::encode_one(self).expect("FrozenCvdrPackage encode"))
@@ -902,6 +930,17 @@ impl CvdrStore {
             .iter()
             .map(|e| e.value())
             .find(|d| &d.receipt_id == receipt_id && d.is_finalizable())
+    }
+
+    /// Look up a draft by `receipt_id` in ANY stage — the Pending predicate of spec §11.2
+    /// ("draft exists for this `receipt_id`; no frozen package yet").
+    ///
+    /// Deliberately NOT [`find_draft_by_receipt_id`]: that one filters on `is_finalizable()`, so a
+    /// `Captured`/`Uninstalled` draft would report Unknown and `/cvdr` would serve `404` during the
+    /// earliest part of the deletion — the exact "404 in the gap" that §11.7-2 exists to catch.
+    /// Serving only: the finalizable filter still guards `/cvdr_live` (§11.2 carve-out).
+    pub fn find_any_draft_by_receipt_id(&self, receipt_id: &Hash) -> Option<CvdrDraft> {
+        self.drafts.iter().map(|e| e.value()).find(|d| &d.receipt_id == receipt_id)
     }
 
     /// Look up a draft by `receipt_id` that is in a FINALIZABLE state — `AwaitingCertificate` or

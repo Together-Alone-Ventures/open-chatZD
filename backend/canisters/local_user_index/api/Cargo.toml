@@ -11,11 +11,13 @@ community_canister = { path = "../../community/api" }
 event_store_canister = { workspace = true }
 event_store_types = { workspace = true }
 group_canister = { path = "../../group/api" }
+hex = { workspace = true }
 ic-ledger-types = { workspace = true }
 oc_error_codes = { path = "../../../libraries/error_codes" }
 notifications_index_canister = { path = "../../notifications_index/api" }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
+serde_json = { workspace = true }
 ts_export = { path = "../../../libraries/ts_export" }
 ts-rs = { workspace = true }
 types = { path = "../../../libraries/types" }

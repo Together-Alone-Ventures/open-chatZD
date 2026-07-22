@@ -218,6 +218,9 @@ import {
     type MessagePermission,
     type MessageReminderCreatedContent,
     type ModerationFlag,
+    mktdCorridorStatus,
+    type MktdDeletionState,
+    mktdIsFinalized,
     type MultiUserChat,
     type MultiUserChatIdentifier,
     type NamedAccount,
@@ -342,6 +345,7 @@ import {
     cryptoLookup,
     currentUserIdStore,
     currentUserProfileStore,
+    mktdDeletionCorridorStore,
     currentUserStore,
     diamondStatusStore,
     directChatBotsStore,
@@ -741,26 +745,184 @@ export class OpenChat {
         return this.config.accountLinkingCodesEnabled;
     }
 
-    deleteCurrentUser(
+    async deleteCurrentUser(
         identityKey: CryptoKeyPair,
         delegation: JsonnableDelegationChain,
     ): Promise<boolean> {
-        if (!anonUserStore.value) {
-            return this.#worker
-                .send({
-                    kind: "deleteUser",
-                    identityKey,
-                    delegation,
-                })
-                .then((success) => {
-                    if (success) {
-                        this.clearCachedData().finally(() => this.logout());
-                    }
-                    return success;
-                });
-        } else {
-            return Promise.resolve(false);
+        if (anonUserStore.value) {
+            return false;
         }
+        // SERIALIZATION GUARD (MKTd02 full-delete): the destructive `deleteUser`
+        // teardown — which P2's backend turns into export-to-receipts +
+        // retained-copy-first + uninstall — may run ONLY after Phase C has finalized
+        // the deletion receipt. We gate on DURABLE canister state
+        // (`mktd_pending_deletion_state`), never on UI step position, so no legacy /
+        // background / double-click path can race ahead of finalization. If the state
+        // can't be read, we refuse (fail closed) rather than delete without a receipt.
+        let state: MktdDeletionState;
+        try {
+            state = await this.mktdPendingDeletionState();
+        } catch {
+            return false;
+        }
+        if (!mktdIsFinalized(state)) {
+            return false;
+        }
+        const success = await this.#worker.send({
+            kind: "deleteUser",
+            identityKey,
+            delegation,
+        });
+        if (success) {
+            this.#mktdClearStoredReceiptId();
+            this.clearCachedData().finally(() => this.logout());
+        }
+        return success;
+    }
+
+    // -----------------------------------------------------------------------
+    // MKTd02 full-delete (OpenChatZD) — A→B→C deletion-receipt orchestration.
+    // The frontend NEVER stores to the receipts canister (P2 owns the durable
+    // store at the teardown seam); it only finalizes, displays and downloads the
+    // receipt from the live user canister, then triggers `deleteCurrentUser`.
+    // -----------------------------------------------------------------------
+
+    /** Low-sensitivity deletion state (no PII) — drives the guard + recovery UI. */
+    mktdPendingDeletionState(): Promise<MktdDeletionState> {
+        return this.#worker.send({ kind: "mktdPendingDeletionState" });
+    }
+
+    /** Shell-level deletion-corridor guard (G ruling b). ONE-SHOT — call once per
+     * authenticated app-load (no polling). Sets `mktdDeletionCorridorStore`:
+     * - anonymous / confirmed not-tombstoned → "clear" (normal app);
+     * - confirmed tombstoned (pending OR finalized) → "blocked" (the shell steers the
+     *   user into the existing delete-flow recovery corridor — no normal use);
+     * - the state read FAILED (transient/unknown) → "unknown": we must NOT trap a
+     *   normal, non-deleting user, so this never blocks. Fail-closed applies only to
+     *   CONFIRMED tombstoned state; the destructive guard in `deleteCurrentUser`
+     *   (unchanged) still prevents any teardown before Phase C finalization. */
+    async checkMktdDeletionCorridor(): Promise<void> {
+        if (anonUserStore.value) {
+            mktdDeletionCorridorStore.set("clear");
+            return;
+        }
+        let state: MktdDeletionState | undefined;
+        try {
+            state = await this.mktdPendingDeletionState();
+        } catch {
+            // Transient read failure → leave the decision to `mktdCorridorStatus`,
+            // which maps `undefined` to "unknown" (never traps a normal user).
+            state = undefined;
+        }
+        mktdDeletionCorridorStore.set(mktdCorridorStatus(state));
+    }
+
+    /** Build the P1f download URL for the finalized receipt JSON on the user's OWN
+     * live canister. 404 before finalize, 200 after — both expected. */
+    mktdReceiptDownloadUrl(receiptIdHex: string): string | undefined {
+        const userCanisterId = currentUserIdStore.value;
+        if (userCanisterId === undefined) {
+            return undefined;
+        }
+        return `${this.config.canisterUrlPath.replace(
+            "{canisterId}",
+            userCanisterId,
+        )}/mktd_receipt?id=${receiptIdHex}`;
+    }
+
+    /** The receipt id remembered locally for the in-flight/just-finalized deletion
+     * (so a refresh after Phase C can still show/download the receipt — the canister
+     * stops exposing the pending id once finalized). This is convenience-only state;
+     * the destructive guard relies solely on canister state, never on this. */
+    mktdStoredReceiptIdHex(): string | undefined {
+        const key = this.#mktdReceiptIdKey();
+        if (key === undefined) return undefined;
+        return localStorage.getItem(key) ?? undefined;
+    }
+
+    /** Run A→B→C against the user's own canister and return the finalized receipt id
+     * (hex). Idempotent and resume-safe: never re-runs Phase A once tombstoned, and
+     * resumes B→C from a tombstoned-but-pending state. POINT OF NO RETURN is Phase A
+     * (PII tombstoned at confirm-time); callers must already have taken the deliberate
+     * final-confirmation action before calling this. */
+    async mktdRunDeletionReceiptFlow(): Promise<
+        { kind: "success"; receiptIdHex: string } | { kind: "error"; error: string }
+    > {
+        try {
+            const state = await this.mktdPendingDeletionState();
+
+            if (mktdIsFinalized(state)) {
+                // Phase C already done (recovery): recover the id from local memory.
+                const stored = this.mktdStoredReceiptIdHex();
+                return stored !== undefined
+                    ? { kind: "success", receiptIdHex: stored }
+                    : { kind: "error", error: "already_finalized_unknown_receipt" };
+            }
+
+            // Phase A — tombstone PII + take the lock. Skip if already tombstoned
+            // (idempotent: never re-run A), resuming an interrupted deletion instead.
+            if (!state.tombstoned) {
+                const a = await this.#worker.send({ kind: "mktdExecuteDeletion" });
+                if (a.kind === "error") {
+                    return { kind: "error", error: a.error };
+                }
+                this.#mktdStoreReceiptIdHex(this.#bytesToHex(a.receiptId));
+            } else if (state.receiptId !== undefined) {
+                this.#mktdStoreReceiptIdHex(this.#bytesToHex(state.receiptId));
+            }
+
+            // Phase B — ingress query for the BLS certificate.
+            const b = await this.#worker.send({ kind: "mktdPendingCertificate" });
+            if (b.kind !== "success") {
+                // Could have finalized between A and here (concurrent resume).
+                const after = await this.mktdPendingDeletionState();
+                const stored = this.mktdStoredReceiptIdHex();
+                if (mktdIsFinalized(after) && stored !== undefined) {
+                    return { kind: "success", receiptIdHex: stored };
+                }
+                return { kind: "error", error: "not_pending" };
+            }
+
+            // Phase C — finalize (sets the durable finalized receipt id).
+            const c = await this.#worker.send({
+                kind: "mktdFinalizeDeletion",
+                receiptId: b.certificate.receiptId,
+                certificate: b.certificate.certificate,
+            });
+            if (c.kind === "error") {
+                return { kind: "error", error: c.error };
+            }
+            const receiptIdHex = this.#bytesToHex(b.certificate.receiptId);
+            this.#mktdStoreReceiptIdHex(receiptIdHex);
+            return { kind: "success", receiptIdHex };
+        } catch (err) {
+            return { kind: "error", error: err instanceof Error ? err.message : String(err) };
+        }
+    }
+
+    #mktdReceiptIdKey(): string | undefined {
+        const userCanisterId = currentUserIdStore.value;
+        return userCanisterId !== undefined ? `mktd_receipt_id_${userCanisterId}` : undefined;
+    }
+
+    #mktdStoreReceiptIdHex(receiptIdHex: string): void {
+        const key = this.#mktdReceiptIdKey();
+        if (key !== undefined) {
+            localStorage.setItem(key, receiptIdHex);
+        }
+    }
+
+    #mktdClearStoredReceiptId(): void {
+        const key = this.#mktdReceiptIdKey();
+        if (key !== undefined) {
+            localStorage.removeItem(key);
+        }
+    }
+
+    #bytesToHex(bytes: Uint8Array): string {
+        return Array.from(bytes)
+            .map((b) => b.toString(16).padStart(2, "0"))
+            .join("");
     }
 
     #chatUpdated(chatId: ChatIdentifier, updatedEvents: UpdatedEvent[]): void {

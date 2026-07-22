@@ -127,6 +127,12 @@ import type {
 } from "./community";
 import type { AgentConfig } from "./config";
 import type {
+    MktdDeletionState,
+    MktdExecuteDeletionResponse,
+    MktdFinalizeDeletionResponse,
+    MktdPendingCertificateResponse,
+} from "./mktd";
+import type {
     AccountTransactionResult,
     CryptocurrencyDetails,
     EvmChain,
@@ -446,6 +452,10 @@ export type WorkerRequest =
     | MessageActivityFeed
     | MarkActivityFeedRead
     | DeleteUser
+    | MktdExecuteDeletion
+    | MktdPendingCertificate
+    | MktdFinalizeDeletion
+    | MktdPendingDeletionState
     | InstallBot
     | UninstallBot
     | UpdateInstalledBot
@@ -1671,6 +1681,25 @@ type DeleteUser = {
     delegation: JsonnableDelegationChain;
 };
 
+// MKTd02 full-delete (OpenChatZD) — owner-driven A→B→C deletion receipt.
+type MktdExecuteDeletion = {
+    kind: "mktdExecuteDeletion";
+};
+
+type MktdPendingCertificate = {
+    kind: "mktdPendingCertificate";
+};
+
+type MktdFinalizeDeletion = {
+    kind: "mktdFinalizeDeletion";
+    receiptId: Uint8Array;
+    certificate: Uint8Array;
+};
+
+type MktdPendingDeletionState = {
+    kind: "mktdPendingDeletionState";
+};
+
 type WithdrawFromIcpSwap = {
     kind: "withdrawFromIcpSwap";
     userId: string;
@@ -1727,6 +1756,10 @@ export type WorkerResponseInner =
     | void
     | bigint
     | boolean
+    | MktdExecuteDeletionResponse
+    | MktdPendingCertificateResponse
+    | MktdFinalizeDeletionResponse
+    | MktdDeletionState
     | number
     | string
     | undefined
@@ -2572,6 +2605,14 @@ export type WorkerResult<T> = T extends Init
     ? void
     : T extends DeleteUser
     ? boolean
+    : T extends MktdExecuteDeletion
+    ? MktdExecuteDeletionResponse
+    : T extends MktdPendingCertificate
+    ? MktdPendingCertificateResponse
+    : T extends MktdFinalizeDeletion
+    ? MktdFinalizeDeletionResponse
+    : T extends MktdPendingDeletionState
+    ? MktdDeletionState
     : T extends InstallBot
     ? boolean
     : T extends GetBotDefinition

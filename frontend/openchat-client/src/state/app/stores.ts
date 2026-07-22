@@ -365,6 +365,16 @@ export const currentUserStore = writable<CreatedUser>(anonymousUser(), undefined
 export const currentUserProfileStore = writable<PublicProfile>(nullProfile(), undefined, notEq);
 export const currentUserIdStore = derived(currentUserStore, ({ userId }) => userId);
 export const anonUserStore = derived(currentUserIdStore, (id) => id === ANON_USER_ID);
+
+// MKTd02 full-delete (OpenChatZD) — shell-level deletion-corridor status, set once
+// per authenticated app-load by `OpenChat.checkMktdDeletionCorridor()`.
+//   "unknown" — not yet checked, OR the one-shot state read FAILED (transient): the
+//               shell must NOT trap a normal user, so this never blocks;
+//   "clear"   — confirmed NOT tombstoned → normal app;
+//   "blocked" — confirmed tombstoned (pending OR finalized) → steer into the
+//               existing delete-flow recovery corridor; no normal app use.
+export type MktdDeletionCorridorStatus = "unknown" | "clear" | "blocked";
+export const mktdDeletionCorridorStore = writable<MktdDeletionCorridorStatus>("unknown");
 export const suspendedUserStore = derived(
     currentUserStore,
     (user) => user.suspensionDetails !== undefined,

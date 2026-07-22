@@ -9751,3 +9751,64 @@ export const BotEventWrapper = Type.Object({
     event: BotEvent,
     timestamp: Type.BigInt(),
 });
+
+// ---------------------------------------------------------------------------
+// MKTd02 full-delete (OpenChatZD) — user-canister A→B→C deletion-receipt msgpack
+// bindings. These match the output of the repo's ts2typebox codegen run over the
+// `#[ts_export]` Rust types (verified byte-for-byte; see FRONTEND_DELETE_UX_REPORT
+// §"codegen verification"). Plain Rust `Vec<u8>` serialises over msgpack as an
+// array of u8, hence `Type.Array(Type.Number())` (NOT `TSBytes`, which is reserved
+// for `serde_bytes`/bin-encoded fields). Kept inline here (rather than in the
+// auto-generated header) because the full codegen requires exporting every
+// canister's bindings; a future full regen reproduces these blocks identically.
+// ---------------------------------------------------------------------------
+
+export type UserMktdExecuteDeletionResponse = Static<typeof UserMktdExecuteDeletionResponse>;
+export const UserMktdExecuteDeletionResponse = Type.Union([
+    Type.Object({
+        Success: Type.Array(Type.Number()),
+    }),
+    Type.Object({
+        Error: Type.String(),
+    }),
+]);
+
+export type UserMktdPendingCertificatePendingCertificate = Static<
+    typeof UserMktdPendingCertificatePendingCertificate
+>;
+export const UserMktdPendingCertificatePendingCertificate = Type.Object({
+    receipt_id: Type.Array(Type.Number()),
+    certified_commitment: Type.Array(Type.Number()),
+    certificate: Type.Array(Type.Number()),
+});
+
+export type UserMktdPendingCertificateResponse = Static<typeof UserMktdPendingCertificateResponse>;
+export const UserMktdPendingCertificateResponse = Type.Union([
+    Type.Object({
+        Success: UserMktdPendingCertificatePendingCertificate,
+    }),
+    Type.Literal("NotPending"),
+]);
+
+export type UserMktdFinalizeDeletionArgs = Static<typeof UserMktdFinalizeDeletionArgs>;
+export const UserMktdFinalizeDeletionArgs = Type.Object({
+    receipt_id: Type.Array(Type.Number()),
+    certificate: Type.Array(Type.Number()),
+});
+
+export type UserMktdFinalizeDeletionResponse = Static<typeof UserMktdFinalizeDeletionResponse>;
+export const UserMktdFinalizeDeletionResponse = Type.Union([
+    Type.Literal("Success"),
+    Type.Object({
+        Error: Type.String(),
+    }),
+]);
+
+export type UserMktdPendingDeletionStateResponse = Static<
+    typeof UserMktdPendingDeletionStateResponse
+>;
+export const UserMktdPendingDeletionStateResponse = Type.Object({
+    pending: Type.Boolean(),
+    tombstoned: Type.Boolean(),
+    receipt_id: Type.Optional(Type.Array(Type.Number())),
+});

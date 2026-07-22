@@ -7,7 +7,6 @@ generate_query_call!(bot_chat_events);
 generate_query_call!(bot_community_events);
 generate_msgpack_query_call!(chat_events);
 generate_msgpack_query_call!(group_and_community_summary_updates_v2);
-generate_query_call!(cvdr_data_certificate);
 generate_query_call!(get_cvdr);
 generate_query_call!(latest_notification_index);
 generate_query_call!(notifications);

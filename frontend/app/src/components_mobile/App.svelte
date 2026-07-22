@@ -30,6 +30,7 @@
         fontSize,
         identityStateStore,
         inititaliseLogger,
+        mktdDeletionCorridorStore,
         routeForChatIdentifier,
         routeForScope,
         subscribe,
@@ -40,6 +41,7 @@
     import { _, isLoading } from "svelte-i18n";
     import { getFcmToken, svelteReady } from "tauri-plugin-oc-api";
     import Head from "./Head.svelte";
+    import ConfirmDeleteAccount from "./home/profile/ConfirmDeleteAccount.svelte";
     import NotificationsBar from "./home/NotificationsBar.svelte";
     import ActiveCall from "./home/video/ActiveCall.svelte";
     import IncomingCall from "./home/video/IncomingCall.svelte";
@@ -103,6 +105,9 @@
 
     let client: OpenChat = createOpenChatClient();
     setContext<OpenChat>("client", client);
+
+    // MKTd02 deletion-corridor: bound `deleting` flag for the shell-mounted recovery.
+    let corridorDeleting = false;
 
     // I can't (yet) find a way to avoid using "any" here. Will try to improve but need to commit this crime for the time being
     let videoCallElement: any;
@@ -231,6 +236,8 @@
     function onUserLoggedIn(userId: string) {
         setupNativeApp();
         broadcastLoggedInUser(userId);
+        // Shell-level deletion-corridor guard (G ruling b): one-shot, no polling.
+        client.checkMktdDeletionCorridor();
     }
 
     function calculateHeight() {
@@ -314,6 +321,12 @@
     {#if !$isLoading}
         <Router />
     {/if}
+{/if}
+
+<!-- Shell-level deletion-corridor (G ruling b): steer a CONFIRMED tombstoned user
+     into the existing delete-flow recovery; "unknown" (read error) never traps. -->
+{#if $identityStateStore.kind === "logged_in" && $mktdDeletionCorridorStore === "blocked"}
+    <ConfirmDeleteAccount bind:deleting={corridorDeleting} onClose={() => {}} />
 {/if}
 
 {#if !client.isNativeApp()}

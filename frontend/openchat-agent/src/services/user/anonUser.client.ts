@@ -69,6 +69,10 @@ import type {
     Verification,
     VideoCallPresence,
     WalletConfig,
+    MktdDeletionState,
+    MktdExecuteDeletionResponse,
+    MktdFinalizeDeletionResponse,
+    MktdPendingCertificateResponse,
     WithdrawBtcResponse,
     WithdrawCryptocurrencyResponse,
     WithdrawViaOneSecResponse,
@@ -252,6 +256,23 @@ export class AnonUserClient implements IChatEventsReader<DirectChatIdentifier> {
 
     loadSavedCryptoAccounts(): Promise<NamedAccount[]> {
         return Promise.resolve([]);
+    }
+
+    // MKTd02 full-delete — anonymous users have no canister to delete.
+    mktdExecuteDeletion(): Promise<MktdExecuteDeletionResponse> {
+        throw new AnonymousOperationError();
+    }
+
+    mktdPendingCertificate(): Promise<MktdPendingCertificateResponse> {
+        throw new AnonymousOperationError();
+    }
+
+    mktdFinalizeDeletion(_: Uint8Array, __: Uint8Array): Promise<MktdFinalizeDeletionResponse> {
+        throw new AnonymousOperationError();
+    }
+
+    mktdPendingDeletionState(): Promise<MktdDeletionState> {
+        return Promise.resolve({ pending: false, tombstoned: false });
     }
 
     saveCryptoAccount(_: NamedAccount): Promise<SaveCryptoAccountResponse> {
