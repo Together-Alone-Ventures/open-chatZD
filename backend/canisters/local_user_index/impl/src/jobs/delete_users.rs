@@ -48,8 +48,22 @@ thread_local! {
     static TIMER_ID: Cell<Option<TimerId>> = Cell::default();
 }
 
-/// Bounded fast-retry backoff between leg attempts (transient failures / slot busy).
+/// Backoff between attempts after a transient failure. Success paths must not use this delay.
 const FAST_RETRY_INTERVAL_MS: Milliseconds = 30 * SECOND_IN_MS;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ScheduleKind {
+    Success,
+    Retry,
+}
+
+fn successor_delay_ms(kind: ScheduleKind, next_front_is_same_user: bool) -> Option<Milliseconds> {
+    match kind {
+        ScheduleKind::Success => None,
+        ScheduleKind::Retry if next_front_is_same_user => Some(FAST_RETRY_INTERVAL_MS),
+        ScheduleKind::Retry => None,
+    }
+}
 
 /// Emit a `warn!` once a retryable attempt has persisted past this count (e.g. a delete
 /// blocked indefinitely behind a stuck certified-data slot, or an absent finalizer).
@@ -80,11 +94,17 @@ fn get_next(state: &mut RuntimeState) -> Option<UserToDelete> {
 
 async fn process_user(user: UserToDelete) {
     let outcome = process_user_inner(&user).await;
+    let kind = match &outcome {
+        ProcessOutcome::AwaitingCertificate => ScheduleKind::Success,
+        ProcessOutcome::Retry { .. } => ScheduleKind::Retry,
+    };
 
     mutate_state(|state| {
         apply_outcome(state, &user, outcome);
-        let more = !state.data.users_to_delete_queue.is_empty();
-        start_job_if_required(state, more.then_some(FAST_RETRY_INTERVAL_MS));
+        if let Some(front) = state.data.users_to_delete_queue.front() {
+            let delay = successor_delay_ms(kind, front.user_id == user.user_id);
+            start_job_if_required(state, delay);
+        }
     });
 }
 
@@ -345,5 +365,30 @@ pub(crate) fn resume_in_flight_drafts(state: &mut RuntimeState) {
     // Re-assert the certified root over the rebuilt tree (spec §4 upgrade rule).
     if !state.data.cvdr_receipt_tree.is_empty() {
         ic_cdk::api::certified_data_set(state.data.cvdr_receipt_tree.root());
+    }
+}
+
+#[cfg(test)]
+mod scheduler_tests {
+    use super::{successor_delay_ms, ScheduleKind, FAST_RETRY_INTERVAL_MS};
+
+    #[test]
+    fn success_always_schedules_immediately() {
+        assert_eq!(successor_delay_ms(ScheduleKind::Success, true), None);
+        assert_eq!(successor_delay_ms(ScheduleKind::Success, false), None);
+    }
+
+    #[test]
+    fn retry_backs_off_only_when_same_user_is_next() {
+        assert_eq!(
+            successor_delay_ms(ScheduleKind::Retry, true),
+            Some(FAST_RETRY_INTERVAL_MS)
+        );
+        assert_eq!(successor_delay_ms(ScheduleKind::Retry, false), None);
+    }
+
+    #[test]
+    fn retry_backoff_is_thirty_seconds() {
+        assert_eq!(FAST_RETRY_INTERVAL_MS, 30_000);
     }
 }
