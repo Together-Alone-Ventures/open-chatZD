@@ -65,6 +65,17 @@ fn successor_delay_ms(kind: ScheduleKind, next_front_is_same_user: bool) -> Opti
     }
 }
 
+/// Delay to pass to `start_job_if_required` after `apply_outcome`, or `None` if the queue is idle.
+///
+/// Callers must invoke this **after** `apply_outcome` so a Retry push_back is visible at `front`.
+fn successor_timer_delay(
+    kind: ScheduleKind,
+    next_front_user: Option<UserId>,
+    attempted_user: UserId,
+) -> Option<Option<Milliseconds>> {
+    next_front_user.map(|front| successor_delay_ms(kind, front == attempted_user))
+}
+
 /// Emit a `warn!` once a retryable attempt has persisted past this count (e.g. a delete
 /// blocked indefinitely behind a stuck certified-data slot, or an absent finalizer).
 const WARN_THRESHOLD: u32 = 10;
@@ -101,8 +112,8 @@ async fn process_user(user: UserToDelete) {
 
     mutate_state(|state| {
         apply_outcome(state, &user, outcome);
-        if let Some(front) = state.data.users_to_delete_queue.front() {
-            let delay = successor_delay_ms(kind, front.user_id == user.user_id);
+        let next_front = state.data.users_to_delete_queue.front().map(|u| u.user_id);
+        if let Some(delay) = successor_timer_delay(kind, next_front, user.user_id) {
             start_job_if_required(state, delay);
         }
     });
@@ -370,7 +381,24 @@ pub(crate) fn resume_in_flight_drafts(state: &mut RuntimeState) {
 
 #[cfg(test)]
 mod scheduler_tests {
-    use super::{successor_delay_ms, ScheduleKind, FAST_RETRY_INTERVAL_MS};
+    use super::{successor_delay_ms, successor_timer_delay, ScheduleKind, FAST_RETRY_INTERVAL_MS};
+    use candid::Principal;
+    use std::collections::VecDeque;
+    use types::UserId;
+
+    fn uid(byte: u8) -> UserId {
+        UserId::from(Principal::from_slice(&[byte; 29]))
+    }
+
+    /// Mirrors `apply_outcome` queue effects then `successor_timer_delay` (ordering under test).
+    fn delay_after(kind: ScheduleKind, queue_after_pop: &[u8], attempted: u8) -> Option<Option<u64>> {
+        let mut q: VecDeque<u8> = queue_after_pop.iter().copied().collect();
+        if matches!(kind, ScheduleKind::Retry) {
+            q.push_back(attempted);
+        }
+        let next_front = q.front().copied().map(uid);
+        successor_timer_delay(kind, next_front, uid(attempted))
+    }
 
     #[test]
     fn success_always_schedules_immediately() {
@@ -390,5 +418,46 @@ mod scheduler_tests {
     #[test]
     fn retry_backoff_is_thirty_seconds() {
         assert_eq!(FAST_RETRY_INTERVAL_MS, 30_000);
+    }
+
+    #[test]
+    fn success_with_others_waiting_runs_immediately() {
+        assert_eq!(delay_after(ScheduleKind::Success, &[2, 3], 1), Some(None));
+    }
+
+    #[test]
+    fn success_alone_leaves_queue_idle() {
+        assert_eq!(delay_after(ScheduleKind::Success, &[], 1), None);
+    }
+
+    #[test]
+    fn retry_alone_backs_off_after_requeue() {
+        assert_eq!(
+            delay_after(ScheduleKind::Retry, &[], 1),
+            Some(Some(FAST_RETRY_INTERVAL_MS))
+        );
+    }
+
+    #[test]
+    fn retry_with_other_ahead_runs_immediately() {
+        assert_eq!(delay_after(ScheduleKind::Retry, &[2], 1), Some(None));
+    }
+
+    #[test]
+    fn retry_does_not_backoff_when_same_user_is_only_behind_another() {
+        // After push_back(1), front is 2 — must not treat attempted user as front.
+        assert_eq!(delay_after(ScheduleKind::Retry, &[2, 3], 1), Some(None));
+    }
+
+    #[test]
+    fn k_successes_never_accumulate_thirty_second_gaps() {
+        let mut forced_backoff_ms = 0u64;
+        for i in 0..8u8 {
+            let remaining: Vec<u8> = ((i + 1)..8).collect();
+            if let Some(Some(ms)) = delay_after(ScheduleKind::Success, &remaining, i) {
+                forced_backoff_ms = forced_backoff_ms.saturating_add(ms);
+            }
+        }
+        assert_eq!(forced_backoff_ms, 0);
     }
 }
