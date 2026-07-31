@@ -5,6 +5,10 @@ Implementation Plan v4 (ADOPTED) + Finalization Baseline v1. On conflict, Master
 **Base:** fork commit `8c8667ac1`. Everything not listed here stays as committed.
 **Authoritative once committed into this repo** (invariants-in-source rule).
 
+**M1 close-out (2026-07-31, branch `antek`):** Gate 4 rulings from the Completion Handover Pack
+v2.0 are folded below (§5 timing, §12 INDEX attestation, §13 scheduler, §14 portable-package
+schema **proposal**). §14 awaits G/Stef countersignature before M4 implementation.
+
 ---
 
 ## 1. What changes (delta summary)
@@ -145,10 +149,25 @@ pub struct FrozenCvdrPackage {
 | `receipt_committed_at` | same message as tree insert + `certified_data_set` | **window anchor** |
 | `certificate_time` | from captured certificate `/time` | yes |
 
-**Verifier window rule:** `certificate_time ≥ receipt_committed_at` AND
-`certificate_time − receipt_committed_at ≤ allowed_finalization_window` (24 h provisional,
-aligned to retry cap). Tiers: `VerifiedFinal` (in window) / `LateFinalized` (valid, late —
-**never silently promoted**) / `Failed-Stuck` (no cert after cap).
+**Verifier timing rules (G4-R3 — two distinct thresholds; IC certified times only):**
+
+1. **Commitment ordering (hard fail):** commitment certificate `/time` must not predate
+   `receipt_committed_at`.
+2. **Attestation delay (1 hour):** INDEX Module Hash certificate `/time` minus commitment
+   certificate `/time` must be ≥ 0. If the delta is ≤ 1 hour → routine. If the delta is >
+   1 hour but still within the completion window → `DELAY_EXCEEDED` / late downgrade
+   (never a silent pass). Frontend wall clocks are never used.
+3. **Completion expiry (24 hours):** all required finalisation evidence (commitment cert +
+   INDEX Module Hash cert) must be captured within 24 hours of `receipt_committed_at`.
+   Beyond 24 hours the package is expired and not finalisable under that commitment;
+   public HTTP/Candid still reports Pending until a valid late/backstop path stores a
+   package, and serving never emits verifier verdicts.
+
+Commitment-certificate window for store-gate (self-finalise / backstop):
+`certificate_time ≥ receipt_committed_at` AND
+`certificate_time − receipt_committed_at ≤ 24h`. Tiers remain verifier-derived:
+`VerifiedFinal` (in routine windows) / `LateFinalized` (valid but late — **never silently
+promoted**) / failed-stuck (no cert). The index never claims these tiers on public surfaces.
 
 ## 6. Self-finalization loop (per Finalization Baseline v1 / A1 evidence)
 
@@ -400,3 +419,80 @@ fallback); the default path is that the canonical surfaces suffice.
 6. Un-ignore candidates from CD's 11-test inventory mapped to the
    above (exact list proposed by C separately; the 5 banked P2
    `receipts_tests` stay banked).
+
+## 12. Code identity — INDEX Module Hash (G4-R1)
+
+**Ruling:** V1 attestation target is **INDEX only**. The earlier BOTH design (pre-uninstall
+target-user `read_state` certificate) is **superseded** and must not be implemented. Reintroducing
+BOTH or any target-user certificate is a STOP item requiring a new explicit G ruling.
+
+| Role | Rule |
+|---|---|
+| Code-identity target | `local_user_index` only |
+| Required evidence | Separate subnet **system-state** certificate over `/canister/<local_user_index>/module_hash` |
+| Binding | Extracted module hash **MUST equal** the `h_index` witness material already bound in `RECEIPT_BODY_V1` (via draft-captured `executor_module_hash`) |
+| Not archival | `canister_status.module_hash` alone is **not** the archival certificate |
+| Target user canister | Passive: uninstalled; `h_user_pre` remains an **index-recorded** management-canister observation and must be RTS-qualified as such — no archived target certificate in V1 |
+| RECEIPT_BODY_V1 | **Unchanged** — no value from the INDEX Module Hash certificate enters the receipt-body preimage |
+
+Capture ordering (with §5): INDEX Module Hash certificate time must not predate the commitment
+certificate time; apply the 1h delay and 24h completion rules above.
+
+## 13. Deletion-job scheduler (G4-R2)
+
+After each deletion-job attempt:
+
+- **Success** (`AwaitingCertificate`): if the queue still has work, schedule **one successor
+  immediately** (zero delay). Do not use the 30-second interval on the success path.
+- **Retry/failure**: re-queue the user; apply **30 seconds** backoff only when that same user
+  is next at the front of the queue. If another user is waiting ahead, drive them immediately.
+- One-successor scheduling only — no recursive queue drain and no busy loop.
+- Regression: K successful queued deletions must not take approximately `(K−1) × 30s`.
+
+## 14. Portable package schema — INDEX Module Hash field (**PROPOSED — countersign before M4**)
+
+**Constraint:** preserve existing `FrozenCvdrPackage` / FrozenWire **six-field** bytes and
+byte-equality gates (§4, §11.3). Do not mutate `RECEIPT_BODY_V1`.
+
+**Proposal (smallest additive, versioned):**
+
+1. **Stable storage of the frozen commitment package** remains exactly §4 (`FrozenCvdrPackage`
+   fields 1–6). No seventh field inside that struct.
+2. **New parallel durable evidence** (new MemoryId(s), insert-only, keyed by `receipt_id`):
+   - `index_module_hash_certificate_bytes: Vec<u8>` — subnet system-state certificate CBOR
+   - `index_module_hash_certificate_time: u64` — nanoseconds from that certificate `/time`
+3. **Portable serving / download schema** becomes versioned:
+
+```text
+schema  = "openchatzd.cvdr.package"
+version = 2
+frozen  = FrozenWire          // canonical serialization identical to today’s Available body
+index_module_hash_certificate_hex = lowercase hex of index_module_hash_certificate_bytes
+index_module_hash_certificate_time_ns = u64
+```
+
+4. **HTTP/Candid Available** serves the version-2 portable object. Verifiers that only
+   understand FrozenWire may still hash/verify the nested `frozen` object in isolation.
+5. **CVDR-Verify v0.6.1+** gains an OpenChatZD INDEX Module Hash check: verify BLS /
+   delegation / canister-range / path `/canister/<index>/module_hash` / value equals
+   `h_index` binding / timing rules — without weakening offline authority for the frozen part.
+
+**Status:** PROPOSED by Antoine (M1). **Do not implement M4 until G/Stef countersign this §14
+placement (or return a revised placement).** Decision-request:
+`documents/openChat/OpenChatZD_M1_Decision_Request_Index_Module_Hash.md`.
+
+## 15. HTTP Pending status (G4-R4)
+
+Prefer HTTP `202` for Pending (§11.2). Before treating gateway behaviour as blocking,
+probe raw-domain end-to-end deliverability of `202`. Only if `202` cannot be preserved
+end-to-end may a countersigned erratum adopt `200` + the same machine-distinguishable
+pending body (no package fields). Until that erratum exists, implementors target `202`.
+
+## 16. Terminology and identity notes (G4-R7 / G4-R8)
+
+- Wording: “versioned fixed-width tag-concatenation” (not CBOR) for `RECEIPT_BODY_V1`.
+- Memory slots remain as §4 (ids 8–11 for frozen packages); INDEX Module Hash evidence uses
+  **new** MemoryIds when §14 is countersigned — document beside `memory.rs` at implementation.
+- `record_id_for(user_id)` remains caller-independent; direct and mediated callers must produce
+  identical bytes (A4 closed — preserve and regression-test).
+- Public surfaces must not claim `VerifiedFinal` / `LateFinalized`; those are verifier results.
