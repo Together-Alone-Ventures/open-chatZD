@@ -121,7 +121,7 @@ async fn attempt_finalize(draft: CvdrDraft) {
         None => fetch_live(self_id, &draft.receipt_id, RETRY_RESPONSE_BYTES).await,
     };
     let Some((certificate, witness)) = parsed else {
-        trace!(receipt = %hex::encode(draft.receipt_id), "cvdr self-fetch miss; will retry");
+        trace!(receipt_prefix = %cvdr::receipt_id_prefix(&draft.receipt_id), "cvdr self-fetch miss; will retry");
         return;
     };
 
@@ -168,11 +168,11 @@ async fn attempt_finalize(draft: CvdrDraft) {
                         captured.stage = DraftStage::CertificateCaptured;
                         captured.scrub_sensitive();
                         state.data.cvdr.upsert_draft(captured);
-                        trace!(receipt = %hex::encode(d.receipt_id), "cvdr certificate captured + stored");
+                        trace!(receipt_prefix = %cvdr::receipt_id_prefix(&d.receipt_id), "cvdr certificate captured + stored");
                         crate::jobs::self_capture_index_evidence::start_if_required(state);
                     }
                     Err(FrozenInsertError::LogFull) => {
-                        warn!(event = "cvdr_frozen_log_full", receipt = %hex::encode(d.receipt_id), "frozen-package log full");
+                        warn!(event = "cvdr_frozen_log_full", receipt_prefix = %cvdr::receipt_id_prefix(&d.receipt_id), "frozen-package log full");
                     }
                 }
             }
@@ -183,7 +183,7 @@ async fn attempt_finalize(draft: CvdrDraft) {
                 // backstop can still land it. In practice this is rare: the give-up cap == the
                 // window, so a self-loop attempt is normally in-window or already stuck.
                 trace!(
-                    receipt = %hex::encode(d.receipt_id),
+                    receipt_prefix = %cvdr::receipt_id_prefix(&d.receipt_id),
                     cert_time_ns,
                     committed_at = d.receipt_committed_at,
                     "self-finalization certificate is late (outside the window); not stored by the self-loop (backstop handles as LateFinalized)"
@@ -197,7 +197,7 @@ async fn attempt_finalize(draft: CvdrDraft) {
                 // change on failure"; it is the retry mechanism. The next sweep retries with backoff.
                 warn!(
                     event = "cvdr_finalize_rejected",
-                    receipt = %hex::encode(d.receipt_id),
+                    receipt_prefix = %cvdr::receipt_id_prefix(&d.receipt_id),
                     reason = reason.as_str(),
                     attempt = d.finalize_attempt,
                     "self-finalization package failed the store-gate; discarded (not stored)"

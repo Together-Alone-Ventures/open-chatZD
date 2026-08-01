@@ -83,7 +83,7 @@ fn run_sweep() {
                 });
                 warn!(
                     event = "cvdr_index_evidence_give_up",
-                    receipt = %hex::encode(receipt_id),
+                    receipt_prefix = %cvdr::receipt_id_prefix(&receipt_id),
                     "INDEX evidence not captured within 24h of receipt_committed_at; leaving UNAVAILABLE"
                 );
                 continue;
@@ -125,7 +125,7 @@ async fn attempt_capture(receipt_id: Hash, commitment_certificate_time_ns: u64) 
         None => fetch_module_hash_certificate(self_id, RETRY_RESPONSE_BYTES).await,
     };
     let Some(certificate) = certificate else {
-        trace!(receipt = %hex::encode(receipt_id), "INDEX read_state miss; will retry");
+        trace!(receipt_prefix = %cvdr::receipt_id_prefix(&receipt_id), "INDEX read_state miss; will retry");
         return;
     };
 
@@ -156,21 +156,21 @@ async fn attempt_capture(receipt_id: Hash, commitment_certificate_time_ns: u64) 
                         ATTEMPTS.with(|m| {
                             m.borrow_mut().remove(&receipt_id);
                         });
-                        trace!(receipt = %hex::encode(receipt_id), "INDEX module hash evidence stored");
+                        trace!(receipt_prefix = %cvdr::receipt_id_prefix(&receipt_id), "INDEX module hash evidence stored");
                     }
                     Err(IndexEvidenceInsertError::EmptyCertificate) => {
-                        warn!(event = "cvdr_index_evidence_empty", receipt = %hex::encode(receipt_id));
+                        warn!(event = "cvdr_index_evidence_empty", receipt_prefix = %cvdr::receipt_id_prefix(&receipt_id));
                     }
                     Err(IndexEvidenceInsertError::FrozenPackageMissing) => {}
                     Err(IndexEvidenceInsertError::LogFull) => {
-                        warn!(event = "cvdr_index_evidence_log_full", receipt = %hex::encode(receipt_id));
+                        warn!(event = "cvdr_index_evidence_log_full", receipt_prefix = %cvdr::receipt_id_prefix(&receipt_id));
                     }
                 }
             }
             Err(reason) => {
                 warn!(
                     event = "cvdr_index_evidence_rejected",
-                    receipt = %hex::encode(receipt_id),
+                    receipt_prefix = %cvdr::receipt_id_prefix(&receipt_id),
                     reason = reason.as_str(),
                     "INDEX evidence failed store-gate; discarded"
                 );

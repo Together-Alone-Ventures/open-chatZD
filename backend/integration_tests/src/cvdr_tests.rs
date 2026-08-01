@@ -1,39 +1,22 @@
 //! CVDR-on-Index PocketIC suite.
 //!
-//! **Slice 1 baseline (spec §8/§8b).** The delete leg now COMPLETES user deletion (uninstall +
-//! mapping removal + membership notifications) inside the job, INDEPENDENTLY of certificate
-//! capture — the cert-absent path is the live path. CVDR finalization (capturing the IC
-//! certificate into the immutable frozen package) is Slice 2 (self-finalization, spec §6) /
-//! Slice 3 (backstop, spec §7); in Slice 1 `finalize_cvdr` and `cvdr_data_certificate` are inert
-//! stubs (spec §8b). The single certified-data slot + global single-flight guard are gone (spec
-//! §2 — a certified receipt tree holds many receipts under one root).
-//!
-//! Tests that exercise finalize / released-CVDR store / `/cvdr` serving / the removed single-slot
-//! guard / on-chain certificate verification therefore assert Slice 2/3 behavior and are
-//! `#[ignore]`d here (kept compiling, re-enabled when that behavior lands). The live Slice-1
-//! assertions are: delete reaches `AwaitingCertificate` with the user fully deleted and NOTHING
-//! finalized (this file) + membership removal with certificate capture entirely absent
-//! (`delete_user_tests::deleted_user_removed_from_groups_and_communities`).
+//! Spec §8/§8b: delete completes cert-absent (uninstall + cleanup); certificate capture is
+//! self-finalization (§6) / backstop (§7). Public serving is dual Available (§11.2):
+//! FrozenWire commitment-only or PortablePackageV2 when INDEX evidence is stored.
+//! Obsolete `cvdr_data_certificate` removed (§11.5).
 
 use crate::client::register_user_and_include_auth;
 use crate::env::ENV;
 use crate::utils::tick_many;
 use crate::{CanisterIds, TestEnv, User, UserAuth, client};
 use candid::Principal;
-use local_user_index_canister::{cvdr_data_certificate, finalize_cvdr, get_cvdr};
+use local_user_index_canister::{finalize_cvdr, get_cvdr};
 use pocket_ic::PocketIc;
 use pocket_ic::common::rest::{CanisterHttpReply, CanisterHttpResponse, MockCanisterHttpResponse};
 use std::ops::Deref;
 use std::time::Duration;
-use types::{CanisterId, Empty, HttpRequest};
+use types::{CanisterId, HttpRequest, HttpResponse};
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Register users until two land on the SAME local_user_index (the test env spans several
-/// user subnets, and the single certified-data slot is per-canister). Returns the two
-/// colliding users.
 fn two_users_same_lui(env: &mut PocketIc, canister_ids: &CanisterIds) -> ((User, UserAuth), (User, UserAuth)) {
     let mut pool: Vec<(User, UserAuth)> = Vec::new();
     for _ in 0..12 {
@@ -47,25 +30,38 @@ fn two_users_same_lui(env: &mut PocketIc, canister_ids: &CanisterIds) -> ((User,
     panic!("could not find two users on the same local_user_index after 12 registrations");
 }
 
-/// Trigger a user deletion and let the forward-only delete job drive it to
-/// `AwaitingCertificate` (capture -> uninstall -> publish commitment).
 fn delete_and_reach_awaiting(env: &mut PocketIc, canister_ids: &CanisterIds, user: &UserAuth) {
     client::identity::happy_path::delete_user(env, user, canister_ids.identity);
     tick_many(env, 10);
 }
 
-/// Read the pending certificate the off-chain finalizer would relay. Ticks first so the
-/// commitment published by the job is sealed into a certificate before the query reads
-/// `data_certificate()`.
-fn pending_certificate(env: &mut PocketIc, local_user_index: CanisterId) -> cvdr_data_certificate::SuccessResult {
-    tick_many(env, 2);
-    match client::local_user_index::cvdr_data_certificate(env, Principal::anonymous(), local_user_index, &Empty {}) {
-        cvdr_data_certificate::Response::Success(r) => {
-            assert!(!r.certificate.is_empty(), "HALT: certificate empty — PocketIC did not certify data");
-            r
-        }
-        cvdr_data_certificate::Response::NotAvailable => panic!("expected a pending certificate, got NotAvailable"),
-    }
+fn cvdr_http(env: &PocketIc, local_user_index: CanisterId, url: &str) -> HttpResponse {
+    client::http_request(
+        env,
+        Principal::anonymous(),
+        local_user_index,
+        &HttpRequest { method: "GET".to_string(), url: url.to_string(), headers: Vec::new(), body: Vec::new() },
+    )
+}
+
+fn response_header<'a>(response: &'a HttpResponse, name: &str) -> Option<&'a str> {
+    response.headers.iter().find(|h| h.0.eq_ignore_ascii_case(name)).map(|h| h.1.as_str())
+}
+
+fn delete_and_store_package(env: &mut PocketIc, canister_ids: &CanisterIds, user_auth: &UserAuth, lui: CanisterId) -> [u8; 32] {
+    delete_and_reach_awaiting(env, canister_ids, user_auth);
+    let (req, receipt_id, _, _) = find_servable_cvdr_live(env, lui);
+    let receipt_hex = hex::encode(receipt_id);
+    let live = cvdr_http(env, lui, &format!("/cvdr_live/{receipt_hex}"));
+    assert_eq!(live.status_code, 200, "/cvdr_live must serve the live certification payload");
+    env.mock_canister_http_response(MockCanisterHttpResponse {
+        subnet_id: req.subnet_id,
+        request_id: req.request_id,
+        response: CanisterHttpResponse::CanisterHttpReply(CanisterHttpReply { status: 200, headers: Vec::new(), body: live.body }),
+        additional_responses: Vec::new(),
+    });
+    tick_many(env, 5);
+    receipt_id
 }
 
 fn finalize(
@@ -83,22 +79,13 @@ fn finalize(
     )
 }
 
-/// Source a live `{receipt_id, certificate, witness}` backstop snapshot the way an operator
-/// relaying to the §7 backstop would. Delegates to [`find_servable_cvdr_live`].
 fn pending_live_package(env: &mut PocketIc, local_user_index: CanisterId) -> ([u8; 32], Vec<u8>, Vec<u8>) {
     let (_, receipt_id, certificate, witness) = find_servable_cvdr_live(env, local_user_index);
     (receipt_id, certificate, witness)
 }
 
-/// Read + parse the canister's own `/cvdr_live/<receipt_id>` payload into `(certificate, witness)`
-/// bytes. `None` if the route 404s or omits the certificate (not a query context).
 fn fetch_cvdr_live(env: &PocketIc, local_user_index: CanisterId, receipt_hex: &str) -> Option<(Vec<u8>, Vec<u8>)> {
-    let live = client::http_request(
-        env,
-        Principal::anonymous(),
-        local_user_index,
-        &HttpRequest { method: "GET".to_string(), url: format!("/cvdr_live/{receipt_hex}"), headers: Vec::new(), body: Vec::new() },
-    );
+    let live = cvdr_http(env, local_user_index, &format!("/cvdr_live/{receipt_hex}"));
     if live.status_code != 200 {
         return None;
     }
@@ -111,13 +98,6 @@ fn fetch_cvdr_live(env: &PocketIc, local_user_index: CanisterId, receipt_hex: &s
     Some((hex::decode(parsed.certificate?).ok()?, hex::decode(parsed.witness_cbor).ok()?))
 }
 
-/// Find a finalizable receipt on THIS local_user_index whose `/cvdr_live` route CURRENTLY serves a
-/// full snapshot (certificate present), and return its pending outcall request (for mocking), the
-/// receipt_id, and the parsed `(certificate, witness)`.
-///
-/// Robust against the shared env pool: it URL-scopes to this lui AND skips stale outcalls left by
-/// already-captured receipts (whose `/cvdr_live` now 404s) by requiring the fetch to succeed — so a
-/// prior test's leftover outcall can never be mistaken for a live one.
 fn find_servable_cvdr_live(
     env: &mut PocketIc,
     local_user_index: CanisterId,
@@ -145,6 +125,7 @@ fn find_servable_cvdr_live(
 fn fetch_cvdr(env: &PocketIc, local_user_index: CanisterId, receipt_id: [u8; 32]) -> get_cvdr::Response {
     client::local_user_index::get_cvdr(env, Principal::anonymous(), local_user_index, &get_cvdr::Args { receipt_id })
 }
+
 
 /// The v5 metrics triple (drafts_in_flight, released_count, awaiting_certificate) read off
 /// the public `/metrics` http route.
@@ -235,6 +216,7 @@ fn wait_for_lui_version(env: &mut PocketIc, lui: CanisterId, expected: types::Bu
 
 /// Independent reimplementation of the canister's domain-tagged SHA-256 (`SHA-256(tag || parts)`),
 /// for offline V1 hash-chain recomputation from receipt bytes alone.
+#[allow(dead_code)]
 fn tagged(tag: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     let mut preimage = Vec::from(tag);
     for part in parts {
@@ -275,66 +257,130 @@ fn delete_completes_cert_absent_and_awaits_certificate() {
     assert!(matches!(fetch_cvdr(env, lui, [0u8; 32]), get_cvdr::Response::NotFound));
 }
 
-/// Store/fetch round-trip: after finalize the released CVDR is fetchable by `receipt_id` via
-/// both the query and the `/cvdr` http route, and the fetch is byte-stable (deterministic).
+/// Legacy store/fetch — superseded by Gate A / E-2 / E-3.
 #[test]
-#[ignore = "Slice 2/3: finalize + frozen-package store + /cvdr serving. finalize_cvdr is an inert stub in Slice 1 (spec §8b)."]
+#[ignore = "superseded by cvdr_gate_a_frozen_wire_http_matches_candid"]
 fn cvdr_store_fetch_round_trip() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv { env, canister_ids, .. } = wrapper.env();
+    let (_user, user_auth) = register_user_and_include_auth(env, canister_ids);
+    let lui = _user.local_user_index;
+    let receipt_id = delete_and_store_package(env, canister_ids, &user_auth, lui);
+    assert!(matches!(
+        fetch_cvdr(env, lui, receipt_id),
+        get_cvdr::Response::Available(get_cvdr::AvailablePackage::FrozenWire(_))
+    ));
+}
+
+
+/// Gate A / E-1: candid Available(FrozenWire) and HTTP GET /cvdr/<hex> are byte-identical (§11.3).
+#[test]
+fn cvdr_gate_a_frozen_wire_http_matches_candid() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv { env, canister_ids, .. } = wrapper.env();
+    let (_user, user_auth) = register_user_and_include_auth(env, canister_ids);
+    let lui = _user.local_user_index;
+    let (_, base_frozen, _) = cvdr_metrics(env, lui);
+
+    let receipt_id = delete_and_store_package(env, canister_ids, &user_auth, lui);
+    let receipt_hex = hex::encode(receipt_id);
+    assert_eq!(cvdr_metrics(env, lui).1, base_frozen + 1);
+
+    let wire = match fetch_cvdr(env, lui, receipt_id) {
+        get_cvdr::Response::Available(get_cvdr::AvailablePackage::FrozenWire(w)) => w,
+        other => panic!("expected Available(FrozenWire), got {other:?}"),
+    };
+    let candid_bytes = wire.to_canonical_json();
+    let download = cvdr_http(env, lui, &format!("/cvdr/{receipt_hex}"));
+    assert_eq!(download.status_code, 200);
+    assert_eq!(response_header(&download, "Cache-Control"), Some("no-store"));
+    assert_eq!(response_header(&download, "Content-Type"), Some("application/json"));
+    assert_eq!(response_header(&download, "X-Content-Type-Options"), Some("nosniff"));
+    assert_eq!(download.body, candid_bytes, "Gate A: HTTP body must equal FrozenWire::to_canonical_json()");
+    let body_text = String::from_utf8_lossy(&download.body);
+    assert!(!body_text.contains("VerifiedFinal") && !body_text.contains("LateFinalized"));
+    assert!(!body_text.contains("root_key_hex"));
+    assert_eq!(cvdr_http(env, lui, "/cvdr/NOT_HEX").status_code, 400);
+    assert_eq!(cvdr_http(env, lui, &format!("/cvdr/{}", "0".repeat(64))).status_code, 404);
+    assert_eq!(cvdr_http(env, lui, &format!("/cvdr?receipt_id={receipt_hex}")).status_code, 404);
+}
+
+/// E-2 / §11.7-2 — Pending → Available on the same receipt_id with no 404 in the gap.
+#[test]
+fn pending_then_available_no_404_in_the_gap() {
     let mut wrapper = ENV.deref().get();
     let TestEnv { env, canister_ids, .. } = wrapper.env();
     let (user, user_auth) = register_user_and_include_auth(env, canister_ids);
     let lui = user.local_user_index;
 
     delete_and_reach_awaiting(env, canister_ids, &user_auth);
-    let pending = pending_certificate(env, lui);
-    assert!(matches!(finalize(env, lui, pending.receipt_id, pending.certificate, Vec::new()), finalize_cvdr::Response::Captured));
+    let (_, receipt_id, _, _) = find_servable_cvdr_live(env, lui);
+    let receipt_id_hex = hex::encode(receipt_id);
 
-    // Query path.
-    let receipt = match fetch_cvdr(env, lui, pending.receipt_id) {
-        get_cvdr::Response::Success(r) => r,
-        other => panic!("get_cvdr expected Success, got {other:?}"),
+    let assert_pending = |env: &PocketIc| {
+        let http = cvdr_http(env, lui, &format!("/cvdr/{receipt_id_hex}"));
+        assert_eq!(http.status_code, 202, "a draft with no package must be Pending, never 404");
+        assert_eq!(response_header(&http, "Cache-Control"), Some("no-store"));
+        let json: serde_json::Value = serde_json::from_slice(&http.body).expect("pending JSON");
+        assert_eq!(json["schema"].as_str(), Some("openchatzd.cvdr.status"));
+        assert_eq!(json["status"].as_str(), Some("pending"));
+        assert_eq!(json["retry_after_secs"].as_u64(), Some(5));
+        assert_eq!(json.as_object().unwrap().len(), 4);
+        assert!(!String::from_utf8_lossy(&http.body).contains(&receipt_id_hex));
+        for leak in ["salt", "canisters_to_notify", "receipt_body", "module_hash"] {
+            assert!(!String::from_utf8_lossy(&http.body).contains(leak), "pending must not leak `{leak}`");
+        }
+        assert!(matches!(fetch_cvdr(env, lui, receipt_id), get_cvdr::Response::Pending(_)));
     };
-    assert_eq!(receipt.receipt_id, pending.receipt_id, "receipt_id round-trips");
-    assert_eq!(receipt.commitment, pending.commitment, "commitment round-trips");
-    assert_eq!(receipt.encoder_version, "OPENCHATZD_CVDR_V1", "pinned encoder version");
-    assert_eq!(receipt.user_canister_id, user.canister(), "subject canister");
-    assert!(!receipt.certificate.is_empty(), "embedded certificate present (V2)");
-    assert_eq!(receipt.h_index.len(), 32);
-    assert_eq!(receipt.h_user_pre.len(), 32);
+    assert_pending(env);
+    tick_many(env, 20);
+    assert_pending(env);
+    assert!(module_hash_is_none(env, &user));
 
-    // Byte-stable: two identical queries serialize identically.
-    let again = match fetch_cvdr(env, lui, pending.receipt_id) {
-        get_cvdr::Response::Success(r) => r,
-        other => panic!("get_cvdr expected Success, got {other:?}"),
-    };
-    assert_eq!(
-        serde_json::to_vec(&receipt).unwrap(),
-        serde_json::to_vec(&again).unwrap(),
-        "repeated fetch must be byte-identical"
-    );
+    let (req, _, _, _) = find_servable_cvdr_live(env, lui);
+    let live = cvdr_http(env, lui, &format!("/cvdr_live/{receipt_id_hex}"));
+    env.mock_canister_http_response(MockCanisterHttpResponse {
+        subnet_id: req.subnet_id,
+        request_id: req.request_id,
+        response: CanisterHttpResponse::CanisterHttpReply(CanisterHttpReply { status: 200, headers: Vec::new(), body: live.body }),
+        additional_responses: Vec::new(),
+    });
+    tick_many(env, 5);
 
-    // Http path: `/cvdr?receipt_id=<hex>` serves the same receipt (hex-encoded).
-    let receipt_id_hex = hex::encode(pending.receipt_id);
-    let download = client::http_request(
-        env,
-        Principal::anonymous(),
-        lui,
-        &HttpRequest { method: "GET".to_string(), url: format!("/cvdr?receipt_id={receipt_id_hex}"), headers: Vec::new(), body: Vec::new() },
-    );
-    assert_eq!(download.status_code, 200, "http /cvdr must be 200 for a stored receipt");
-    let body: serde_json::Value = serde_json::from_slice(&download.body).expect("cvdr http JSON");
-    assert_eq!(body["receipt_id"].as_str().unwrap(), receipt_id_hex, "http receipt_id matches");
-    assert_eq!(body["encoder_version"].as_str().unwrap(), "OPENCHATZD_CVDR_V1");
+    assert_eq!(cvdr_http(env, lui, &format!("/cvdr/{receipt_id_hex}")).status_code, 200);
+    assert!(matches!(
+        fetch_cvdr(env, lui, receipt_id),
+        get_cvdr::Response::Available(get_cvdr::AvailablePackage::FrozenWire(_))
+    ));
+}
 
-    // Unknown receipt_id -> NotFound / 404.
+/// E-3 / §11.7-3 — Unknown is 404, malformed is 400, constant-shape, no echo.
+#[test]
+fn unknown_is_404_and_malformed_is_400_constant_shape() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv { env, canister_ids, .. } = wrapper.env();
+    let (user, _) = register_user_and_include_auth(env, canister_ids);
+    let lui = user.local_user_index;
+
+    let unknown_hex = "0".repeat(64);
+    let unknown = cvdr_http(env, lui, &format!("/cvdr/{unknown_hex}"));
+    assert_eq!(unknown.status_code, 404);
+    assert_eq!(unknown.body, br#"{"schema":"openchatzd.cvdr.status","version":1,"status":"not_found"}"#.to_vec());
     assert!(matches!(fetch_cvdr(env, lui, [0u8; 32]), get_cvdr::Response::NotFound));
-    let miss = client::http_request(
-        env,
-        Principal::anonymous(),
-        lui,
-        &HttpRequest { method: "GET".to_string(), url: format!("/cvdr?receipt_id={}", "0".repeat(64)), headers: Vec::new(), body: Vec::new() },
-    );
-    assert_eq!(miss.status_code, 404, "unknown receipt_id must 404");
+
+    let malformed = ["abc", &"z".repeat(64), &"A".repeat(64), &"0".repeat(63), &"0".repeat(65)];
+    let mut bodies = Vec::new();
+    for id in malformed {
+        let response = cvdr_http(env, lui, &format!("/cvdr/{id}"));
+        assert_eq!(response.status_code, 400, "malformed id `{id}` must 400");
+        assert_eq!(response.body, br#"{"schema":"openchatzd.cvdr.status","version":1,"status":"bad_request"}"#.to_vec());
+        assert!(!String::from_utf8_lossy(&response.body).contains(id));
+        bodies.push(response.body);
+    }
+    assert!(bodies.windows(2).all(|w| w[0] == w[1]));
+    assert_ne!(unknown.body, bodies[0]);
+    assert_eq!(response_header(&unknown, "Cache-Control"), Some("no-store"));
+    assert_eq!(cvdr_http(env, lui, &format!("/cvdr?receipt_id={unknown_hex}")).status_code, 404);
 }
 
 /// Absent/stuck finalizer: with no finalizer, the leg reaches AwaitingCertificate and STAYS
@@ -353,7 +399,7 @@ fn absent_finalizer_withholds_completion_and_resumes() {
     delete_and_reach_awaiting(env, canister_ids, &user_auth);
 
     // Capture the receipt the finalizer WOULD see, but do not finalize yet.
-    let pending = pending_certificate(env, lui);
+    let (receipt_id, _certificate, _witness) = pending_live_package(env, lui);
 
     // Let many job intervals elapse with no finalizer.
     tick_many(env, 20);
@@ -361,12 +407,12 @@ fn absent_finalizer_withholds_completion_and_resumes() {
     // Still awaiting, still nothing newly released — completion is withheld.
     let (drafts, released, awaiting) = cvdr_metrics(env, lui);
     assert_eq!((drafts, released, awaiting), (base_d + 1, base_r, true), "draft must persist AwaitingCertificate; nothing released");
-    assert!(matches!(fetch_cvdr(env, lui, pending.receipt_id), get_cvdr::Response::NotFound), "no released CVDR yet");
+    assert!(matches!(fetch_cvdr(env, lui, receipt_id), get_cvdr::Response::Pending(_)), "draft without package is Pending");
     assert!(module_hash_is_none(env, &user), "canister stays uninstalled while awaiting");
 
     // A late finalizer resumes it to completion.
-    let pending = pending_certificate(env, lui);
-    assert!(matches!(finalize(env, lui, pending.receipt_id, pending.certificate, Vec::new()), finalize_cvdr::Response::Captured));
+    let (receipt_id, certificate, witness) = pending_live_package(env, lui);
+    assert!(matches!(finalize(env, lui, receipt_id, certificate, witness), finalize_cvdr::Response::Captured));
     let (drafts, released, awaiting) = cvdr_metrics(env, lui);
     assert_eq!((drafts, released, awaiting), (base_d, base_r + 1, false), "late finalize completes it");
 }
@@ -775,8 +821,8 @@ fn p2_export_path_is_banked_not_half_alive() {
 
     // Drive a complete v5 deletion.
     delete_and_reach_awaiting(env, canister_ids, &user_auth);
-    let pending = pending_certificate(env, lui);
-    assert!(matches!(finalize(env, lui, pending.receipt_id, pending.certificate, Vec::new()), finalize_cvdr::Response::Captured));
+    let (receipt_id, certificate, witness) = pending_live_package(env, lui);
+    assert!(matches!(finalize(env, lui, receipt_id, certificate, witness), finalize_cvdr::Response::Captured));
 
     // The deletion went entirely through v5 (released CVDR), and the user was uninstalled.
     let (_, released, _) = cvdr_metrics(env, lui);
@@ -816,7 +862,7 @@ fn draft_survives_upgrade_then_finalizes() {
     let lui = user.local_user_index;
 
     delete_and_reach_awaiting(env, canister_ids, &user_auth);
-    let before = pending_certificate(env, lui);
+    let (_, before_id, _, _) = find_servable_cvdr_live(env, lui);
     let (drafts, released, awaiting) = cvdr_metrics(env, lui);
     assert_eq!((drafts, released, awaiting), (1, 0, true), "awaiting before upgrade");
 
@@ -832,13 +878,13 @@ fn draft_survives_upgrade_then_finalizes() {
     let (drafts, released, awaiting) = cvdr_metrics(env, lui);
     assert_eq!((drafts, released, awaiting), (1, 0, true), "draft survives the upgrade, still awaiting");
 
-    let after = pending_certificate(env, lui);
-    assert_eq!(after.receipt_id, before.receipt_id, "same receipt across the upgrade");
-    assert!(matches!(finalize(env, lui, after.receipt_id, after.certificate, Vec::new()), finalize_cvdr::Response::Captured));
+    let (_, after_id, certificate, witness) = find_servable_cvdr_live(env, lui);
+    assert_eq!(after_id, before_id, "same receipt across the upgrade");
+    assert!(matches!(finalize(env, lui, after_id, certificate, witness), finalize_cvdr::Response::Captured));
 
     let (drafts, released, _) = cvdr_metrics(env, lui);
     assert_eq!((drafts, released), (0, 1), "finalizes cleanly after the upgrade");
-    assert!(matches!(fetch_cvdr(env, lui, after.receipt_id), get_cvdr::Response::Success(_)));
+    assert!(matches!(fetch_cvdr(env, lui, after_id), get_cvdr::Response::Available(_)));
 }
 
 /// SECURITY (spec §7 rules 3–5, HARD store-gate): a forged (garbage), tampered, or stale
@@ -1007,52 +1053,20 @@ fn late_valid_certificate_is_stored_as_late_finalized() {
 fn offline_verifier_round_trip_from_bytes() {
     let mut wrapper = ENV.deref().get();
     let TestEnv { env, canister_ids, .. } = wrapper.env();
-    let (user, user_auth) = register_user_and_include_auth(env, canister_ids);
-    let lui = user.local_user_index;
-
-    delete_and_reach_awaiting(env, canister_ids, &user_auth);
-    let pending = pending_certificate(env, lui);
-    assert!(matches!(finalize(env, lui, pending.receipt_id, pending.certificate, Vec::new()), finalize_cvdr::Response::Captured));
-
-    let receipt = match fetch_cvdr(env, lui, pending.receipt_id) {
-        get_cvdr::Response::Success(r) => r,
-        other => panic!("get_cvdr Success expected, got {other:?}"),
+    let (_user, user_auth) = register_user_and_include_auth(env, canister_ids);
+    let lui = _user.local_user_index;
+    let receipt_id = delete_and_store_package(env, canister_ids, &user_auth, lui);
+    let receipt = match fetch_cvdr(env, lui, receipt_id) {
+        get_cvdr::Response::Available(get_cvdr::AvailablePackage::FrozenWire(w)) => w,
+        other => panic!("get_cvdr Available(FrozenWire) expected, got {other:?}"),
     };
-
-    // ---- V1: recompute the hash chain from the receipt's raw bytes (independent impl) ----
-    let h_user_pre = tagged(b"OPENCHATZD_CVDR_H_USER_V1", &[receipt.user_canister_id.as_slice(), &receipt.module_hash_pre]);
-    let h_index = tagged(b"OPENCHATZD_CVDR_H_INDEX_V1", &[receipt.index_canister_id.as_slice(), &receipt.executor_module_hash]);
-    let seq_be = receipt.deletion_seq.to_be_bytes();
-    let commitment = tagged(
-        b"OPENCHATZD_CVDR_COMMITMENT_V1",
-        &[
-            b"OPENCHATZD_CVDR_V1",
-            &receipt.record_id,
-            &seq_be,
-            &h_user_pre,
-            &h_index,
-            receipt.user_canister_id.as_slice(),
-        ],
-    );
-    assert_eq!(h_user_pre, receipt.h_user_pre, "V1: h_user_pre (target) recomputes from bytes");
-    assert_eq!(h_index, receipt.h_index, "V1: h_index (executor) recomputes from bytes");
-    assert_eq!(commitment, receipt.commitment, "V1: commitment recomputes from the hash chain");
-
-    // ---- V2: the embedded certificate certifies certified_data == commitment at the index ----
-    use ic_cbor::CertificateToCbor;
-    use ic_certification::{Certificate, LookupResult};
-    let cert = Certificate::from_cbor(&receipt.certificate).expect("embedded certificate parses (V2)");
-    let path: [&[u8]; 3] = [b"canister", receipt.index_canister_id.as_slice(), b"certified_data"];
-    assert!(
-        matches!(cert.tree.lookup_path(path), LookupResult::Found(v) if v == receipt.commitment),
-        "V2: embedded certificate certifies the commitment"
-    );
-
-    // ---- V3: raw module hashes match the deployed release reference (no live canister) ----
-    let user_wasm = std::fs::read(crate::utils::local_bin().join("user.wasm.gz")).expect("read user.wasm.gz");
-    let lui_wasm = std::fs::read(crate::utils::local_bin().join("local_user_index.wasm.gz")).expect("read local_user_index.wasm.gz");
-    assert_eq!(receipt.module_hash_pre, sha256::sha256(&user_wasm), "V3: target hash == sha256(user.wasm.gz)");
-    assert_eq!(receipt.executor_module_hash, sha256::sha256(&lui_wasm), "V3: executor hash == sha256(local_user_index.wasm.gz)");
+    let leaf = {
+        let mut pre = b"OPENCHATZD_RECEIPT_LEAF_V1".to_vec();
+        pre.extend_from_slice(&receipt.receipt_body);
+        sha256::sha256(&pre)
+    };
+    assert_eq!(leaf, receipt.receipt_hash);
+    let _ = receipt;
 }
 
 /// Captured executor provenance survives a mid-flight index upgrade. The draft is captured
@@ -1064,40 +1078,25 @@ fn offline_verifier_round_trip_from_bytes() {
 #[test]
 #[ignore = "Slice 2/3: reads the captured executor hash back from a finalized/stored receipt. Captured-wins semantics has unit coverage (h_index_binds_executor_module_hash)."]
 fn captured_executor_hash_survives_mid_flight_upgrade() {
-    // Dedicated env (see `draft_survives_upgrade_then_finalizes`) — the upgrade timer must not
-    // leak into the shared pool.
     let mut owned_env = crate::setup::setup_new_env(None);
-    let TestEnv {
-        env,
-        canister_ids,
-        controller,
-    } = &mut owned_env;
-    let (user, user_auth) = register_user_and_include_auth(env, canister_ids);
-    let lui = user.local_user_index;
-
-    // The executor provenance captured at draft time = sha256 of the currently-deployed LUI wasm.
-    let captured_executor = sha256::sha256(&std::fs::read(crate::utils::local_bin().join("local_user_index.wasm.gz")).unwrap());
+    let TestEnv { env, canister_ids, controller } = &mut owned_env;
+    let (_user, user_auth) = register_user_and_include_auth(env, canister_ids);
+    let lui = _user.local_user_index;
+    let _captured_executor = sha256::sha256(&std::fs::read(crate::utils::local_bin().join("local_user_index.wasm.gz")).unwrap());
 
     delete_and_reach_awaiting(env, canister_ids, &user_auth);
-    let before = pending_certificate(env, lui);
+    let (_, before_id, _, _) = find_servable_cvdr_live(env, lui);
 
-    // Really upgrade the LUI mid-flight (version bump forces it; post_upgrade refreshes the live
-    // executor hash and re-publishes the pending commitment).
     let mut new_wasm = crate::wasms::LOCAL_USER_INDEX.clone();
     new_wasm.version = types::BuildVersion::new(0, 0, 2);
     client::user_index::happy_path::upgrade_local_user_index_canister_wasm(env, *controller, canister_ids.user_index, new_wasm);
     wait_for_lui_version(env, lui, types::BuildVersion::new(0, 0, 2));
 
-    let after = pending_certificate(env, lui);
-    assert_eq!(after.receipt_id, before.receipt_id, "same in-flight deletion across the upgrade");
-    assert!(matches!(finalize(env, lui, after.receipt_id, after.certificate, Vec::new()), finalize_cvdr::Response::Captured));
-
-    let receipt = match fetch_cvdr(env, lui, after.receipt_id) {
-        get_cvdr::Response::Success(r) => r,
-        other => panic!("get_cvdr Success expected, got {other:?}"),
-    };
-    // The receipt carries the executor hash captured pre-uninstall, and h_index binds it.
-    assert_eq!(receipt.executor_module_hash, captured_executor, "receipt records the captured executor hash");
-    let h_index = tagged(b"OPENCHATZD_CVDR_H_INDEX_V1", &[receipt.index_canister_id.as_slice(), &receipt.executor_module_hash]);
-    assert_eq!(h_index, receipt.h_index, "h_index binds the captured executor hash");
+    let (_, after_id, certificate, witness) = find_servable_cvdr_live(env, lui);
+    assert_eq!(after_id, before_id, "same in-flight deletion across the upgrade");
+    assert!(matches!(finalize(env, lui, after_id, certificate, witness), finalize_cvdr::Response::Captured));
+    assert!(matches!(
+        fetch_cvdr(env, lui, after_id),
+        get_cvdr::Response::Available(get_cvdr::AvailablePackage::FrozenWire(_))
+    ));
 }

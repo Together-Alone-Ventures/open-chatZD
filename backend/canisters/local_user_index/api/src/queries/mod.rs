@@ -11,7 +11,6 @@ pub mod c2c_lookup_users;
 pub mod c2c_user_principals;
 pub mod c2c_verify_signature;
 pub mod chat_events;
-pub mod cvdr_data_certificate;
 pub mod get_cvdr;
 pub mod group_and_community_summary_updates_v2;
 pub mod latest_notification_index;
