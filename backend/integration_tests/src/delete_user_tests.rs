@@ -21,6 +21,10 @@ fn delete_user_succeeds_if_signed_in_recently(delay: Milliseconds, should_delete
 
     env.advance_time(Duration::from_millis(delay));
 
+    if should_delete_user {
+        client::local_user_index::happy_path::prepare_account_deletion(env, &user);
+    }
+
     let delete_user_response = client::identity::delete_user(
         env,
         user_auth.auth_principal(),
@@ -89,6 +93,7 @@ fn deleted_user_removed_from_groups_and_communities() {
     assert_eq!(group_summary.basic_members, vec![user2.user_id]);
     assert_eq!(community_summary.basic_members, vec![user2.user_id]);
 
+    client::local_user_index::happy_path::prepare_account_deletion(env, &user2);
     client::identity::happy_path::delete_user(env, &user2_auth, canister_ids.identity);
 
     // Spec §8 cleanup split (DoD: cleanup with certificate capture entirely absent). Membership
@@ -124,6 +129,7 @@ fn deleted_user_removed_from_online_users_canister() {
         1
     );
 
+    client::local_user_index::happy_path::prepare_account_deletion(env, &user);
     client::identity::happy_path::delete_user(env, &user_auth, canister_ids.identity);
 
     tick_many(env, 3);
@@ -150,6 +156,7 @@ fn deleted_user_removed_from_storage_index_and_files_deleted() {
         file.blob_id
     ));
 
+    client::local_user_index::happy_path::prepare_account_deletion(env, &user);
     client::identity::happy_path::delete_user(env, &user_auth, canister_ids.identity);
 
     tick_many(env, 3);

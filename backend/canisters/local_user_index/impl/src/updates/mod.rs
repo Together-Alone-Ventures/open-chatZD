@@ -37,6 +37,7 @@ pub mod join_channel;
 pub mod join_community;
 pub mod join_group;
 pub mod pay_for_premium_item;
+pub mod prepare_account_deletion;
 pub mod push_events;
 pub mod register_user;
 pub mod reinstate_missed_daily_claims;

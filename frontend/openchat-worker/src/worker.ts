@@ -1378,6 +1378,9 @@ function getAction(
         case "payForPremiumItem":
             return agent.payForPremiumItem(payload.userId, payload.item);
 
+        case "prepareAccountDeletion":
+            return agent.prepareAccountDeletion(payload.userId);
+
         case "setPremiumItemCost":
             return agent.setPremiumItemCost(payload.item, payload.chitCost);
 

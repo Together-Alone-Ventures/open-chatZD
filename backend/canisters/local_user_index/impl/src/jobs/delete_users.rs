@@ -1,4 +1,4 @@
-//! CVDR-on-Index delete leg (CVDR finalization rework — spec §2/§3/§5/§8).
+//! CVDR-on-Index delete leg (CVDR finalization rework — spec §2/§3/§5/§8/§11.4).
 //!
 //! The local_user_index drives a user deletion through a forward-only, durable,
 //! upgrade-surviving state machine. **OpenChat-native user deletion completes inside THIS job,
@@ -7,42 +7,34 @@
 //! removal + membership-removal notifications) — it is NOT gated on any finalizer. The receipt's
 //! claim is "targets captured; notification attempted or queued" (never "confirmed erased").
 //!
+//! Spec §11.4 sequencing: `prepare_account_deletion` must create a [`DraftStage::Prepared`] draft
+//! (and hand RevealWire to the user) **before** Identity enqueue reaches this job. Cold capture
+//! inside the job is removed — missing prepare → `prepare_required` retry.
+//!
 //! CVDR finalization (capturing the IC certificate into the immutable frozen package) is a
-//! SEPARATE, CVDR-only step that never holds the user deletion half-open. Its store is gated on
-//! FULL on-chain verification BEFORE store (spec §6 hard security rule — full BLS -> NNS + witness
-//! binding; a response failing verification is discarded and retried, never stored, so a single
-//! untrusted node cannot poison the first-wins slot). In Slice 1 the self-finalization loop (spec
-//! §6) and the `finalize_cvdr` backstop (spec §7) are not yet built — `finalize_cvdr` is an inert
-//! compile-safe stub (spec §8b). A published receipt therefore rests at `AwaitingCertificate`
-//! meaning "user fully deleted; only the CVDR certificate is still pending".
+//! SEPARATE, CVDR-only step (self-finalization §6 / backstop §7) that never holds the user
+//! deletion half-open. Its store is gated on FULL on-chain verification BEFORE store.
 //!
 //! Leg order, per in-flight [`CvdrDraft`] `stage`:
-//! 1. `Captured`            capture H_user_pre (`canister_status` module hash) + targets +
-//!                          record_id + `salt` (raw_rand), allocate `deletion_seq` + nonce,
-//!                          persist the draft BEFORE any destructive step.
-//! 2. (Captured -> )        `uninstall_code`, confirm no-module, record `uninstall_completed_at`.
-//! 3. `Uninstalled`         ATOMIC publish (spec §3): insert the receipt leaf into the certified
-//!                          receipt tree + `certified_data_set(root)` + record
-//!                          `receipt_committed_at`, all in one message with no `await` between;
-//!                          then run the cleanup (spec §8); advance to `AwaitingCertificate`.
-//!                          No single-slot guard — the tree holds many receipts under one root.
-//! 4. `AwaitingCertificate` user deletion is DONE. Awaiting only the CVDR certificate, captured
-//!                          by the CVDR-only finalization step (Slice 2).
+//! 1. `Prepared`            (from `prepare_account_deletion`) salt+targets+receipt_id; RevealWire
+//!                          already handed to the user. Not finalizable; not `/cvdr_live`.
+//! 2. (`Prepared` -> )      `uninstall_code`, confirm no-module, record `uninstall_completed_at`.
+//! 3. `Uninstalled`         ATOMIC publish (spec §3) + cleanup (spec §8) → `AwaitingCertificate`.
+//! 4. `AwaitingCertificate` user deletion DONE; CVDR certificate pending.
 //!
 //! Forward-recovery only: every stage is idempotent and resumable from the persisted
 //! draft; nothing rolls back. The durable draft is stable-backed (survives upgrades); the
 //! certified receipt tree is heap-resident and rebuilt in post_upgrade (spec §4).
 
-use crate::model::cvdr::{self, CvdrDraft, DraftStage};
+use crate::model::cvdr::{CvdrDraft, DraftStage};
 use crate::{RuntimeState, UserIndexEvent, UserToDelete, mutate_state, read_state};
 use constants::SECOND_IN_MS;
 use ic_cdk::management_canister::CanisterStatusArgs;
 use ic_cdk_timers::TimerId;
-use rand::RngCore;
 use std::cell::Cell;
 use std::time::Duration;
 use tracing::{trace, warn};
-use types::{CanisterId, Empty, Milliseconds, UserId};
+use types::{CanisterId, Milliseconds, UserId};
 
 thread_local! {
     static TIMER_ID: Cell<Option<TimerId>> = Cell::default();
@@ -171,94 +163,37 @@ pub(crate) fn complete_deletion(state: &mut RuntimeState, user_id: UserId, canis
 async fn process_user_inner(user: &UserToDelete) -> ProcessOutcome {
     let canister_id: CanisterId = user.user_id.into();
 
-    // Forward-only recovery: resume from the durable draft if present, else capture fresh.
+    // Spec §11.4: prepare must have created the draft. No cold capture in the delete job.
     let draft = match read_state(|state| state.data.cvdr.get_draft(&canister_id)) {
         Some(draft) => draft,
-        None => match capture_draft(user, canister_id).await {
-            Ok(draft) => draft,
-            Err(error_class) => return ProcessOutcome::Retry { error_class },
-        },
+        None => return ProcessOutcome::Retry { error_class: "prepare_required" },
     };
 
     advance_draft(draft).await
-}
-
-/// Capture the immutable pre-uninstall witnesses and persist the `Captured` draft BEFORE
-/// any destructive step. All inputs (targets, pre-uninstall module hash) are read while
-/// the user canister is still installed, so recovery never needs to re-read it.
-async fn capture_draft(user: &UserToDelete, canister_id: CanisterId) -> Result<CvdrDraft, &'static str> {
-    // Membership-removal targets — captured before uninstall.
-    let canisters_to_notify = match user_canister_c2c_client::c2c_groups_and_communities(canister_id, &Empty {}).await {
-        Ok(r) => r
-            .groups
-            .into_iter()
-            .map(|g| g.into())
-            .chain(r.communities.into_iter().map(|c| c.into()))
-            .collect::<Vec<CanisterId>>(),
-        Err(_) => return Err("groups_and_communities_unavailable"),
-    };
-
-    // H_user_pre input: the pre-uninstall module hash (the code being destroyed).
-    let module_hash_pre = match ic_cdk::management_canister::canister_status(&CanisterStatusArgs { canister_id }).await {
-        Ok(status) => status.module_hash.unwrap_or_default(),
-        Err(_) => return Err("canister_status_unavailable"),
-    };
-
-    let record_id = cvdr::record_id_for(user.user_id);
-    // Capture the executor (this index) provenance from durable deploy-supplied state at the
-    // SAME pre-uninstall point as the target's module_hash_pre. This captured value is
-    // authoritative for H_index; a mid-flight index upgrade cannot change it.
-    let (deletion_seq, nonce, now, index_canister_id, executor_module_hash) = mutate_state(|state| {
-        let seq = state.data.cvdr_next_deletion_seq;
-        state.data.cvdr_next_deletion_seq = seq.saturating_add(1);
-        let mut nonce = [0u8; 32];
-        state.env.rng().fill_bytes(&mut nonce);
-        (seq, nonce, state.env.now(), state.env.canister_id(), state.data.executor_module_hash.to_vec())
-    });
-
-    let h_user_pre = cvdr::h_user_pre(canister_id, &module_hash_pre);
-    let h_index = cvdr::h_index(index_canister_id, &executor_module_hash);
-    let commitment = cvdr::commitment(&record_id, deletion_seq, &h_user_pre, &h_index, canister_id);
-    let receipt_id = cvdr::receipt_id_for(&record_id, deletion_seq, &nonce);
-
-    // Fresh salt for TARGETS_COMMITMENT_V1 (spec §2), from management-canister raw_rand during
-    // pre-commitments (await is fine here — the §3 atomicity rule covers only the publish message).
-    // Never reused across deletions; committed into the receipt body and handed back in the
-    // user-held reveal package (later slice).
-    let salt = utils::canister::get_random_seed().await;
-
-    let draft = CvdrDraft {
-        user_id: user.user_id,
-        user_canister_id: canister_id,
-        index_canister_id,
-        record_id,
-        deletion_seq,
-        nonce,
-        receipt_id,
-        module_hash_pre,
-        executor_module_hash,
-        h_user_pre,
-        h_index,
-        commitment,
-        salt,
-        canisters_to_notify,
-        uninstall_completed_at: 0,
-        receipt_committed_at: 0,
-        finalize_attempt: 0,
-        finalize_last_attempt_at: 0,
-        created_at: now,
-        attempt: user.attempt as u32,
-        stage: DraftStage::Captured,
-    };
-    mutate_state(|state| state.data.cvdr.upsert_draft(draft.clone()));
-    Ok(draft)
 }
 
 /// Advance the draft forward by exactly one stage per attempt (each step idempotent).
 async fn advance_draft(draft: CvdrDraft) -> ProcessOutcome {
     let canister_id = draft.user_canister_id;
     match draft.stage {
-        DraftStage::Captured => {
+        // Prepared (spec §11.4) and legacy Captured: irreversible uninstall leg.
+        DraftStage::Prepared | DraftStage::Captured => {
+            // Flip Prepared → Captured *before* the first await so a mid-uninstall upgrade
+            // re-enqueues via `resume_in_flight_drafts` (which intentionally skips pure Prepared
+            // drafts that never entered the delete commit).
+            if draft.stage == DraftStage::Prepared {
+                let flipped = mutate_state(|state| {
+                    let mut d = state.data.cvdr.get_draft(&canister_id)?;
+                    if d.stage == DraftStage::Prepared {
+                        d.stage = DraftStage::Captured;
+                        state.data.cvdr.upsert_draft(d);
+                    }
+                    Some(())
+                });
+                if flipped.is_none() {
+                    return ProcessOutcome::Retry { error_class: "draft_lost" };
+                }
+            }
             // `uninstall_code` (idempotent) then confirm no-module before advancing.
             if utils::canister::uninstall(canister_id).await.is_err() {
                 return ProcessOutcome::Retry { error_class: "uninstall_failed" };
@@ -362,8 +297,14 @@ pub(crate) fn resume_in_flight_drafts(state: &mut RuntimeState) {
         if draft.stage == DraftStage::AwaitingCertificate {
             state.data.cvdr_receipt_tree.insert(&draft.receipt_id, &draft.receipt_hash());
         }
-        // Re-enqueue any draft the queue lost when its user was popped before the upgrade.
-        if !queued.contains(&draft.user_id) {
+        // Re-enqueue mid-flight irreversible deletions the queue lost on upgrade.
+        // Do NOT enqueue `Prepared` — that would uninstall without user RevealWire ack /
+        // identity delete commit (spec §11.4).
+        let should_resume = matches!(
+            draft.stage,
+            DraftStage::Captured | DraftStage::Uninstalled | DraftStage::AwaitingCertificate
+        );
+        if should_resume && !queued.contains(&draft.user_id) {
             state.data.users_to_delete_queue.push_back(UserToDelete {
                 user_id: draft.user_id,
                 #[allow(deprecated)]

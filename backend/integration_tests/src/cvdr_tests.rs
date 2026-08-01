@@ -10,7 +10,7 @@ use crate::env::ENV;
 use crate::utils::tick_many;
 use crate::{CanisterIds, TestEnv, User, UserAuth, client};
 use candid::Principal;
-use local_user_index_canister::{finalize_cvdr, get_cvdr};
+use local_user_index_canister::{finalize_cvdr, get_cvdr, prepare_account_deletion};
 use pocket_ic::PocketIc;
 use pocket_ic::common::rest::{CanisterHttpReply, CanisterHttpResponse, MockCanisterHttpResponse};
 use std::ops::Deref;
@@ -30,8 +30,13 @@ fn two_users_same_lui(env: &mut PocketIc, canister_ids: &CanisterIds) -> ((User,
     panic!("could not find two users on the same local_user_index after 12 registrations");
 }
 
-fn delete_and_reach_awaiting(env: &mut PocketIc, canister_ids: &CanisterIds, user: &UserAuth) {
-    client::identity::happy_path::delete_user(env, user, canister_ids.identity);
+fn prepare_deletion(env: &mut PocketIc, user: &User) -> prepare_account_deletion::SuccessResult {
+    client::local_user_index::happy_path::prepare_account_deletion(env, user)
+}
+
+fn delete_and_reach_awaiting(env: &mut PocketIc, canister_ids: &CanisterIds, user: &User, auth: &UserAuth) {
+    prepare_deletion(env, user);
+    client::identity::happy_path::delete_user(env, auth, canister_ids.identity);
     tick_many(env, 10);
 }
 
@@ -48,8 +53,14 @@ fn response_header<'a>(response: &'a HttpResponse, name: &str) -> Option<&'a str
     response.headers.iter().find(|h| h.0.eq_ignore_ascii_case(name)).map(|h| h.1.as_str())
 }
 
-fn delete_and_store_package(env: &mut PocketIc, canister_ids: &CanisterIds, user_auth: &UserAuth, lui: CanisterId) -> [u8; 32] {
-    delete_and_reach_awaiting(env, canister_ids, user_auth);
+fn delete_and_store_package(
+    env: &mut PocketIc,
+    canister_ids: &CanisterIds,
+    user: &User,
+    user_auth: &UserAuth,
+    lui: CanisterId,
+) -> [u8; 32] {
+    delete_and_reach_awaiting(env, canister_ids, user, user_auth);
     let (req, receipt_id, _, _) = find_servable_cvdr_live(env, lui);
     let receipt_hex = hex::encode(receipt_id);
     let live = cvdr_http(env, lui, &format!("/cvdr_live/{receipt_hex}"));
@@ -243,7 +254,7 @@ fn delete_completes_cert_absent_and_awaits_certificate() {
     // Baseline: the env pool reuses envs across tests, so assert DELTAS, not absolute counts.
     let (base_d, base_r, _) = cvdr_metrics(env, lui);
 
-    delete_and_reach_awaiting(env, canister_ids, &user_auth);
+    delete_and_reach_awaiting(env, canister_ids, &user, &user_auth);
 
     // Uninstalled by the leg; one draft awaiting the certificate; nothing released (cert-absent).
     assert!(module_hash_is_none(env, &user), "user canister must be uninstalled by the leg");
@@ -263,9 +274,9 @@ fn delete_completes_cert_absent_and_awaits_certificate() {
 fn cvdr_store_fetch_round_trip() {
     let mut wrapper = ENV.deref().get();
     let TestEnv { env, canister_ids, .. } = wrapper.env();
-    let (_user, user_auth) = register_user_and_include_auth(env, canister_ids);
-    let lui = _user.local_user_index;
-    let receipt_id = delete_and_store_package(env, canister_ids, &user_auth, lui);
+    let (user, user_auth) = register_user_and_include_auth(env, canister_ids);
+    let lui = user.local_user_index;
+    let receipt_id = delete_and_store_package(env, canister_ids, &user, &user_auth, lui);
     assert!(matches!(
         fetch_cvdr(env, lui, receipt_id),
         get_cvdr::Response::Available(get_cvdr::AvailablePackage::FrozenWire(_))
@@ -278,11 +289,11 @@ fn cvdr_store_fetch_round_trip() {
 fn cvdr_gate_a_frozen_wire_http_matches_candid() {
     let mut wrapper = ENV.deref().get();
     let TestEnv { env, canister_ids, .. } = wrapper.env();
-    let (_user, user_auth) = register_user_and_include_auth(env, canister_ids);
-    let lui = _user.local_user_index;
+    let (user, user_auth) = register_user_and_include_auth(env, canister_ids);
+    let lui = user.local_user_index;
     let (_, base_frozen, _) = cvdr_metrics(env, lui);
 
-    let receipt_id = delete_and_store_package(env, canister_ids, &user_auth, lui);
+    let receipt_id = delete_and_store_package(env, canister_ids, &user, &user_auth, lui);
     let receipt_hex = hex::encode(receipt_id);
     assert_eq!(cvdr_metrics(env, lui).1, base_frozen + 1);
 
@@ -313,7 +324,7 @@ fn pending_then_available_no_404_in_the_gap() {
     let (user, user_auth) = register_user_and_include_auth(env, canister_ids);
     let lui = user.local_user_index;
 
-    delete_and_reach_awaiting(env, canister_ids, &user_auth);
+    delete_and_reach_awaiting(env, canister_ids, &user, &user_auth);
     let (_, receipt_id, _, _) = find_servable_cvdr_live(env, lui);
     let receipt_id_hex = hex::encode(receipt_id);
 
@@ -396,7 +407,7 @@ fn absent_finalizer_withholds_completion_and_resumes() {
 
     let (base_d, base_r, _) = cvdr_metrics(env, lui);
 
-    delete_and_reach_awaiting(env, canister_ids, &user_auth);
+    delete_and_reach_awaiting(env, canister_ids, &user, &user_auth);
 
     // Capture the receipt the finalizer WOULD see, but do not finalize yet.
     let (receipt_id, _certificate, _witness) = pending_live_package(env, lui);
@@ -430,6 +441,8 @@ fn concurrent_deletes_both_reach_awaiting_certificate() {
     let lui = user_b.local_user_index;
     let (base_d, _, _) = cvdr_metrics(env, lui);
 
+    prepare_deletion(env, &user_a);
+    prepare_deletion(env, &user_b);
     client::identity::happy_path::delete_user(env, &auth_a, canister_ids.identity);
     client::identity::happy_path::delete_user(env, &auth_b, canister_ids.identity);
     tick_many(env, 15);
@@ -459,8 +472,7 @@ fn self_finalization_captures_and_stores_via_mocked_outcall() {
     let lui = user.local_user_index;
     let (_, base_frozen, _) = cvdr_metrics(env, lui);
 
-    client::identity::happy_path::delete_user(env, &user_auth, canister_ids.identity);
-    tick_many(env, 10);
+    delete_and_reach_awaiting(env, canister_ids, &user, &user_auth);
 
     // The self-finalization outcall carries the receipt_id in its URL. Use the robust, lui-scoped,
     // servability-checked finder so the shared env pool can't hand us another lui's / a captured
@@ -520,8 +532,7 @@ fn index_evidence_capture_outcall_rejects_invalid_and_gives_up() {
     let evidence_before = cvdr_index_evidence_count(env, lui);
     let (_, base_frozen, _) = cvdr_metrics(env, lui);
 
-    client::identity::happy_path::delete_user(env, &user_auth, canister_ids.identity);
-    tick_many(env, 10);
+    delete_and_reach_awaiting(env, canister_ids, &user, &user_auth);
 
     let (req, _receipt_id, _, _) = find_servable_cvdr_live(env, lui);
     let live = client::http_request(
@@ -607,8 +618,7 @@ fn index_evidence_capture_http_miss_retries_without_store() {
     let evidence_before = cvdr_index_evidence_count(env, lui);
     let (_, base_frozen, _) = cvdr_metrics(env, lui);
 
-    client::identity::happy_path::delete_user(env, &user_auth, canister_ids.identity);
-    tick_many(env, 10);
+    delete_and_reach_awaiting(env, canister_ids, &user, &user_auth);
 
     let (req, receipt_id, _, _) = find_servable_cvdr_live(env, lui);
     let live = client::http_request(
@@ -820,7 +830,7 @@ fn p2_export_path_is_banked_not_half_alive() {
     let export_pending_before = lui_export_pending(env, lui);
 
     // Drive a complete v5 deletion.
-    delete_and_reach_awaiting(env, canister_ids, &user_auth);
+    delete_and_reach_awaiting(env, canister_ids, &user, &user_auth);
     let (receipt_id, certificate, witness) = pending_live_package(env, lui);
     assert!(matches!(finalize(env, lui, receipt_id, certificate, witness), finalize_cvdr::Response::Captured));
 
@@ -861,7 +871,7 @@ fn draft_survives_upgrade_then_finalizes() {
     let (user, user_auth) = register_user_and_include_auth(env, canister_ids);
     let lui = user.local_user_index;
 
-    delete_and_reach_awaiting(env, canister_ids, &user_auth);
+    delete_and_reach_awaiting(env, canister_ids, &user, &user_auth);
     let (_, before_id, _, _) = find_servable_cvdr_live(env, lui);
     let (drafts, released, awaiting) = cvdr_metrics(env, lui);
     assert_eq!((drafts, released, awaiting), (1, 0, true), "awaiting before upgrade");
@@ -899,7 +909,7 @@ fn forged_or_stale_certificate_is_rejected() {
     let lui = user.local_user_index;
     let (_, base_r, _) = cvdr_metrics(env, lui);
 
-    delete_and_reach_awaiting(env, canister_ids, &user_auth);
+    delete_and_reach_awaiting(env, canister_ids, &user, &user_auth);
     // The valid backstop snapshot an operator would relay (certificate + matching witness).
     let (receipt_id, certificate, witness) = pending_live_package(env, lui);
     let receipt_hex = hex::encode(receipt_id);
@@ -968,8 +978,7 @@ fn backstop_and_self_loop_store_exactly_one_package() {
     let lui = user.local_user_index;
     let (_, base_r, _) = cvdr_metrics(env, lui);
 
-    client::identity::happy_path::delete_user(env, &user_auth, canister_ids.identity);
-    tick_many(env, 10);
+    delete_and_reach_awaiting(env, canister_ids, &user, &user_auth);
 
     // Grab the self-loop's own in-flight outcall (the receipt it is about to finalize) + its payload.
     let (req, receipt_id, certificate, witness) = find_servable_cvdr_live(env, lui);
@@ -1021,7 +1030,7 @@ fn late_valid_certificate_is_stored_as_late_finalized() {
     let lui = user.local_user_index;
     let (_, base_r, _) = cvdr_metrics(env, lui);
 
-    delete_and_reach_awaiting(env, canister_ids, &user_auth);
+    delete_and_reach_awaiting(env, canister_ids, &user, &user_auth);
     // Discover a servable receipt on this lui while it is still AwaitingCertificate.
     let (_, receipt_id, _, _) = find_servable_cvdr_live(env, lui);
     let receipt_hex = hex::encode(receipt_id);
@@ -1053,9 +1062,9 @@ fn late_valid_certificate_is_stored_as_late_finalized() {
 fn offline_verifier_round_trip_from_bytes() {
     let mut wrapper = ENV.deref().get();
     let TestEnv { env, canister_ids, .. } = wrapper.env();
-    let (_user, user_auth) = register_user_and_include_auth(env, canister_ids);
-    let lui = _user.local_user_index;
-    let receipt_id = delete_and_store_package(env, canister_ids, &user_auth, lui);
+    let (user, user_auth) = register_user_and_include_auth(env, canister_ids);
+    let lui = user.local_user_index;
+    let receipt_id = delete_and_store_package(env, canister_ids, &user, &user_auth, lui);
     let receipt = match fetch_cvdr(env, lui, receipt_id) {
         get_cvdr::Response::Available(get_cvdr::AvailablePackage::FrozenWire(w)) => w,
         other => panic!("get_cvdr Available(FrozenWire) expected, got {other:?}"),
@@ -1080,11 +1089,11 @@ fn offline_verifier_round_trip_from_bytes() {
 fn captured_executor_hash_survives_mid_flight_upgrade() {
     let mut owned_env = crate::setup::setup_new_env(None);
     let TestEnv { env, canister_ids, controller } = &mut owned_env;
-    let (_user, user_auth) = register_user_and_include_auth(env, canister_ids);
-    let lui = _user.local_user_index;
+    let (user, user_auth) = register_user_and_include_auth(env, canister_ids);
+    let lui = user.local_user_index;
     let _captured_executor = sha256::sha256(&std::fs::read(crate::utils::local_bin().join("local_user_index.wasm.gz")).unwrap());
 
-    delete_and_reach_awaiting(env, canister_ids, &user_auth);
+    delete_and_reach_awaiting(env, canister_ids, &user, &user_auth);
     let (_, before_id, _, _) = find_servable_cvdr_live(env, lui);
 
     let mut new_wasm = crate::wasms::LOCAL_USER_INDEX.clone();
@@ -1099,4 +1108,68 @@ fn captured_executor_hash_survives_mid_flight_upgrade() {
         fetch_cvdr(env, lui, after_id),
         get_cvdr::Response::Available(get_cvdr::AvailablePackage::FrozenWire(_))
     ));
+}
+
+/// Spec §11.4 prepare: RevealWire issued, `/cvdr` Pending, `/cvdr_live` does not serve Prepared.
+#[test]
+fn prepare_issues_reveal_pending_and_live_excludes_prepared() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv { env, canister_ids, .. } = wrapper.env();
+    let (user, _auth) = register_user_and_include_auth(env, canister_ids);
+    let lui = user.local_user_index;
+
+    let prepared = prepare_deletion(env, &user);
+    assert_eq!(prepared.receipt_id.len(), 64);
+    let reveal: serde_json::Value = serde_json::from_str(&prepared.reveal_wire_json).unwrap();
+    assert_eq!(reveal["schema"], "openchatzd.cvdr.reveal_package");
+    assert!(reveal["salt"].as_str().unwrap().len() == 64);
+    assert!(reveal["targets"].is_array());
+
+    let receipt_id: [u8; 32] = hex::decode(&prepared.receipt_id).unwrap().try_into().unwrap();
+    assert!(matches!(fetch_cvdr(env, lui, receipt_id), get_cvdr::Response::Pending(_)));
+    let pending_http = cvdr_http(env, lui, &format!("/cvdr/{}", prepared.receipt_id));
+    assert_eq!(pending_http.status_code, 202);
+
+    let live = cvdr_http(env, lui, &format!("/cvdr_live/{}", prepared.receipt_id));
+    assert_eq!(live.status_code, 404, "Prepared must not be served by /cvdr_live");
+
+    // Re-issue returns the same receipt_id.
+    let again = prepare_deletion(env, &user);
+    assert_eq!(again.receipt_id, prepared.receipt_id);
+    assert_eq!(again.reveal_wire_json, prepared.reveal_wire_json);
+}
+
+/// Spec §11.4: delete without prepare does not uninstall (prepare_required gate).
+#[test]
+fn delete_without_prepare_does_not_uninstall() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv { env, canister_ids, .. } = wrapper.env();
+    let (user, auth) = register_user_and_include_auth(env, canister_ids);
+
+    client::identity::happy_path::delete_user(env, &auth, canister_ids.identity);
+    tick_many(env, 15);
+
+    assert!(
+        !module_hash_is_none(env, &user),
+        "without prepare, delete job must not uninstall"
+    );
+}
+
+/// Spec §11.4: after deletion completes the user is de-registered — prepare is rejected.
+#[test]
+fn prepare_fails_after_user_deleted() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv { env, canister_ids, .. } = wrapper.env();
+    let (user, auth) = register_user_and_include_auth(env, canister_ids);
+
+    delete_and_reach_awaiting(env, canister_ids, &user, &auth);
+
+    let rejected = client::execute_msgpack_update_no_unwrap(
+        env,
+        user.principal,
+        user.local_user_index,
+        "prepare_account_deletion_msgpack",
+        &types::Empty {},
+    );
+    assert!(rejected.is_err(), "prepare must be rejected after user deletion");
 }

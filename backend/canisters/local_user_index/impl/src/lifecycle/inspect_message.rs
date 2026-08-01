@@ -19,6 +19,7 @@ fn accept_if_valid(state: &RuntimeState) {
         | "join_community"
         | "join_group"
         | "pay_for_premium_item"
+        | "prepare_account_deletion"
         | "uninstall_bot" => state.is_caller_openchat_user(),
         "reinstate_missed_daily_claims" | "withdraw_from_icpswap" => state.is_caller_platform_operator(),
         // The submitted IC certificate is itself the authorization (NNS-signed, only producible

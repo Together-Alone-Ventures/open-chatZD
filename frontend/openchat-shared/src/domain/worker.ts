@@ -5,6 +5,7 @@ import type {
     CkbtcMinterWithdrawalInfo,
     WithdrawBtcResponse,
 } from "./bitcoin";
+import type { PrepareAccountDeletionResponse } from "./cvdr";
 import type {
     BotCommandResponse,
     BotDefinition,
@@ -469,6 +470,7 @@ export type WorkerRequest =
     | FinaliseAccountLinkingWithCode
     | GetSignInProof
     | PayForPremiumItem
+    | PrepareAccountDeletion
     | SetPremiumItemCost
     | OneSecEnableForwarding
     | OneSecGetTransferFees
@@ -523,6 +525,11 @@ type SetPremiumItemCost = {
 type PayForPremiumItem = {
     kind: "payForPremiumItem";
     item: PremiumItem;
+    userId: string;
+};
+
+type PrepareAccountDeletion = {
+    kind: "prepareAccountDeletion";
     userId: string;
 };
 
@@ -1883,6 +1890,7 @@ export type WorkerResponseInner =
     | VerifyAccountLinkingCodeResponse
     | FinaliseAccountLinkingResponse
     | PayForPremiumItemResponse
+    | PrepareAccountDeletionResponse
     | OneSecTransferFees[]
     | OneSecForwardingStatus;
 
@@ -2602,6 +2610,8 @@ export type WorkerResult<T> = T extends Init
     ? EventWrapper<Message>[]
     : T extends PayForPremiumItem
     ? PayForPremiumItemResponse
+    : T extends PrepareAccountDeletion
+    ? PrepareAccountDeletionResponse
     : T extends SetPremiumItemCost
     ? void
     : T extends CreateAccountLinkingCode

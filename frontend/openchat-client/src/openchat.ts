@@ -46,6 +46,9 @@ import {
     communityRoles,
     compareRoles,
     contentTypeToPermission,
+    cvdrDownloadUrl,
+    cvdrReceiptStorageKey,
+    CVDR_RECEIPT_PENDING_KEY,
     defaultChatPermissions,
     defaultChatRules,
     deletedUser,
@@ -74,7 +77,9 @@ import {
     messageContextsEqual,
     nullMembership,
     parseBigInt,
+    parseCvdrReceiptSession,
     pinNumberFailureFromError,
+    pollCvdrHttp,
     publish,
     random64,
     removeEmailSignInSession,
@@ -83,6 +88,7 @@ import {
     setMinLogLevel,
     shouldPreprocessGate,
     storeEmailSignInSession,
+    serializeCvdrReceiptSession,
     toDer,
     toTitleCase,
     updateCreatedUser,
@@ -233,6 +239,8 @@ import {
     type PayForDiamondMembershipResponse,
     type PayForPremiumItemResponse,
     type PayForStreakInsuranceResponse,
+    type PrepareAccountDeletionResponse,
+    type CvdrPollStatus,
     type PaymentGateApproval,
     type PaymentGateApprovals,
     type PendingCryptocurrencyTransfer,
@@ -744,6 +752,7 @@ export class OpenChat {
     deleteCurrentUser(
         identityKey: CryptoKeyPair,
         delegation: JsonnableDelegationChain,
+        options?: { deferLogout?: boolean },
     ): Promise<boolean> {
         if (!anonUserStore.value) {
             return this.#worker
@@ -753,7 +762,7 @@ export class OpenChat {
                     delegation,
                 })
                 .then((success) => {
-                    if (success) {
+                    if (success && !options?.deferLogout) {
                         this.clearCachedData().finally(() => this.logout());
                     }
                     return success;
@@ -761,6 +770,11 @@ export class OpenChat {
         } else {
             return Promise.resolve(false);
         }
+    }
+
+    /** Clear local state and navigate away after a deferred CVDR poll completes. */
+    finishDeleteAccountLogout(): Promise<void> {
+        return this.clearCachedData().finally(() => this.logout());
     }
 
     #chatUpdated(chatId: ChatIdentifier, updatedEvents: UpdatedEvent[]): void {
@@ -9814,6 +9828,87 @@ export class OpenChat {
                 console.log("Failed to pay for premium item", err);
                 return CommonResponses.unknownError(JSON.stringify(err));
             });
+    }
+
+    prepareAccountDeletion(): Promise<PrepareAccountDeletionResponse> {
+        const userId = currentUserIdStore.value;
+        if (userId === undefined) {
+            return Promise.resolve({ kind: "error", message: "not_signed_in" });
+        }
+        return this.#worker.send({
+            kind: "prepareAccountDeletion",
+            userId,
+        });
+    }
+
+    cvdrDownloadUrl(localUserIndex: string, receiptIdHex: string): string {
+        return cvdrDownloadUrl(this.config.canisterUrlPath, localUserIndex, receiptIdHex);
+    }
+
+    pollCvdr(localUserIndex: string, receiptIdHex: string): Promise<CvdrPollStatus> {
+        return pollCvdrHttp(this.cvdrDownloadUrl(localUserIndex, receiptIdHex));
+    }
+
+    persistCvdrReceiptSession(
+        userId: string | undefined,
+        session: { receiptId: string; localUserIndex: string },
+    ): void {
+        try {
+            const raw = serializeCvdrReceiptSession(session);
+            if (userId !== undefined) {
+                localStorage.setItem(cvdrReceiptStorageKey(userId), raw);
+            }
+            localStorage.setItem(CVDR_RECEIPT_PENDING_KEY, raw);
+        } catch {
+            /* ignore */
+        }
+    }
+
+    loadPersistedCvdrReceiptSession(
+        userId: string | undefined,
+    ): { receiptId: string; localUserIndex: string } | undefined {
+        try {
+            if (userId !== undefined) {
+                const fromUser = parseCvdrReceiptSession(
+                    localStorage.getItem(cvdrReceiptStorageKey(userId)),
+                );
+                if (fromUser) return fromUser;
+            }
+            return parseCvdrReceiptSession(localStorage.getItem(CVDR_RECEIPT_PENDING_KEY));
+        } catch {
+            return undefined;
+        }
+    }
+
+    clearPersistedCvdrReceiptSession(userId: string | undefined): void {
+        try {
+            if (userId !== undefined) {
+                localStorage.removeItem(cvdrReceiptStorageKey(userId));
+            }
+            localStorage.removeItem(CVDR_RECEIPT_PENDING_KEY);
+        } catch {
+            /* ignore */
+        }
+    }
+
+    /** @deprecated use persistCvdrReceiptSession */
+    persistCvdrReceiptId(userId: string, receiptIdHex: string): void {
+        const existing = this.loadPersistedCvdrReceiptSession(userId);
+        if (existing) {
+            this.persistCvdrReceiptSession(userId, {
+                receiptId: receiptIdHex,
+                localUserIndex: existing.localUserIndex,
+            });
+        }
+    }
+
+    /** @deprecated use loadPersistedCvdrReceiptSession */
+    loadPersistedCvdrReceiptId(userId: string): string | undefined {
+        return this.loadPersistedCvdrReceiptSession(userId)?.receiptId;
+    }
+
+    clearPersistedCvdrReceiptId(userId: string): void {
+        this.clearPersistedCvdrReceiptSession(userId);
     }
 
     async payForStreakInsurance(

@@ -44,6 +44,7 @@ use crate::memory::{
     get_cvdr_frozen_primary_memory, get_cvdr_frozen_secondary_memory,
 };
 use candid::{CandidType, Principal};
+use constants::DAY_IN_MS;
 use ic_certification::{AsHashTree, RbTree, labeled, labeled_hash};
 use ic_stable_structures::storable::Bound;
 use ic_stable_structures::{StableBTreeMap, StableLog, Storable};
@@ -528,6 +529,7 @@ fn leb128_u64(bytes: &[u8]) -> u64 {
 #[derive(CandidType, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DraftStage {
     /// Pre-uninstall: H_user_pre + targets + record_id captured, draft persisted.
+    /// Legacy mid-flight only — new deletions enter via [`DraftStage::Prepared`].
     Captured,
     /// `uninstall_code` confirmed (no module). The receipt may now be published.
     Uninstalled,
@@ -548,6 +550,10 @@ pub enum DraftStage {
     /// receipt remains in the tree (never removed, §10) and the permissionless backstop (§7) can
     /// still land it — as `CertificateCaptured` (if a fresh cert lands in-window) or `LateFinalized`.
     FailedStuck,
+    /// Spec §11.4 prepare: salt + targets + `receipt_id` captured; RevealWire handed to the user.
+    /// Not finalizable; not served by `/cvdr_live`. Appended last so candid ordinals of older
+    /// variants stay stable across upgrades.
+    Prepared,
 }
 
 /// In-flight durable deletion draft, keyed by `user_canister_id`. Survives a
@@ -576,8 +582,8 @@ pub struct CvdrDraft {
     pub h_index: Hash,
     pub commitment: Hash,
     /// 32 `raw_rand` bytes committed into `targets_commitment` (spec §2 TARGETS_COMMITMENT_V1).
-    /// Captured pre-uninstall; NEVER reused across deletions. The user-held reveal package
-    /// (later slice) = { version, salt, sorted target list }.
+    /// Captured at prepare; NEVER reused across deletions. Handed to the user in RevealWire
+    /// before irreversible delete (spec §11.4).
     pub salt: [u8; 32],
     /// Group/community targets for `NotifyOfUserDeleted`, captured BEFORE uninstall so
     /// recovery never re-reads the destroyed canister. Also the reveal-package target list and
@@ -648,10 +654,48 @@ impl CvdrDraft {
     /// (self-loop in flight) or `FailedStuck` (self-loop gave up, backstop can still land it, §7).
     /// These retain the salt + target list, so `receipt_body`/`receipt_hash` still recompute.
     /// `CertificateCaptured`/`LateFinalized` are terminal (package stored, draft scrubbed) and NOT
-    /// finalizable; the pre-publish `Captured`/`Uninstalled` stages have no receipt in the tree yet.
+    /// finalizable; `Prepared`/`Captured`/`Uninstalled` have no receipt in the tree yet
+    /// (`Prepared` is also explicitly non-finalizable per §11.4).
     pub fn is_finalizable(&self) -> bool {
         matches!(self.stage, DraftStage::AwaitingCertificate | DraftStage::FailedStuck)
     }
+
+    /// Canonical RevealWire JSON bytes (CVDR-Verify `openchatzd.cvdr.reveal_package`).
+    pub fn reveal_wire_json(&self) -> Vec<u8> {
+        reveal_wire_canonical_json(&self.salt, &self.canisters_to_notify)
+    }
+}
+
+/// Spec §11.4 / CVDR-Verify reveal schema id.
+pub const REVEAL_SCHEMA_ID: &str = "openchatzd.cvdr.reveal_package";
+pub const REVEAL_VERSION: u64 = 1;
+pub const REVEAL_ENCODING: &str = "hex";
+
+/// Prepared-but-not-deleted drafts TTL-purge after this (spec §11.4); aligns with the 24 h window.
+pub const PREPARED_DRAFT_TTL_MS: TimestampMillis = DAY_IN_MS;
+
+#[derive(Serialize)]
+struct CanonicalRevealWire<'a> {
+    schema: &'a str,
+    version: u64,
+    encoding: &'a str,
+    salt: String,
+    targets: Vec<String>,
+}
+
+/// Canonical RevealWire JSON: salt hex + targets as principal text, sorted by raw bytes
+/// (same order as `targets_commitment`).
+pub fn reveal_wire_canonical_json(salt: &[u8; 32], targets: &[CanisterId]) -> Vec<u8> {
+    let mut sorted: Vec<&CanisterId> = targets.iter().collect();
+    sorted.sort_by(|a, b| a.as_slice().cmp(b.as_slice()));
+    let canonical = CanonicalRevealWire {
+        schema: REVEAL_SCHEMA_ID,
+        version: REVEAL_VERSION,
+        encoding: REVEAL_ENCODING,
+        salt: hex::encode(salt),
+        targets: sorted.iter().map(|t| t.to_text()).collect(),
+    };
+    serde_json::to_vec(&canonical).expect("RevealWire canonical serialization")
 }
 
 // ---------------------------------------------------------------------------
@@ -1056,6 +1100,27 @@ impl CvdrStore {
     /// never stays Pending.
     pub fn find_any_draft_by_receipt_id(&self, receipt_id: &Hash) -> Option<CvdrDraft> {
         self.drafts.iter().map(|e| e.value()).find(|d| &d.receipt_id == receipt_id)
+    }
+
+    /// Scrub + drop prepared drafts older than [`PREPARED_DRAFT_TTL_MS`] (spec §11.4).
+    /// After purge the `receipt_id` serves Unknown.
+    pub fn purge_expired_prepared(&mut self, now: TimestampMillis) -> u64 {
+        let expired: Vec<CanisterId> = self
+            .drafts
+            .iter()
+            .filter(|e| {
+                let d = e.value();
+                d.stage == DraftStage::Prepared && now.saturating_sub(d.created_at) > PREPARED_DRAFT_TTL_MS
+            })
+            .map(|e| *e.key())
+            .collect();
+        let n = expired.len() as u64;
+        for id in expired {
+            if let Some(mut d) = self.drafts.remove(&id) {
+                d.scrub_sensitive();
+            }
+        }
+        n
     }
 
     /// Look up a draft by `receipt_id` that is in a FINALIZABLE state — `AwaitingCertificate` or
@@ -1717,5 +1782,69 @@ mod tests {
         assert_eq!(draft.finalize_last_attempt_at, 333);
         assert_eq!(draft.stage, DraftStage::CertificateCaptured);
         assert_eq!(draft.receipt_id, [3u8; 32]);
+    }
+
+    #[test]
+    fn reveal_wire_json_is_sorted_hex_and_schema_tagged() {
+        let salt = [0xABu8; 32];
+        let a = p(3);
+        let b = p(1);
+        let json = reveal_wire_canonical_json(&salt, &[a, b]);
+        let v: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        assert_eq!(v["schema"], REVEAL_SCHEMA_ID);
+        assert_eq!(v["version"], REVEAL_VERSION);
+        assert_eq!(v["encoding"], REVEAL_ENCODING);
+        assert_eq!(v["salt"], hex::encode(salt));
+        let targets = v["targets"].as_array().unwrap();
+        assert_eq!(targets.len(), 2);
+        // sorted by raw principal bytes: p(1) before p(3)
+        assert_eq!(targets[0], b.to_text());
+        assert_eq!(targets[1], a.to_text());
+        assert_eq!(
+            targets_commitment(&salt, &[a, b]),
+            targets_commitment(&salt, &[b, a]),
+            "reveal sort must match commitment sort"
+        );
+    }
+
+    #[test]
+    fn purge_expired_prepared_scrubs_and_drops() {
+        let mut store = CvdrStore::default();
+        let mut draft = CvdrDraft {
+            user_id: p(1).into(),
+            user_canister_id: p(1),
+            index_canister_id: p(2),
+            record_id: [1u8; 32],
+            deletion_seq: 1,
+            nonce: [2u8; 32],
+            receipt_id: [9u8; 32],
+            module_hash_pre: vec![],
+            executor_module_hash: vec![],
+            h_user_pre: [0u8; 32],
+            h_index: [0u8; 32],
+            commitment: [0u8; 32],
+            salt: [0xCDu8; 32],
+            canisters_to_notify: vec![p(5)],
+            uninstall_completed_at: 0,
+            receipt_committed_at: 0,
+            finalize_attempt: 0,
+            finalize_last_attempt_at: 0,
+            created_at: 1,
+            attempt: 0,
+            stage: DraftStage::Prepared,
+        };
+        store.upsert_draft(draft.clone());
+        assert_eq!(store.purge_expired_prepared(1 + PREPARED_DRAFT_TTL_MS), 0);
+        assert!(store.get_draft(&p(1)).is_some());
+        assert_eq!(store.purge_expired_prepared(2 + PREPARED_DRAFT_TTL_MS), 1);
+        assert!(store.get_draft(&p(1)).is_none());
+        assert!(store.find_any_draft_by_receipt_id(&draft.receipt_id).is_none());
+        // fresh prepared not purged
+        draft.created_at = 2 + PREPARED_DRAFT_TTL_MS;
+        draft.user_canister_id = p(7);
+        draft.receipt_id = [8u8; 32];
+        store.upsert_draft(draft);
+        assert_eq!(store.purge_expired_prepared(2 + PREPARED_DRAFT_TTL_MS), 0);
+        assert!(store.get_draft(&p(7)).is_some());
     }
 }

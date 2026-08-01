@@ -673,7 +673,25 @@
         "deleteAccountInfo": "Delete your OpenChat account. Warning! This is final and cannot be undone.",
         "deleting": "Deleting",
         "reauth": "For security reasons, you will need to re-authenticate in order to delete your account. This is your last chance to back out!",
-        "title": "Danger"
+        "title": "Danger",
+        "cvdr": {
+            "intro": "Deleting your account issues a cryptographic CVDR receipt. You must save your **RevealWire** package before deletion — it cannot be recovered afterwards.\n\nTreat your receipt download link like a password.",
+            "continue": "Continue",
+            "back": "Back",
+            "confirmCheckbox": "I understand this cannot be undone",
+            "prepare": "Prepare deletion",
+            "preparing": "Preparing your reveal package…",
+            "revealHelp": "Save your RevealWire file and copy your receipt link **before** you delete. Without them you cannot open the targets commitment later.",
+            "secretWarning": "Treat this link like a password.",
+            "downloadReveal": "Download RevealWire",
+            "copyLink": "Copy receipt link",
+            "copied": "Receipt link copied",
+            "copyFailed": "Could not copy link",
+            "revealAck": "I have saved my RevealWire and receipt link",
+            "polling": "Waiting for your CVDR receipt to become available…",
+            "done": "Your account deletion is complete. If the receipt downloaded, keep it offline with your RevealWire.",
+            "retry": "Try again"
+        }
     },
     "dark": "dark",
     "days": "Days",

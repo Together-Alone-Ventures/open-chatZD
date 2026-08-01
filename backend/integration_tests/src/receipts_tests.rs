@@ -613,6 +613,7 @@ fn finalized_receipt_survives_uninstall_and_is_fetchable() {
 
     // Drive the real deletion pipeline (identity → user_index → local_user_index),
     // waiting for the actual uninstall rather than assuming a fixed tick count.
+    client::local_user_index::happy_path::prepare_account_deletion(env, &user);
     client::identity::happy_path::delete_user(env, &user_auth, canister_ids.identity);
     let (uc, lui) = (user.canister(), user.local_user_index);
     assert!(
@@ -660,6 +661,7 @@ fn export_failure_reaches_durable_parked_state() {
 
     // LUI deliberately NOT authorized → store rejected → export can never succeed.
     revoke_lui_export_rights(env, *controller, canister_ids, lui);
+    client::local_user_index::happy_path::prepare_account_deletion(env, &user);
     client::identity::happy_path::delete_user(env, &user_auth, canister_ids.identity);
 
     // Drive the bounded fast-retry window past its limit → DURABLE parked record.
@@ -705,6 +707,7 @@ fn parked_export_survives_local_user_index_upgrade() {
     let baseline = export_pending_count(env, lui);
 
     revoke_lui_export_rights(env, *controller, canister_ids, lui);
+    client::local_user_index::happy_path::prepare_account_deletion(env, &user);
     client::identity::happy_path::delete_user(env, &user_auth, canister_ids.identity);
     let parked = drive_to_parked(env, lui, baseline);
     assert!(parked, "must be parked before the upgrade");
@@ -767,6 +770,7 @@ fn parked_export_resumes_after_authorization() {
 
     // Start unauthorized so the export deterministically fails and parks.
     revoke_lui_export_rights(env, *controller, canister_ids, lui);
+    client::local_user_index::happy_path::prepare_account_deletion(env, &user);
     client::identity::happy_path::delete_user(env, &user_auth, canister_ids.identity);
     let parked = drive_to_parked(env, lui, 0);
     assert!(parked, "must be parked before resume");
@@ -857,6 +861,7 @@ fn exported_uninstall_pending_lifecycle() {
     env.set_controllers(user_canister, Some(lui), vec![*controller])
         .expect("set_controllers to break uninstall");
 
+    client::local_user_index::happy_path::prepare_account_deletion(env, &user);
     client::identity::happy_path::delete_user(env, &user_auth, canister_ids.identity);
 
     // Export succeeds → EUP persisted before uninstall → uninstall fails → durable EUP.

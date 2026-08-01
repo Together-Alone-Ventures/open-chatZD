@@ -13,6 +13,7 @@ import type {
     MultiUserChatIdentifier,
     PayForPremiumItemResponse,
     PayForPremiumItemSuccess,
+    PrepareAccountDeletionResponse,
     RegisterUserResponse,
     Tally,
     VerifiedCredentialArgs,
@@ -45,6 +46,7 @@ import type {
     LocalUserIndexJoinCommunityResponse,
     LocalUserIndexPayForPremiumItemResponse,
     LocalUserIndexPayForPremiumItemSuccessResult,
+    LocalUserIndexPrepareAccountDeletionResponse,
     LocalUserIndexRegisterUserResponse,
     SuccessOnly,
     VerifiedCredentialGateArgs as TVerifiedCredentialGateArgs,
@@ -84,6 +86,29 @@ export function payForPremiumItemSuccess(
         totalChitEarned: value.total_chit_earned,
         chitBalance: value.chit_balance,
     };
+}
+
+export function prepareAccountDeletionResponse(
+    value: LocalUserIndexPrepareAccountDeletionResponse,
+): PrepareAccountDeletionResponse {
+    if (value === "AlreadyCommitted") {
+        return { kind: "already_committed" };
+    }
+    if ("Success" in value) {
+        return {
+            kind: "success",
+            receiptId: value.Success.receipt_id,
+            revealWireJson: value.Success.reveal_wire_json,
+            localUserIndex: "", // filled by OpenChatAgent.prepareAccountDeletion
+        };
+    }
+    if ("UserCanisterUnavailable" in value) {
+        return { kind: "user_canister_unavailable", detail: value.UserCanisterUnavailable };
+    }
+    if ("Error" in value) {
+        return { kind: "error", message: JSON.stringify(value.Error) };
+    }
+    return { kind: "error", message: "unknown_prepare_response" };
 }
 
 export function apiAccessTokenType(domain: AccessTokenType): LocalUserIndexAccessTokenV2Args {

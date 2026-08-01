@@ -1,5 +1,12 @@
 <script lang="ts">
-    import { AuthProvider, i18nKey, OpenChat } from "openchat-client";
+    import {
+        AuthProvider,
+        currentUserIdStore,
+        downloadBytesAsFile,
+        i18nKey,
+        OpenChat,
+        type CvdrPollStatus,
+    } from "openchat-client";
     import ModalContent from "../../ModalContent.svelte";
     import Overlay from "../../Overlay.svelte";
     import Translatable from "../../Translatable.svelte";
@@ -8,6 +15,7 @@
     import Markdown from "@shared_components/Markdown.svelte";
     import ButtonGroup from "../../ButtonGroup.svelte";
     import Button from "../../Button.svelte";
+    import Checkbox from "../../Checkbox.svelte";
     import { getContext } from "svelte";
     import { toastStore } from "../../../stores/toast";
     import ReAuthenticate from "./ReAuthenticate.svelte";
@@ -22,7 +30,80 @@
 
     let { deleting = $bindable(), onClose }: Props = $props();
 
-    let authenticating = $state(false);
+    type Step =
+        | "intro"
+        | "confirm"
+        | "preparing"
+        | "reveal"
+        | "authenticating"
+        | "deleting"
+        | "polling"
+        | "done"
+        | "error";
+
+    let step = $state<Step>("intro");
+    let confirmed = $state(false);
+    let revealAck = $state(false);
+    let receiptId = $state("");
+    let revealWireJson = $state("");
+    let localUserIndex = $state("");
+    let bearerUrl = $state("");
+    let errorMessage = $state("");
+    let pollStatus = $state("");
+
+    $effect(() => {
+        if (step !== "intro") return;
+        const session = client.loadPersistedCvdrReceiptSession(currentUserIdStore.value);
+        if (session) {
+            receiptId = session.receiptId;
+            localUserIndex = session.localUserIndex;
+            bearerUrl = client.cvdrDownloadUrl(localUserIndex, receiptId);
+            step = "polling";
+            void pollUntilAvailable(true);
+        }
+    });
+
+    async function runPrepare() {
+        step = "preparing";
+        errorMessage = "";
+        const resp = await client.prepareAccountDeletion();
+        if (resp.kind !== "success") {
+            errorMessage =
+                resp.kind === "already_committed"
+                    ? "Deletion already started for this account."
+                    : resp.kind === "user_canister_unavailable"
+                      ? resp.detail
+                      : resp.message;
+            step = "error";
+            return;
+        }
+        receiptId = resp.receiptId;
+        revealWireJson = resp.revealWireJson;
+        localUserIndex = resp.localUserIndex;
+        bearerUrl = client.cvdrDownloadUrl(localUserIndex, receiptId);
+        client.persistCvdrReceiptSession(currentUserIdStore.value, {
+            receiptId,
+            localUserIndex,
+        });
+        revealAck = false;
+        step = "reveal";
+    }
+
+    function downloadReveal() {
+        downloadBytesAsFile(
+            new TextEncoder().encode(revealWireJson),
+            `openchatzd-reveal-${receiptId.slice(0, 8)}.json`,
+        );
+    }
+
+    async function copyBearer() {
+        try {
+            await navigator.clipboard.writeText(bearerUrl);
+            toastStore.showSuccessToast(i18nKey("danger.cvdr.copied"));
+        } catch {
+            toastStore.showFailureToast(i18nKey("danger.cvdr.copyFailed"));
+        }
+    }
 
     function deleteAccount(detail: {
         key: ECDSAKeyIdentity;
@@ -30,17 +111,70 @@
         provider: AuthProvider;
     }) {
         deleting = true;
-        authenticating = false;
+        step = "deleting";
         return client
-            .deleteCurrentUser(detail.key.getKeyPair(), detail.delegation.toJSON())
-            .then((success) => {
+            .deleteCurrentUser(detail.key.getKeyPair(), detail.delegation.toJSON(), {
+                deferLogout: true,
+            })
+            .then(async (success) => {
                 if (!success) {
                     toastStore.showFailureToast(i18nKey("danger.deleteAccountFailed"));
-                } else {
-                    onClose();
+                    step = "error";
+                    errorMessage = "Delete failed";
+                    return;
                 }
+                step = "polling";
+                await pollUntilAvailable(true);
             })
             .finally(() => (deleting = false));
+    }
+
+    async function pollUntilAvailable(logoutWhenDone: boolean) {
+        if (!localUserIndex || !receiptId) {
+            const session = client.loadPersistedCvdrReceiptSession(currentUserIdStore.value);
+            if (session) {
+                receiptId = session.receiptId;
+                localUserIndex = session.localUserIndex;
+            }
+        }
+        const lui = localUserIndex;
+        if (!lui || !receiptId) {
+            step = "error";
+            errorMessage = "Missing receipt session — reopen delete after prepare.";
+            return;
+        }
+        for (let i = 0; i < 60; i++) {
+            const status: CvdrPollStatus = await client.pollCvdr(lui, receiptId);
+            if (status.kind === "available") {
+                downloadBytesAsFile(
+                    status.body,
+                    `openchatzd-cvdr-${receiptId.slice(0, 8)}.json`,
+                    status.contentType,
+                );
+                client.clearPersistedCvdrReceiptSession(currentUserIdStore.value);
+                step = "done";
+                if (logoutWhenDone) {
+                    await client.finishDeleteAccountLogout();
+                }
+                return;
+            }
+            if (status.kind === "pending") {
+                pollStatus = `Receipt pending… retry in ${status.retryAfterSecs}s`;
+                await new Promise((r) => setTimeout(r, Math.max(1, status.retryAfterSecs) * 1000));
+                continue;
+            }
+            if (status.kind === "unknown" && i < 5) {
+                pollStatus = "Not found yet — waiting for draft…";
+                await new Promise((r) => setTimeout(r, 2000));
+                continue;
+            }
+            pollStatus = status.kind === "error" ? status.detail : status.kind;
+            await new Promise((r) => setTimeout(r, 3000));
+        }
+        step = "done";
+        if (logoutWhenDone) {
+            await client.finishDeleteAccountLogout();
+        }
     }
 </script>
 
@@ -50,33 +184,104 @@
             <Translatable resourceKey={i18nKey("danger.deleteAccount")} />
         {/snippet}
         {#snippet body()}
-            {#if authenticating}
-                <ReAuthenticate onSuccess={deleteAccount} message={i18nKey("danger.reauth")} />
-            {:else}
+            {#if step === "intro"}
+                <Markdown inline={false} text={interpolate($_, i18nKey("danger.cvdr.intro"))} />
+            {:else if step === "confirm"}
                 <Markdown
                     inline={false}
                     text={interpolate($_, i18nKey("danger.deleteAccountConfirm"))} />
+                <div class="ack">
+                    <Checkbox
+                        id="cvdr-confirm"
+                        label={i18nKey("danger.cvdr.confirmCheckbox")}
+                        bind:checked={confirmed} />
+                </div>
+            {:else if step === "preparing"}
+                <Translatable resourceKey={i18nKey("danger.cvdr.preparing")} />
+            {:else if step === "reveal"}
+                <Markdown inline={false} text={interpolate($_, i18nKey("danger.cvdr.revealHelp"))} />
+                <p class="mono">receipt: {receiptId}</p>
+                <p class="warn"><Translatable resourceKey={i18nKey("danger.cvdr.secretWarning")} /></p>
+                <ButtonGroup align="start">
+                    <Button small onClick={downloadReveal}>
+                        <Translatable resourceKey={i18nKey("danger.cvdr.downloadReveal")} />
+                    </Button>
+                    <Button small secondary onClick={copyBearer}>
+                        <Translatable resourceKey={i18nKey("danger.cvdr.copyLink")} />
+                    </Button>
+                </ButtonGroup>
+                <div class="ack">
+                    <Checkbox
+                        id="cvdr-reveal-ack"
+                        label={i18nKey("danger.cvdr.revealAck")}
+                        bind:checked={revealAck} />
+                </div>
+            {:else if step === "authenticating"}
+                <ReAuthenticate onSuccess={deleteAccount} message={i18nKey("danger.reauth")} />
+            {:else if step === "deleting"}
+                <Translatable resourceKey={i18nKey("danger.deleting")} />
+            {:else if step === "polling"}
+                <Markdown inline={false} text={interpolate($_, i18nKey("danger.cvdr.polling"))} />
+                {#if pollStatus}<p class="mono">{pollStatus}</p>{/if}
+            {:else if step === "done"}
+                <Markdown inline={false} text={interpolate($_, i18nKey("danger.cvdr.done"))} />
+            {:else if step === "error"}
+                <p>{errorMessage}</p>
             {/if}
         {/snippet}
         {#snippet footer()}
             <ButtonGroup>
-                <Button small onClick={onClose} secondary>
-                    <Translatable resourceKey={i18nKey("cancel")} />
-                </Button>
-                {#if !authenticating}
+                {#if step !== "done" && step !== "deleting" && step !== "preparing" && step !== "polling"}
+                    <Button small onClick={onClose} secondary>
+                        <Translatable resourceKey={i18nKey("cancel")} />
+                    </Button>
+                {/if}
+                {#if step === "intro"}
+                    <Button small danger onClick={() => (step = "confirm")}>
+                        <Translatable resourceKey={i18nKey("danger.cvdr.continue")} />
+                    </Button>
+                {:else if step === "confirm"}
+                    <Button small secondary onClick={() => (step = "intro")}>
+                        <Translatable resourceKey={i18nKey("danger.cvdr.back")} />
+                    </Button>
+                    <Button small danger disabled={!confirmed} onClick={runPrepare}>
+                        <Translatable resourceKey={i18nKey("danger.cvdr.prepare")} />
+                    </Button>
+                {:else if step === "reveal"}
                     <Button
-                        danger
-                        disabled={deleting}
-                        loading={deleting}
                         small
-                        onClick={() => (authenticating = true)}>
-                        <Translatable
-                            resourceKey={i18nKey(
-                                deleting ? "danger.deleting" : "danger.deleteAccount",
-                            )} />
+                        danger
+                        disabled={!revealAck}
+                        onClick={() => (step = "authenticating")}>
+                        <Translatable resourceKey={i18nKey("danger.deleteAccount")} />
+                    </Button>
+                {:else if step === "error"}
+                    <Button small onClick={() => (step = "intro")}>
+                        <Translatable resourceKey={i18nKey("danger.cvdr.retry")} />
+                    </Button>
+                {:else if step === "done"}
+                    <Button small onClick={onClose}>
+                        <Translatable resourceKey={i18nKey("close")} />
                     </Button>
                 {/if}
             </ButtonGroup>
         {/snippet}
     </ModalContent>
 </Overlay>
+
+<style>
+    .ack {
+        margin-top: 1rem;
+    }
+    .mono {
+        font-family: ui-monospace, monospace;
+        font-size: 0.8rem;
+        word-break: break-all;
+        margin: 0.75rem 0;
+    }
+    .warn {
+        color: var(--error, #b00020);
+        font-weight: 600;
+        margin: 0.5rem 0 1rem;
+    }
+</style>

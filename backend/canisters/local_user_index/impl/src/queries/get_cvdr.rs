@@ -155,4 +155,43 @@ mod tests {
             assert!(!s.contains(leak), "PendingInfo must not contain `{leak}`");
         }
     }
+
+    #[test]
+    fn prepared_draft_serves_pending_not_available() {
+        use crate::model::cvdr::{CvdrDraft, DraftStage};
+
+        let mut cvdr = CvdrStore::default();
+        let record_id = record_id_for(Principal::from_slice(&[9]).into());
+        let receipt_id = receipt_id_for(&record_id, 9, &[1u8; 32]);
+        let draft = CvdrDraft {
+            user_id: Principal::from_slice(&[9]).into(),
+            user_canister_id: Principal::from_slice(&[9]),
+            index_canister_id: Principal::from_slice(&[4]),
+            record_id,
+            deletion_seq: 9,
+            nonce: [1u8; 32],
+            receipt_id,
+            module_hash_pre: vec![],
+            executor_module_hash: vec![],
+            h_user_pre: [0u8; 32],
+            h_index: [0u8; 32],
+            commitment: [0u8; 32],
+            salt: [0x11; 32],
+            canisters_to_notify: vec![],
+            uninstall_completed_at: 0,
+            receipt_committed_at: 0,
+            finalize_attempt: 0,
+            finalize_last_attempt_at: 0,
+            created_at: 1,
+            attempt: 0,
+            stage: DraftStage::Prepared,
+        };
+        assert!(!draft.is_finalizable(), "Prepared must not be /cvdr_live-servable");
+        cvdr.upsert_draft(draft);
+        assert!(matches!(
+            get_cvdr_from_store(&receipt_id, &cvdr),
+            Response::Pending(_)
+        ));
+        assert!(cvdr.find_draft_by_receipt_id(&receipt_id).is_none());
+    }
 }
