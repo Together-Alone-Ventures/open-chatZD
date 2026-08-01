@@ -224,4 +224,29 @@ mod tests {
         assert_eq!(store.get(&b).unwrap().certificate_bytes, vec![20]);
         assert_eq!(store.count(), 2);
     }
+
+    #[test]
+    fn unknown_receipt_lookup_is_none() {
+        let store = IndexCodeIdentityStore::new();
+        assert!(!store.contains(&[0u8; 32]));
+        assert_eq!(store.get(&[0u8; 32]), None);
+        assert_eq!(store.count(), 0);
+    }
+
+    #[test]
+    fn portable_package_v2_preserves_exact_frozen_byte_identity() {
+        let frozen = (0u8..64).collect::<Vec<_>>();
+        let pkg = PortablePackageV2::new(
+            frozen.clone(),
+            IndexCodeIdentityEvidence {
+                certificate_bytes: vec![1],
+            },
+        );
+        assert_eq!(pkg.frozen.as_slice(), frozen.as_slice());
+        assert_ne!(
+            pkg.frozen,
+            candid::encode_one(&frozen).unwrap(),
+            "nested frozen must stay raw Gate A bytes, not a re-encoded Vec"
+        );
+    }
 }

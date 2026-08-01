@@ -93,3 +93,17 @@ pub fn memory_sizes() -> BTreeMap<u8, u64> {
 fn get_memory(id: MemoryId) -> Memory {
     MEMORY_MANAGER.with(|m| m.get(id))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn memory_sizes_covers_index_evidence_slots() {
+        let sizes = memory_sizes();
+        assert!(sizes.contains_key(&12));
+        assert!(sizes.contains_key(&13));
+        assert!(sizes.contains_key(&14));
+        assert_eq!(sizes.keys().copied().max(), Some(14));
+    }
+}

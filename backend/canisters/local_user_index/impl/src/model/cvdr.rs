@@ -1213,6 +1213,83 @@ mod tests {
         assert_eq!(s.get_index_evidence(&receipt_id), Some(evidence));
     }
 
+    #[test]
+    fn frozen_alone_does_not_imply_index_evidence() {
+        let mut s = CvdrStore::default();
+        let record_id = record_id_for(p(2).into());
+        let receipt_id = receipt_id_for(&record_id, 2, &[9u8; 32]);
+        let pkg = FrozenCvdrPackage {
+            receipt_body: vec![1],
+            receipt_hash: [2u8; 32],
+            tree_root: [3u8; 32],
+            witness_bytes: vec![4],
+            certificate_bytes: vec![5],
+            certificate_time: 1,
+        };
+        assert_eq!(s.insert_frozen_package(receipt_id, record_id, 2, pkg), Ok(()));
+        assert!(!s.has_index_evidence(&receipt_id));
+        assert_eq!(s.get_index_evidence(&receipt_id), None);
+        assert_eq!(s.index_evidence_count(), 0);
+    }
+
+    #[test]
+    fn index_evidence_requires_matching_receipt_frozen_package() {
+        use crate::model::cvdr_index_evidence::{IndexCodeIdentityEvidence, IndexEvidenceInsertError};
+
+        let mut s = CvdrStore::default();
+        let record_a = record_id_for(p(3).into());
+        let receipt_a = receipt_id_for(&record_a, 1, &[1u8; 32]);
+        let receipt_b = receipt_id_for(&record_a, 2, &[2u8; 32]);
+        let pkg = FrozenCvdrPackage {
+            receipt_body: vec![1],
+            receipt_hash: [2u8; 32],
+            tree_root: [3u8; 32],
+            witness_bytes: vec![4],
+            certificate_bytes: vec![5],
+            certificate_time: 1,
+        };
+        assert_eq!(s.insert_frozen_package(receipt_a, record_a, 1, pkg), Ok(()));
+        assert_eq!(
+            s.insert_index_evidence(
+                receipt_b,
+                IndexCodeIdentityEvidence {
+                    certificate_bytes: vec![0x11],
+                }
+            ),
+            Err(IndexEvidenceInsertError::FrozenPackageMissing)
+        );
+        assert!(!s.has_index_evidence(&receipt_a));
+        assert!(!s.has_index_evidence(&receipt_b));
+    }
+
+    #[test]
+    fn index_evidence_empty_cert_rejected_after_frozen_exists() {
+        use crate::model::cvdr_index_evidence::{IndexCodeIdentityEvidence, IndexEvidenceInsertError};
+
+        let mut s = CvdrStore::default();
+        let record_id = record_id_for(p(4).into());
+        let receipt_id = receipt_id_for(&record_id, 1, &[4u8; 32]);
+        let pkg = FrozenCvdrPackage {
+            receipt_body: vec![1],
+            receipt_hash: [2u8; 32],
+            tree_root: [3u8; 32],
+            witness_bytes: vec![4],
+            certificate_bytes: vec![5],
+            certificate_time: 1,
+        };
+        assert_eq!(s.insert_frozen_package(receipt_id, record_id, 1, pkg), Ok(()));
+        assert_eq!(
+            s.insert_index_evidence(
+                receipt_id,
+                IndexCodeIdentityEvidence {
+                    certificate_bytes: vec![],
+                }
+            ),
+            Err(IndexEvidenceInsertError::EmptyCertificate)
+        );
+        assert!(!s.has_index_evidence(&receipt_id));
+    }
+
     // ---- Slice 2: §6 store-gate verification, proven with REAL mainnet A1 certificate bytes ----
 
     /// The reused BLS -> subnet delegation -> NNS -> `certified_data` verification path accepts a
