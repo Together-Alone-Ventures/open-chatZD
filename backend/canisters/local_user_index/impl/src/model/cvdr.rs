@@ -1502,6 +1502,59 @@ mod tests {
         );
     }
 
+    /// Positive store-gate: genuine mainnet `read_state` certificate for
+    /// `/canister/<OpenChat LUI>/module_hash` verifies against the NNS root and
+    /// yields a non-empty module hash + cert time.
+    #[test]
+    fn verify_index_module_hash_accepts_real_mainnet_module_hash_cert() {
+        use ic_cbor::CertificateToCbor;
+        use ic_certification::{Certificate, LookupResult};
+
+        const CERT: &[u8] = include_bytes!("testdata/mainnet_module_hash_certificate.bin");
+        let self_id = Principal::from_text("nq4qv-wqaaa-aaaaf-bhdgq-cai").unwrap();
+        let cert = Certificate::from_cbor(CERT).unwrap();
+        let time_ns = match cert.tree.lookup_path([b"time".as_ref()]) {
+            LookupResult::Found(t) => leb128_u64(t),
+            _ => panic!("no /time in mainnet module_hash fixture"),
+        };
+        let now_ms = time_ns / 1_000_000;
+
+        let v = verify_index_module_hash_evidence(CERT, self_id, constants::IC_ROOT_KEY, now_ms, None)
+            .expect("mainnet module_hash certificate must verify");
+        assert_eq!(v.cert_time_ns, time_ns);
+        assert_eq!(v.module_hash.len(), 32, "WASM module hash is 32 bytes");
+        assert_ne!(v.module_hash, vec![0u8; 32]);
+
+        // Ordering gate: commitment time after cert time → reject.
+        assert_eq!(
+            verify_index_module_hash_evidence(
+                CERT,
+                self_id,
+                constants::IC_ROOT_KEY,
+                now_ms,
+                Some(time_ns.saturating_add(1)),
+            ),
+            Err(IndexEvidenceRejectReason::CertTimeBeforeCommitment)
+        );
+        // Equal commitment time is accepted.
+        assert!(verify_index_module_hash_evidence(
+            CERT,
+            self_id,
+            constants::IC_ROOT_KEY,
+            now_ms,
+            Some(time_ns),
+        )
+        .is_ok());
+
+        // Wrong canister → not in delegated range (or path miss under that id).
+        let other = Principal::from_slice(&[0u8; 10]);
+        assert!(matches!(
+            verify_index_module_hash_evidence(CERT, other, constants::IC_ROOT_KEY, now_ms, None),
+            Err(IndexEvidenceRejectReason::Certificate(_))
+                | Err(IndexEvidenceRejectReason::ModuleHashMissing)
+        ));
+    }
+
     /// HARD RULE (spec §6): the store-gate must REJECT (never Store) a fully verified certificate
     /// whose witness does not bind OUR receipt. The A1 witness is over the A1 canister's own 2-leaf
     /// tree (key "cvdr"), so it carries no `["receipts", receipt_id]` leaf.

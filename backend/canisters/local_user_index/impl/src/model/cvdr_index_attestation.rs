@@ -95,4 +95,33 @@ mod tests {
             "FrozenWire-only Available must map to UNAVAILABLE, not MATCH"
         );
     }
+
+    /// Drift guard: when the sibling CVDR-Verify checkout is present (Together-alone layout),
+    /// OpenChatZD labels must appear verbatim in the offline verifier.
+    #[test]
+    fn labels_match_sibling_cvdr_verify_when_present() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../../../CVDR-Verify/mktd02/mktd02-verify/src/openchatzd/index_attestation.rs");
+        if !path.exists() {
+            eprintln!("skip cross-repo labels: {} not present", path.display());
+            return;
+        }
+        let src = std::fs::read_to_string(&path).expect("read CVDR-Verify index_attestation");
+        for label in [
+            INDEX_HASH_MATCH_AT_CERT_TIME,
+            INDEX_HASH_MISMATCH,
+            INDEX_ATTESTATION_UNAVAILABLE,
+            INDEX_ATTESTATION_INVALID,
+            TIMING_ROUTINE,
+            TIMING_DELAY_EXCEEDED,
+            TIMING_LATE_PATH,
+            PORTABLE_PACKAGE_SCHEMA,
+        ] {
+            assert!(
+                src.contains(label),
+                "CVDR-Verify index_attestation.rs missing label `{label}`"
+            );
+        }
+        assert!(src.contains("do not prove uninterrupted execution"));
+    }
 }

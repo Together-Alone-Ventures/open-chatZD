@@ -164,6 +164,12 @@ fn cvdr_metrics(env: &PocketIc, local_user_index: CanisterId) -> (u64, u64, bool
     )
 }
 
+fn cvdr_index_evidence_count(env: &PocketIc, local_user_index: CanisterId) -> u64 {
+    metrics_json(env, local_user_index)["cvdr_index_evidence_count"]
+        .as_u64()
+        .expect("cvdr_index_evidence_count")
+}
+
 fn metrics_json(env: &PocketIc, canister_id: CanisterId) -> serde_json::Value {
     let response = client::http_request(
         env,
@@ -450,6 +456,228 @@ fn self_finalization_captures_and_stores_via_mocked_outcall() {
     // honest-gap-2 — no real VerifiedFinal artifact). The mocked body carries a genuine PocketIC
     // certificate, so this is not synthetic.
     export_cvdr_verify_e2e_fixture(env, lui, &receipt_hex, &live_body);
+}
+
+/// INDEX capture plumbing under PocketIC: after a frozen package exists, the job POSTs
+/// `read_state` for `/module_hash`. PocketIC cannot mint a real NNS-rooted system-state
+/// certificate for that path, so this test proves (1) the outcall is issued, (2) an invalid
+/// gateway body is discarded (verify-before-store; count stays flat), and (3) after the 24h
+/// give-up window the job stops retrying.
+#[test]
+fn index_evidence_capture_outcall_rejects_invalid_and_gives_up() {
+    use std::time::Duration;
+
+    let mut wrapper = ENV.deref().get();
+    let TestEnv { env, canister_ids, .. } = wrapper.env();
+    let (user, user_auth) = register_user_and_include_auth(env, canister_ids);
+    let lui = user.local_user_index;
+    let evidence_before = cvdr_index_evidence_count(env, lui);
+    let (_, base_frozen, _) = cvdr_metrics(env, lui);
+
+    client::identity::happy_path::delete_user(env, &user_auth, canister_ids.identity);
+    tick_many(env, 10);
+
+    let (req, _receipt_id, _, _) = find_servable_cvdr_live(env, lui);
+    let live = client::http_request(
+        env,
+        Principal::anonymous(),
+        lui,
+        &HttpRequest {
+            method: "GET".to_string(),
+            url: format!("/cvdr_live/{}", hex::encode(_receipt_id)),
+            headers: Vec::new(),
+            body: Vec::new(),
+        },
+    );
+    assert_eq!(live.status_code, 200);
+    env.mock_canister_http_response(MockCanisterHttpResponse {
+        subnet_id: req.subnet_id,
+        request_id: req.request_id,
+        response: CanisterHttpResponse::CanisterHttpReply(CanisterHttpReply {
+            status: 200,
+            headers: Vec::new(),
+            body: live.body,
+        }),
+        additional_responses: Vec::new(),
+    });
+    tick_many(env, 5);
+    let (_, frozen, _) = cvdr_metrics(env, lui);
+    assert_eq!(frozen, base_frozen + 1, "frozen package must exist before INDEX capture");
+
+    // INDEX job: first attempt after ~3s backoff from the give-up anchor.
+    let read_state_req = find_index_read_state_outcall(env, lui);
+    // Mock a well-formed CBOR read_state response whose certificate is garbage — store-gate must
+    // reject (never insert). CBOR: `{ "certificate": h'DEADBEEF' }`
+    let reject_body = hex::decode("a16b636572746966696361746544deadbeef").unwrap();
+    env.mock_canister_http_response(MockCanisterHttpResponse {
+        subnet_id: read_state_req.subnet_id,
+        request_id: read_state_req.request_id,
+        response: CanisterHttpResponse::CanisterHttpReply(CanisterHttpReply {
+            status: 200,
+            headers: Vec::new(),
+            body: reject_body,
+        }),
+        additional_responses: Vec::new(),
+    });
+    tick_many(env, 5);
+    assert_eq!(
+        cvdr_index_evidence_count(env, lui),
+        evidence_before,
+        "invalid INDEX certificate must not be stored"
+    );
+
+    // Drain any further INDEX outcalls (shared env may have other pending receipts) so
+    // PocketIC does not stall on unmocked HTTP while we advance the give-up clock.
+    drain_index_read_state_with_reject(env, lui);
+
+    // Past the 24h give-up window: job must stop issuing read_state for this receipt.
+    env.advance_time(Duration::from_secs(25 * 60 * 60));
+    tick_many(env, 20);
+    let pending_read_state: Vec<_> = env
+        .get_canister_http()
+        .into_iter()
+        .filter(|r| r.url.contains("/read_state") && r.url.contains(&lui.to_text()))
+        .collect();
+    assert!(
+        pending_read_state.is_empty(),
+        "after 24h give-up, INDEX capture must not keep posting read_state (got {})",
+        pending_read_state.len()
+    );
+    assert_eq!(
+        cvdr_index_evidence_count(env, lui),
+        evidence_before,
+        "give-up leaves INDEX evidence UNAVAILABLE (count unchanged)"
+    );
+}
+
+/// INDEX capture: HTTP non-200 and a body without `certificate` must not store evidence;
+/// the job retries (another `read_state` appears) rather than inserting.
+#[test]
+fn index_evidence_capture_http_miss_retries_without_store() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv { env, canister_ids, .. } = wrapper.env();
+    let (user, user_auth) = register_user_and_include_auth(env, canister_ids);
+    let lui = user.local_user_index;
+    let evidence_before = cvdr_index_evidence_count(env, lui);
+    let (_, base_frozen, _) = cvdr_metrics(env, lui);
+
+    client::identity::happy_path::delete_user(env, &user_auth, canister_ids.identity);
+    tick_many(env, 10);
+
+    let (req, receipt_id, _, _) = find_servable_cvdr_live(env, lui);
+    let live = client::http_request(
+        env,
+        Principal::anonymous(),
+        lui,
+        &HttpRequest {
+            method: "GET".to_string(),
+            url: format!("/cvdr_live/{}", hex::encode(receipt_id)),
+            headers: Vec::new(),
+            body: Vec::new(),
+        },
+    );
+    assert_eq!(live.status_code, 200);
+    env.mock_canister_http_response(MockCanisterHttpResponse {
+        subnet_id: req.subnet_id,
+        request_id: req.request_id,
+        response: CanisterHttpResponse::CanisterHttpReply(CanisterHttpReply {
+            status: 200,
+            headers: Vec::new(),
+            body: live.body,
+        }),
+        additional_responses: Vec::new(),
+    });
+    tick_many(env, 5);
+    assert_eq!(cvdr_metrics(env, lui).1, base_frozen + 1);
+
+    // 1) Non-200 → parse/miss path, no store.
+    let r1 = find_index_read_state_outcall(env, lui);
+    env.mock_canister_http_response(MockCanisterHttpResponse {
+        subnet_id: r1.subnet_id,
+        request_id: r1.request_id,
+        response: CanisterHttpResponse::CanisterHttpReply(CanisterHttpReply {
+            status: 503,
+            headers: Vec::new(),
+            body: b"unavailable".to_vec(),
+        }),
+        additional_responses: Vec::new(),
+    });
+    tick_many(env, 5);
+    assert_eq!(cvdr_index_evidence_count(env, lui), evidence_before);
+
+    // 2) 200 but empty certificate blob → miss, no store.
+    let r2 = find_index_read_state_outcall(env, lui);
+    // CBOR: `{ "certificate": h'' }`
+    let empty_cert_body = hex::decode("a16b636572746966696361746540").unwrap();
+    env.mock_canister_http_response(MockCanisterHttpResponse {
+        subnet_id: r2.subnet_id,
+        request_id: r2.request_id,
+        response: CanisterHttpResponse::CanisterHttpReply(CanisterHttpReply {
+            status: 200,
+            headers: Vec::new(),
+            body: empty_cert_body,
+        }),
+        additional_responses: Vec::new(),
+    });
+    tick_many(env, 5);
+    assert_eq!(
+        cvdr_index_evidence_count(env, lui),
+        evidence_before,
+        "empty certificate must not store INDEX evidence"
+    );
+
+    // 3) Job retries: another read_state outcall must appear (backoff).
+    let _r3 = find_index_read_state_outcall(env, lui);
+    drain_index_read_state_with_reject(env, lui);
+    assert_eq!(cvdr_index_evidence_count(env, lui), evidence_before);
+}
+
+fn find_index_read_state_outcall(
+    env: &mut PocketIc,
+    local_user_index: CanisterId,
+) -> pocket_ic::common::rest::CanisterHttpRequest {
+    let lui_text = local_user_index.to_text();
+    for _ in 0..40 {
+        let candidates: Vec<_> = env
+            .get_canister_http()
+            .into_iter()
+            .filter(|r| r.url.contains("/read_state") && r.url.contains(&lui_text))
+            .collect();
+        if let Some(req) = candidates.into_iter().next() {
+            return req;
+        }
+        tick_many(env, 2);
+        env.advance_time(Duration::from_secs(3));
+    }
+    panic!("no INDEX /read_state outcall appeared for {lui_text}");
+}
+
+fn drain_index_read_state_with_reject(env: &mut PocketIc, local_user_index: CanisterId) {
+    let lui_text = local_user_index.to_text();
+    let reject_body = hex::decode("a16b636572746966696361746544deadbeef").unwrap();
+    for _ in 0..10 {
+        let pending: Vec<_> = env
+            .get_canister_http()
+            .into_iter()
+            .filter(|r| r.url.contains("/read_state") && r.url.contains(&lui_text))
+            .collect();
+        if pending.is_empty() {
+            return;
+        }
+        for req in pending {
+            env.mock_canister_http_response(MockCanisterHttpResponse {
+                subnet_id: req.subnet_id,
+                request_id: req.request_id,
+                response: CanisterHttpResponse::CanisterHttpReply(CanisterHttpReply {
+                    status: 200,
+                    headers: Vec::new(),
+                    body: reject_body.clone(),
+                }),
+                additional_responses: Vec::new(),
+            });
+        }
+        tick_many(env, 3);
+    }
 }
 
 /// Write the PocketIC end-to-end CVDR fixture for offline CVDR-Verify (V1–V3) to

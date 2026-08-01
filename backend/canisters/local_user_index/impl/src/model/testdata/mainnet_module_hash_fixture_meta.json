@@ -1,0 +1,8 @@
+{
+  "canister_id": "nq4qv-wqaaa-aaaaf-bhdgq-cai",
+  "path": ["/canister/<id>/module_hash", "/time"],
+  "source": "https://icp-api.io/api/v2/canister/nq4qv-wqaaa-aaaaf-bhdgq-cai/read_state",
+  "note": "Anonymous read_state certificate for OpenChat mainnet local_user_index. Use certificate /time as verify `now` (freshness is relative).",
+  "certificate_sha256_hex": "dd2b41ae743cd533eed799670f6cecac80576a430846e22a8fc06cf98b36d859",
+  "captured_at_wall": "2026-08-01"
+}
