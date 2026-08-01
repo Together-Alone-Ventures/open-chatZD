@@ -807,11 +807,17 @@ pub struct CvdrStore {
     drafts: StableBTreeMap<Principal, CvdrDraft, Memory>,
     #[serde(skip, default = "init_frozen")]
     frozen: FrozenPackageStore,
+    #[serde(skip, default = "init_index_evidence")]
+    index_evidence: crate::model::cvdr_index_evidence::IndexCodeIdentityStore,
 }
 
 impl Default for CvdrStore {
     fn default() -> Self {
-        CvdrStore { drafts: init_drafts(), frozen: init_frozen() }
+        CvdrStore {
+            drafts: init_drafts(),
+            frozen: init_frozen(),
+            index_evidence: init_index_evidence(),
+        }
     }
 }
 
@@ -820,6 +826,9 @@ fn init_drafts() -> StableBTreeMap<Principal, CvdrDraft, Memory> {
 }
 fn init_frozen() -> FrozenPackageStore {
     FrozenPackageStore::new()
+}
+fn init_index_evidence() -> crate::model::cvdr_index_evidence::IndexCodeIdentityStore {
+    crate::model::cvdr_index_evidence::IndexCodeIdentityStore::new()
 }
 
 impl CvdrStore {
@@ -872,6 +881,29 @@ impl CvdrStore {
     /// `(receipt_id, receipt_hash)` for every frozen package — for the post_upgrade tree rebuild.
     pub fn frozen_receipt_leaves(&self) -> Vec<(Hash, Hash)> {
         self.frozen.receipt_leaves()
+    }
+
+    pub fn insert_index_evidence(
+        &mut self,
+        receipt_id: Hash,
+        evidence: crate::model::cvdr_index_evidence::IndexCodeIdentityEvidence,
+    ) -> Result<(), crate::model::cvdr_index_evidence::IndexEvidenceInsertError> {
+        self.index_evidence.insert(receipt_id, evidence)
+    }
+
+    pub fn get_index_evidence(
+        &self,
+        receipt_id: &Hash,
+    ) -> Option<crate::model::cvdr_index_evidence::IndexCodeIdentityEvidence> {
+        self.index_evidence.get(receipt_id)
+    }
+
+    pub fn has_index_evidence(&self, receipt_id: &Hash) -> bool {
+        self.index_evidence.contains(receipt_id)
+    }
+
+    pub fn index_evidence_count(&self) -> u64 {
+        self.index_evidence.count()
     }
 
     // ---- awaiting-certificate drafts (tree design: many may be in-flight; no single slot) ----
@@ -1137,6 +1169,30 @@ mod tests {
         assert_eq!(s.frozen_package_count(), 1);
         // rebuild source for post_upgrade: (receipt_id, receipt_hash)
         assert_eq!(s.frozen_receipt_leaves(), vec![(receipt_id, [4u8; 32])]);
+    }
+
+    #[test]
+    fn index_evidence_store_is_insert_only_via_cvdr_store() {
+        use crate::model::cvdr_index_evidence::{IndexCodeIdentityEvidence, IndexEvidenceInsertError};
+
+        let mut s = CvdrStore::default();
+        let receipt_id = [42u8; 32];
+        let evidence = IndexCodeIdentityEvidence {
+            certificate_bytes: vec![0xaa, 0xbb],
+        };
+        assert_eq!(s.insert_index_evidence(receipt_id, evidence.clone()), Ok(()));
+        assert!(s.has_index_evidence(&receipt_id));
+        assert_eq!(s.index_evidence_count(), 1);
+        assert_eq!(
+            s.insert_index_evidence(
+                receipt_id,
+                IndexCodeIdentityEvidence {
+                    certificate_bytes: vec![0xff],
+                }
+            ),
+            Err(IndexEvidenceInsertError::AlreadyExists)
+        );
+        assert_eq!(s.get_index_evidence(&receipt_id), Some(evidence));
     }
 
     // ---- Slice 2: §6 store-gate verification, proven with REAL mainnet A1 certificate bytes ----

@@ -519,6 +519,8 @@ lookup):
 - **Do not** store only an extracted Module Hash and certificate time.
 - Certificate `/time` may be derived by the verifier from the stored certificate; it is not a
   substitute for the full evidence blob.
+- **MemoryIds (pinned beside `memory.rs`):** 12 = evidence StableLog index, 13 = evidence
+  StableLog data, 14 = primary `receipt_id → log offset`. Insert-only; first valid wins.
 
 ### 14.3 Store and serving invariants
 
