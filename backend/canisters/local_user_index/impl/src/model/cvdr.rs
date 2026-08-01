@@ -377,14 +377,23 @@ pub fn verify_index_module_hash_evidence(
         _ => return Err(IndexEvidenceRejectReason::Certificate(CertRejectReason::TimeMissing)),
     };
     if let Some(commitment_time) = commitment_certificate_time_ns {
-        if cert_time_ns < commitment_time {
-            return Err(IndexEvidenceRejectReason::CertTimeBeforeCommitment);
-        }
+        check_index_cert_not_before_commitment(cert_time_ns, commitment_time)?;
     }
     Ok(VerifiedIndexModuleHash {
         module_hash,
         cert_time_ns,
     })
+}
+
+pub(crate) fn check_index_cert_not_before_commitment(
+    cert_time_ns: u64,
+    commitment_certificate_time_ns: u64,
+) -> Result<(), IndexEvidenceRejectReason> {
+    if cert_time_ns < commitment_certificate_time_ns {
+        Err(IndexEvidenceRejectReason::CertTimeBeforeCommitment)
+    } else {
+        Ok(())
+    }
 }
 
 /// Distinct reason the store-gate ([`verify_finalization_package`]) REJECTED a submission (spec §7
@@ -1027,6 +1036,15 @@ impl CvdrStore {
     /// [`find_draft_by_receipt_id`]; kept as a distinct name so the backstop reads intent-first.
     pub fn find_finalizable_draft_by_receipt_id(&self, receipt_id: &Hash) -> Option<CvdrDraft> {
         self.find_draft_by_receipt_id(receipt_id)
+    }
+
+    /// Any draft (including captured/scrubbed) matching `receipt_id`, for timing anchors.
+    pub fn receipt_committed_at_ns(&self, receipt_id: &Hash) -> Option<u64> {
+        self.drafts
+            .iter()
+            .map(|e| e.value())
+            .find(|d| &d.receipt_id == receipt_id)
+            .map(|d| d.receipt_committed_at)
     }
 
     /// Count of receipts that reached a terminal self-finalization state, for metrics.

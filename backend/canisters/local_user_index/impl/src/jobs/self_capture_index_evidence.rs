@@ -35,6 +35,7 @@ const RETRY_RESPONSE_BYTES: u64 = 64 * 1024;
 const GIVE_UP_MS: u64 = 24 * 60 * 60 * 1_000;
 const NS_PER_MS: u64 = 1_000_000;
 const INGRESS_EXPIRY_NS: u64 = 5 * 60 * 1_000_000_000;
+const MAX_CONCURRENT_CAPTURES: usize = 4;
 
 fn backoff_ms(attempt: u32) -> u64 {
     match attempt {
@@ -44,6 +45,12 @@ fn backoff_ms(attempt: u32) -> u64 {
         3 => 45 * SECOND_IN_MS,
         _ => 120 * SECOND_IN_MS,
     }
+}
+
+/// Spec §5 completion window is anchored on `receipt_committed_at`; fall back to frozen
+/// commitment certificate time when the draft is gone.
+pub(crate) fn give_up_anchor_ns(receipt_committed_at_ns: Option<u64>, frozen_certificate_time_ns: u64) -> u64 {
+    receipt_committed_at_ns.unwrap_or(frozen_certificate_time_ns)
 }
 
 pub(crate) fn start_if_required(state: &RuntimeState) -> bool {
@@ -67,41 +74,42 @@ fn run_sweep() {
             let Some(pkg) = state.data.cvdr.get_frozen_package(&receipt_id) else {
                 continue;
             };
-            let commitment_time = pkg.certificate_time;
-            let age_from_commitment_ms = now_ns.saturating_sub(commitment_time) / NS_PER_MS;
-            if age_from_commitment_ms > GIVE_UP_MS {
+            let receipt_committed_at = state.data.cvdr.receipt_committed_at_ns(&receipt_id);
+            let anchor_ns = give_up_anchor_ns(receipt_committed_at, pkg.certificate_time);
+            let age_from_anchor_ms = now_ns.saturating_sub(anchor_ns) / NS_PER_MS;
+            if age_from_anchor_ms > GIVE_UP_MS {
                 ATTEMPTS.with(|m| {
                     m.borrow_mut().remove(&receipt_id);
                 });
                 warn!(
                     event = "cvdr_index_evidence_give_up",
                     receipt = %hex::encode(receipt_id),
-                    "INDEX evidence not captured within 24h of commitment cert; leaving UNAVAILABLE"
+                    "INDEX evidence not captured within 24h of receipt_committed_at; leaving UNAVAILABLE"
                 );
                 continue;
             }
             let attempt_state = ATTEMPTS.with(|m| *m.borrow().get(&receipt_id).unwrap_or(&AttemptState::default()));
             let due_at_ns = if attempt_state.attempt == 0 {
-                commitment_time.saturating_add(backoff_ms(0) * NS_PER_MS)
+                anchor_ns.saturating_add(backoff_ms(0) * NS_PER_MS)
             } else {
                 attempt_state
                     .last_attempt_at_ns
                     .saturating_add(backoff_ms(attempt_state.attempt) * NS_PER_MS)
             };
             if now_ns >= due_at_ns {
-                ATTEMPTS.with(|m| {
-                    let mut map = m.borrow_mut();
-                    let entry = map.entry(receipt_id).or_default();
-                    entry.attempt = entry.attempt.saturating_add(1);
-                    entry.last_attempt_at_ns = now_ns;
-                });
-                due.push((receipt_id, commitment_time));
+                due.push((receipt_id, pkg.certificate_time));
             }
         }
         due
     });
 
-    for (receipt_id, commitment_time) in due {
+    for (receipt_id, commitment_time) in due.into_iter().take(MAX_CONCURRENT_CAPTURES) {
+        ATTEMPTS.with(|m| {
+            let mut map = m.borrow_mut();
+            let entry = map.entry(receipt_id).or_default();
+            entry.attempt = entry.attempt.saturating_add(1);
+            entry.last_attempt_at_ns = now_ns;
+        });
         ic_cdk::futures::spawn(attempt_capture(receipt_id, commitment_time));
     }
 
@@ -166,7 +174,6 @@ async fn attempt_capture(receipt_id: Hash, commitment_certificate_time_ns: u64) 
                     reason = reason.as_str(),
                     "INDEX evidence failed store-gate; discarded"
                 );
-                let _ = reason;
             }
         }
     });
@@ -249,18 +256,18 @@ fn parse_read_state_certificate(body: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::cvdr::{check_index_cert_not_before_commitment, IndexEvidenceRejectReason};
 
     #[test]
     fn anonymous_read_state_request_encodes_module_hash_path() {
         let id = Principal::from_text("aaaaa-aa").unwrap();
         let bytes = encode_anonymous_module_hash_read_state(id, 1_000_000).unwrap();
         assert!(bytes.len() > 16);
-        // Self-describe CBOR tag 55799
         assert_eq!(&bytes[..3], &[0xd9, 0xd9, 0xf7]);
-        let as_text = String::from_utf8_lossy(&bytes);
-        assert!(as_text.contains("module_hash") || bytes.windows(11).any(|w| w == b"module_hash"));
+        assert!(bytes.windows(11).any(|w| w == b"module_hash"));
         assert!(bytes.windows(4).any(|w| w == b"time"));
         assert!(bytes.windows(8).any(|w| w == b"canister"));
+        assert!(bytes.windows(10).any(|w| w == b"read_state"));
     }
 
     #[test]
@@ -275,5 +282,75 @@ mod tests {
         ))
         .unwrap();
         assert!(parse_read_state_certificate(&body).is_none());
+    }
+
+    #[test]
+    fn parse_read_state_accepts_non_empty_certificate_blob() {
+        let body = serde_cbor::to_vec(&serde_cbor::Value::Map(
+            [(
+                serde_cbor::Value::Text("certificate".into()),
+                serde_cbor::Value::Bytes(vec![0xca, 0xfe]),
+            )]
+            .into_iter()
+            .collect(),
+        ))
+        .unwrap();
+        assert_eq!(parse_read_state_certificate(&body), Some(vec![0xca, 0xfe]));
+    }
+
+    #[test]
+    fn give_up_prefers_receipt_committed_at() {
+        assert_eq!(give_up_anchor_ns(Some(100), 999), 100);
+        assert_eq!(give_up_anchor_ns(None, 999), 999);
+    }
+
+    #[test]
+    fn cert_time_before_commitment_is_rejected() {
+        assert_eq!(
+            check_index_cert_not_before_commitment(10, 20),
+            Err(IndexEvidenceRejectReason::CertTimeBeforeCommitment)
+        );
+        assert_eq!(check_index_cert_not_before_commitment(20, 20), Ok(()));
+        assert_eq!(check_index_cert_not_before_commitment(21, 20), Ok(()));
+    }
+
+    #[test]
+    fn concurrent_inserts_keep_first_evidence() {
+        use crate::model::cvdr_index_evidence::{IndexCodeIdentityEvidence, IndexEvidenceInsertError};
+        use crate::model::cvdr::{FrozenCvdrPackage, record_id_for, receipt_id_for, CvdrStore};
+        use candid::Principal;
+
+        let mut s = CvdrStore::default();
+        let user = Principal::from_slice(&[9u8; 29]);
+        let record_id = record_id_for(user.into());
+        let receipt_id = receipt_id_for(&record_id, 1, &[1u8; 32]);
+        let pkg = FrozenCvdrPackage {
+            receipt_body: vec![1],
+            receipt_hash: [2u8; 32],
+            tree_root: [3u8; 32],
+            witness_bytes: vec![4],
+            certificate_bytes: vec![5],
+            certificate_time: 100,
+        };
+        assert_eq!(s.insert_frozen_package(receipt_id, record_id, 1, pkg), Ok(()));
+        assert_eq!(
+            s.insert_index_evidence(
+                receipt_id,
+                IndexCodeIdentityEvidence {
+                    certificate_bytes: vec![0xaa],
+                }
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            s.insert_index_evidence(
+                receipt_id,
+                IndexCodeIdentityEvidence {
+                    certificate_bytes: vec![0xbb],
+                }
+            ),
+            Err(IndexEvidenceInsertError::AlreadyExists)
+        );
+        assert_eq!(s.get_index_evidence(&receipt_id).unwrap().certificate_bytes, vec![0xaa]);
     }
 }
