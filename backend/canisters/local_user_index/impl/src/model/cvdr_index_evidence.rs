@@ -64,6 +64,7 @@ pub enum IndexEvidenceInsertError {
     AlreadyExists,
     LogFull,
     EmptyCertificate,
+    FrozenPackageMissing,
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]

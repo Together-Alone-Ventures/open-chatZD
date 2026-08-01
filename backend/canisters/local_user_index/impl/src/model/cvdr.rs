@@ -888,6 +888,9 @@ impl CvdrStore {
         receipt_id: Hash,
         evidence: crate::model::cvdr_index_evidence::IndexCodeIdentityEvidence,
     ) -> Result<(), crate::model::cvdr_index_evidence::IndexEvidenceInsertError> {
+        if self.frozen.get_by_receipt_id(&receipt_id).is_none() {
+            return Err(crate::model::cvdr_index_evidence::IndexEvidenceInsertError::FrozenPackageMissing);
+        }
         self.index_evidence.insert(receipt_id, evidence)
     }
 
@@ -1176,10 +1179,25 @@ mod tests {
         use crate::model::cvdr_index_evidence::{IndexCodeIdentityEvidence, IndexEvidenceInsertError};
 
         let mut s = CvdrStore::default();
-        let receipt_id = [42u8; 32];
+        let record_id = record_id_for(p(1).into());
+        let receipt_id = receipt_id_for(&record_id, 1, &[3u8; 32]);
         let evidence = IndexCodeIdentityEvidence {
             certificate_bytes: vec![0xaa, 0xbb],
         };
+        assert_eq!(
+            s.insert_index_evidence(receipt_id, evidence.clone()),
+            Err(IndexEvidenceInsertError::FrozenPackageMissing)
+        );
+
+        let pkg = FrozenCvdrPackage {
+            receipt_body: vec![1, 2, 3],
+            receipt_hash: [4u8; 32],
+            tree_root: [5u8; 32],
+            witness_bytes: vec![6, 7],
+            certificate_bytes: vec![8, 9],
+            certificate_time: 1234,
+        };
+        assert_eq!(s.insert_frozen_package(receipt_id, record_id, 1, pkg), Ok(()));
         assert_eq!(s.insert_index_evidence(receipt_id, evidence.clone()), Ok(()));
         assert!(s.has_index_evidence(&receipt_id));
         assert_eq!(s.index_evidence_count(), 1);
