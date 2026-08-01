@@ -5,9 +5,10 @@ Implementation Plan v4 (ADOPTED) + Finalization Baseline v1. On conflict, Master
 **Base:** fork commit `8c8667ac1`. Everything not listed here stays as committed.
 **Authoritative once committed into this repo** (invariants-in-source rule).
 
-**M1 close-out (2026-07-31, branch `antek`):** Gate 4 rulings from the Completion Handover Pack
-v2.0 are folded below (§5 timing, §12 INDEX attestation, §13 scheduler, §14 portable-package
-schema **proposal**). §14 awaits G/Stef countersignature before M4 implementation.
+**M1 close-out (2026-07-31 / 2026-08-01, branch `antek`):** Gate 4 rulings from the Completion
+Handover Pack v2.0 are folded below (§5 timing, §12 INDEX attestation, §13 scheduler). §14
+**PortablePackageV2** placement is **approved with edits** (Stef countersign 2026-08-01). M4 may
+proceed subject to §14–§19 as written here.
 
 ---
 
@@ -422,21 +423,40 @@ fallback); the default path is that the canonical surfaces suffice.
 
 ## 12. Code identity — INDEX Module Hash (G4-R1)
 
-**Ruling:** V1 attestation target is **INDEX only**. The earlier BOTH design (pre-uninstall
-target-user `read_state` certificate) is **superseded** and must not be implemented. Reintroducing
-BOTH or any target-user certificate is a STOP item requiring a new explicit G ruling.
+**Ruling:** attestation target is **INDEX only**. The earlier BOTH design (pre-uninstall
+target-user `read_state` certificate) and associated mechanism memo are **superseded** and must
+not be implemented. Reintroducing BOTH or any target-user certificate is a STOP item requiring a
+new explicit G ruling.
 
 | Role | Rule |
 |---|---|
 | Code-identity target | `local_user_index` only |
-| Required evidence | Separate subnet **system-state** certificate over `/canister/<local_user_index>/module_hash` |
-| Binding | Extracted module hash **MUST equal** the `h_index` witness material already bound in `RECEIPT_BODY_V1` (via draft-captured `executor_module_hash`) |
+| Required evidence | Complete portable subnet **system-state** `read_state` evidence for path `/canister/<local_user_index>/module_hash` (see §14) |
+| Comparison target | Extracted certified Module Hash is compared offline to captured `h_index` material already bound in `RECEIPT_BODY_V1` (via draft-captured `executor_module_hash`). The certified value **must never replace** captured `h_index`. |
 | Not archival | `canister_status.module_hash` alone is **not** the archival certificate |
-| Target user canister | Passive: uninstalled; `h_user_pre` remains an **index-recorded** management-canister observation and must be RTS-qualified as such — no archived target certificate in V1 |
+| Target user canister | Passive: uninstalled; `h_user_pre` remains an **index-recorded** management-canister observation and must be RTS-qualified as such — no archived target certificate |
 | RECEIPT_BODY_V1 | **Unchanged** — no value from the INDEX Module Hash certificate enters the receipt-body preimage |
 
-Capture ordering (with §5): INDEX Module Hash certificate time must not predate the commitment
-certificate time; apply the 1h delay and 24h completion rules above.
+### Supported claim (OpenChatZD-scoped — do not overclaim)
+
+**Do not** state that the certificate by itself “proves which INDEX code ran when the receipt was
+sealed.”
+
+**Supported claim:** OpenChatZD can carry subnet-certified evidence of the Module Hash installed
+on the INDEX canister at the INDEX certificate time and compare it with the `h_index` captured in
+the receipt. Because OpenChatZD currently has **no demonstrated upgrade-continuity interlock** on
+`local_user_index`, matching endpoint hashes do **not** prove uninterrupted execution by that
+module throughout the sealing window.
+
+This claim must appear (same wording) in: this build spec, the OpenChatZD RTS, CVDR-Verify
+OpenChatZD output/docs, and the shared claims register as an **OpenChatZD-scoped** entry naming
+the missing upgrade interlock as the reason. Do **not** weaken the canonical MKTd02/Leaf claim
+(whose continuity control has been demonstrated). Do **not** assign either answer to MKTd03 until
+its Tree analogue has been tested.
+
+Capture ordering (with §5): INDEX certificate time must not predate the commitment certificate
+time; apply the 1h delay and 24h completion rules. Timing is an orthogonal axis to the V3
+code-identity outcomes (§17).
 
 ## 13. Deletion-job scheduler (G4-R2)
 
@@ -449,37 +469,99 @@ After each deletion-job attempt:
 - One-successor scheduling only — no recursive queue drain and no busy loop.
 - Regression: K successful queued deletions must not take approximately `(K−1) × 30s`.
 
-## 14. Portable package schema — INDEX Module Hash field (**PROPOSED — countersign before M4**)
+## 14. PortablePackageV2 — INDEX code-identity evidence (**APPROVED with edits — Stef 2026-08-01**)
 
 **Constraint:** preserve existing `FrozenCvdrPackage` / FrozenWire **six-field** bytes and
-byte-equality gates (§4, §11.3). Do not mutate `RECEIPT_BODY_V1`.
+byte-equality gates (§4, §11.3). Do not mutate `RECEIPT_BODY_V1`. INDEX code-identity evidence
+remains **outside** the frozen commitment evidence.
 
-**Proposal (smallest additive, versioned):**
-
-1. **Stable storage of the frozen commitment package** remains exactly §4 (`FrozenCvdrPackage`
-   fields 1–6). No seventh field inside that struct.
-2. **New parallel durable evidence** (new MemoryId(s), insert-only, keyed by `receipt_id`):
-   - `index_module_hash_certificate_bytes: Vec<u8>` — subnet system-state certificate CBOR
-   - `index_module_hash_certificate_time: u64` — nanoseconds from that certificate `/time`
-3. **Portable serving / download schema** becomes versioned:
+### 14.1 Outer package (normative)
 
 ```text
-schema  = "openchatzd.cvdr.package"
+name    = PortablePackageV2
+schema  = "openchatzd.cvdr.portable_package"
 version = 2
-frozen  = FrozenWire          // canonical serialization identical to today’s Available body
-index_module_hash_certificate_hex = lowercase hex of index_module_hash_certificate_bytes
-index_module_hash_certificate_time_ns = u64
+
+PortablePackageV2 {
+  frozen:                          exact canonical FrozenWire bytes (§4 / §11.3)
+  index_code_identity_evidence:    complete portable read_state evidence (§14.2)
+}
 ```
 
-4. **HTTP/Candid Available** serves the version-2 portable object. Verifiers that only
-   understand FrozenWire may still hash/verify the nested `frozen` object in isolation.
-5. **CVDR-Verify v0.6.1+** gains an OpenChatZD INDEX Module Hash check: verify BLS /
-   delegation / canister-range / path `/canister/<index>/module_hash` / value equals
-   `h_index` binding / timing rules — without weakening offline authority for the frozen part.
+- The nested `frozen` value **must** be the exact canonical FrozenWire serialization already
+  specified. Never a decoded and independently re-encoded approximation.
+- Pin one canonical V2 encoding. **Stored bytes, HTTP Available bytes, and Candid-returned
+  package bytes must agree** (byte-equality across all three).
+- Keying durable storage by `receipt_id` is acceptable for lookup. `receipt_id` is **not** the
+  cryptographic binding: the verifier must independently recompute and validate the receipt ID
+  from FrozenWire (and perform the checks in §14.4).
 
-**Status:** PROPOSED by Antoine (M1). **Do not implement M4 until G/Stef countersign this §14
-placement (or return a revised placement).** Decision-request:
-`documents/openChat/OpenChatZD_M1_Decision_Request_Index_Module_Hash.md`.
+### 14.2 Parallel insert-only store (INDEX evidence)
+
+Stable storage of the frozen commitment package remains exactly §4 (`FrozenCvdrPackage` fields
+1–6). No seventh field inside that struct.
+
+New parallel durable evidence (new MemoryId(s), **insert-only**, keyed by `receipt_id` for
+lookup):
+
+- Store **everything** an offline verifier needs to validate the system-state response for the
+  exact path `/canister/<local_user_index>/module_hash`, including the certificate and the
+  certified tree/witness material for that path.
+- **Do not** store only an extracted Module Hash and certificate time.
+- Certificate `/time` may be derived by the verifier from the stored certificate; it is not a
+  substitute for the full evidence blob.
+
+### 14.3 Store and serving invariants
+
+1. **Store only fully verified evidence** (same hard security rule family as §6: BLS → NNS
+   delegation → canister-range coverage → exact path → value proof). A response failing
+   verification is discarded and retried — never stored.
+2. **First valid evidence wins** — no overwrite, no certificate substitution.
+3. **Available (HTTP/Candid)** serves `PortablePackageV2` when INDEX evidence has been stored;
+   until then, Pending/FrozenWire-only behaviour applies (§14.5).
+4. Public surfaces never emit verifier V3 verdicts; offline CVDR-Verify remains the authority.
+
+### 14.4 Verifier obligations (offline)
+
+Independently of storage keying, CVDR-Verify (OpenChatZD path) must:
+
+1. Recompute and validate the receipt ID from FrozenWire.
+2. Verify the BLS certificate, NNS delegation, and canister-range coverage.
+3. Verify the exact path `/canister/<local_user_index>/module_hash`.
+4. Extract the certified Module Hash.
+5. Compare it with the immutable `h_index` captured in the receipt (never replace `h_index`).
+6. Apply the approved timing rules (§5 / §17) as an orthogonal qualifier.
+7. Emit the V3 code-identity outcomes (§17). Mismatch is **not** absence and must not be
+   reported as deployer-declared identity.
+
+FrozenWire commitment validity remains **independent** of INDEX code-identity outcomes.
+
+### 14.5 FrozenWire-only / legacy behaviour
+
+A FrozenWire receipt (or a PortablePackageV2 whose INDEX evidence is missing) can retain its
+commitment verdict but **cannot** receive the new subnet-attested INDEX result without the
+additional evidence. Verifier output must make that absence explicit
+(`INDEX_ATTESTATION_UNAVAILABLE`), not imply an INDEX match.
+
+### 14.6 Migration inventory (FrozenWire packages)
+
+Confirm whether any **mainnet OpenChatZD** FrozenWire packages already exist before Available
+v2 cutover. This is migration inventory only and does **not** reopen the frozen-format ruling.
+
+**Working inventory (Antoine, 2026-08-01):** no known OpenChatZD-product mainnet deployments of
+the §11 FrozenWire Available path with stored packages under this fork’s CVDR delivery leg
+(delivery/INDEX evidence not yet shipped). Upstream OpenChat mainnet is out of scope. Reconfirm
+with Stef/G at M4/M5 cutover if any non-prod shared canisters already hold FrozenWire bytes.
+
+### 14.7 Leaf / OpenChatZD package-shape divergence (governed)
+
+OpenChatZD uses a **versioned outer package** (`PortablePackageV2`), while canonical Leaf places
+module-hash evidence differently. This is a deliberate governed divergence requiring permanent
+support for: two verifier input shapes; two conformance-corpus paths; and configuration-specific
+documentation. Do not silently unify shapes.
+
+**Status:** APPROVED with edits (Stef). Implement INDEX evidence capture, parallel insert-only
+storage, `PortablePackageV2` serving, and CVDR-Verify wiring under §14–§19.
 
 ## 15. HTTP Pending status (G4-R4)
 
@@ -491,8 +573,70 @@ pending body (no package fields). Until that erratum exists, implementors target
 ## 16. Terminology and identity notes (G4-R7 / G4-R8)
 
 - Wording: “versioned fixed-width tag-concatenation” (not CBOR) for `RECEIPT_BODY_V1`.
-- Memory slots remain as §4 (ids 8–11 for frozen packages); INDEX Module Hash evidence uses
-  **new** MemoryIds when §14 is countersigned — document beside `memory.rs` at implementation.
+- Memory slots remain as §4 (ids 8–11 for frozen packages); INDEX code-identity evidence uses
+  **new** MemoryIds — document beside `memory.rs` at implementation.
 - `record_id_for(user_id)` remains caller-independent; direct and mediated callers must produce
   identical bytes (A4 closed — preserve and regression-test).
-- Public surfaces must not claim `VerifiedFinal` / `LateFinalized`; those are verifier results.
+- Public surfaces must not claim `VerifiedFinal` / `LateFinalized` / V3 INDEX outcomes; those are
+  verifier results.
+
+## 17. V3 code-identity outcomes and timing axis
+
+Under the current renumbering these are **V3** outcomes; **V3-A is retired**.
+
+### 17.1 Code-identity outcomes (evidence validity + hash relationship)
+
+| Outcome | Meaning |
+|---|---|
+| `INDEX_HASH_MATCH_AT_CERT_TIME` | Valid INDEX evidence and certified value equals captured `h_index` |
+| `INDEX_HASH_MISMATCH` | Valid INDEX evidence **positively contradicts** captured `h_index` |
+| `INDEX_ATTESTATION_UNAVAILABLE` | Required evidence was not obtained |
+| `INDEX_ATTESTATION_INVALID` | Certificate, delegation, path, canister range, or value proof is invalid |
+
+FrozenWire commitment validity remains independent of these outcomes. The certified value must
+never replace captured `h_index`. Mismatch is not absence and must not be reported as
+deployer-declared identity.
+
+### 17.2 Timing qualifier (orthogonal)
+
+The four outcomes above describe evidence validity and hash relationship. Each result also
+carries the applicable timing qualifier:
+
+- **routine** — within the one-hour attestation-delay threshold (§5);
+- **`DELAY_EXCEEDED`** — valid evidence after one hour but within the 24-hour completion window;
+- **outside / late-path** — under existing expiry / late-finalization rules beyond the permitted
+  completion window.
+
+A late matching certificate is therefore **not** silently reported as an unqualified match.
+
+## 18. Upgrade continuity interlock — not assumed
+
+Current `local_user_index` source does **not** block upgrades while INDEX evidence is pending; it
+deliberately persists and resumes in-flight drafts across upgrades. Agreement between captured
+and later certified hashes also cannot prove continuity because an A → B → A upgrade sequence can
+produce matching endpoints.
+
+A continuity interlock is **neither part of this approval nor presumed future work**. On a shared
+canister following upstream OpenChat release cadence, such an interlock may prove operationally
+unacceptable.
+
+Should one ever be proposed, it requires a **separate architecture ruling** covering:
+
+- enforcement from before `h_index` capture through evidence capture;
+- the actual controller / deployment upgrade path;
+- durability across restart;
+- multiple pending receipts and liveness consequences; and
+- adversarial upgrade-window testing.
+
+Until such a mechanism is approved and demonstrated, OpenChatZD remains limited to endpoint
+match/mismatch plus timing — **not** proof of uninterrupted code execution.
+
+## 19. Propagation checklist (claims / RTS / verifier)
+
+When implementing M4+, keep these in sync with §12 / §14 / §17 / §18:
+
+1. OpenChatZD RTS — OpenChatZD-scoped residual-trust entry (missing upgrade interlock).
+2. Shared claims register — OpenChatZD-scoped entry only; do not weaken MKTd02/Leaf.
+3. CVDR-Verify OpenChatZD output strings and documentation — V3 outcomes + timing qualifiers;
+   correct claim wording; support both Leaf and `PortablePackageV2` input shapes (§14.7).
+4. This build spec remains authoritative for OpenChatZD wire/store rules.
