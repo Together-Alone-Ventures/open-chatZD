@@ -207,28 +207,22 @@ Retain the committed full-BLS verification path here. Accept a submission ONLY i
 7. no overwrite of an existing finalized package;
 8. a late package can only produce `LateFinalized`, never `VerifiedFinal`.
 
-## 8. Non-negotiable pre-build rule (G) — RESOLVED: GATING FOUND, split is ACTIVE work
+## 8. Non-negotiable pre-build rule (G) — **SUPERSEDED** (historical)
+
+> **Normative today:** §8b + `jobs/delete_users.rs`. OpenChat-native cleanup runs in the
+> delete job after uninstall + receipt publish, **independently of certificate capture**.
+> `finalize_cvdr` / self-finalization are CVDR-only. Do **not** re-gate user deletion on
+> certificate capture.
+
+The text below is retained as historical evidence of the pre-split design at `8c8667ac1`
+and must not be followed by implementors:
 
 D Check 1b + CC grounding (from source at `8c8667ac1`): **all** OpenChat-native cleanup
-(global/local user-mapping removal + membership-removal notifications) lives in
-`complete_deletion` (in `jobs/delete_users.rs`), which is invoked **only** from
-`finalize_cvdr` after certificate capture; the DeleteUser job itself does no cleanup
-(its `ProcessOutcome::AwaitingFinalizer => {}` arm). Cite symbols, not line numbers —
-earlier line refs proved unreliable. This is the old design's correctness hold and
-violates the adopted baseline.
-
-**CC must split it:** move the `complete_deletion` cleanup into the delete-job path so it
-executes after `uninstall_code` + post-commitments and **independently of certificate
-capture** — never from the finalization path. `finalize_cvdr` (backstop) and the
-self-finalization continuation become CVDR-only. **Rename** `ProcessOutcome::AwaitingFinalizer`
-(there is no finalizer) to align with `DraftStage::AwaitingCertificate`; update the
-module-contract doc comments to the new baseline. Exact ordering relative to tree insert
-is CC's choice within the rule; the receipt's claim stays "targets captured; notification
-attempted or queued" (never "confirmed erased").
-
-(History note: an earlier D check claimed the symbol `complete_deletion` was absent at
-this commit — retracted; it was run without access to the actual tree. Verdicts must
-state which tree/commit was read.)
+(global/local user-mapping removal + membership-removal notifications) lived in
+`complete_deletion` (in `jobs/delete_users.rs`), which was invoked **only** from
+`finalize_cvdr` after certificate capture; the DeleteUser job itself did no cleanup
+(its `ProcessOutcome::AwaitingFinalizer => {}` arm). That old design violated the adopted
+baseline and was split per §8b.
 
 ## 8b. Slice-1→3 resolution (Ruling B — scope of "existing tests pass")
 
@@ -291,10 +285,16 @@ must not depend on authenticated frontend or candid access.
 
 | State | Condition (from durable state) | HTTP | Candid variant | Body |
 |---|---|---|---|---|
-| **Available** | Frozen package stored for this `receipt_id` | `200` | `Available(FrozenWire)` | The stored FrozenWire package, byte-for-byte (11.3) |
+| **Available** (commitment-only) | Frozen package stored; INDEX code-identity evidence **not** stored | `200` | `Available(FrozenWire)` | Stored FrozenWire, byte-for-byte (11.3 Gate A). Commitment verifiable; INDEX result is `INDEX_ATTESTATION_UNAVAILABLE` (§14.5) |
+| **Available** (`PortablePackageV2`) | Frozen package stored **and** INDEX evidence stored | `200` | `Available(PortablePackageV2)` | Canonical `PortablePackageV2` bytes (11.3 Gate B / §14). Nested `frozen` == Gate A FrozenWire bytes |
 | **Pending** | Draft exists for this `receipt_id`; no frozen package yet | `202` | `Pending(PendingInfo)` | Minimal JSON: `{"schema":"openchatzd.cvdr.status","version":1,"status":"pending","retry_after_secs":N}` |
 | **Unknown** | No draft and no package for this `receipt_id` (or malformed id) | `404` (`400` if malformed) | `NotFound` | Minimal JSON error body; constant-shape, no detail |
 | **Scrubbed-unavailable** | Applies to sensitive reveal material only, never to the frozen package — see 11.4 | `404` on any route that would expose reveal data | n/a (no candid surface serves reveal data) | Same constant-shape 404 as Unknown |
+
+**Erratum (Stef 2026-08-01):** Available is **not** blocked on INDEX evidence. FrozenWire-only
+Available retains the commitment path. INDEX subnet-attested results require the additional
+evidence and are served as `PortablePackageV2` when that evidence is stored. Public surfaces
+still never emit verifier V3 verdicts.
 
 Notes:
 
@@ -332,22 +332,31 @@ Notes:
 
 ### 11.3 Byte-for-byte serving invariant (acceptance test)
 
-The Available body is the stored frozen package canonically serialized
-to the portable schema (FrozenWire, `package.rs`), served verbatim:
+Two gates; both must pass for their respective Available shapes.
+
+**Gate A — FrozenWire (commitment package):**
 
 ```
-SHA-256(stored package, canonical FrozenWire serialization)
-  == SHA-256(HTTP 200 response body bytes)
-  == SHA-256(candid Available payload re-serialized)
+SHA-256(stored FrozenWire, canonical serialization)
+  == SHA-256(HTTP 200 FrozenWire body)
+  == SHA-256(candid Available(FrozenWire) payload re-serialized)
 ```
 
-stable across repeated fetches. The package is never re-derived
-from draft/source state, re-projected into an old API shape, or
-enriched inside the package bytes; canonical serialization of the
-stored FrozenWire object is allowed and required. A fresh read-time certificate is
-an OPTIONAL extra delivered outside the package bytes (e.g. a separate
-header/field), never merged into them. This equality is the Definition
-of Done gate for the delivery leg (per Delivery-Leg Preconditions v1).
+**Gate B — PortablePackageV2 (when INDEX evidence is stored):**
+
+```
+SHA-256(stored PortablePackageV2, canonical V2 encoding)
+  == SHA-256(HTTP 200 PortablePackageV2 body)
+  == SHA-256(candid Available(PortablePackageV2) payload re-serialized)
+```
+
+Additionally, nested `frozen` bytes inside PortablePackageV2 **must equal** the Gate A
+FrozenWire bytes for the same `receipt_id` (exact nested bytes — never re-encode).
+
+Packages are never re-derived from draft/source state. A fresh read-time certificate is an
+OPTIONAL extra delivered outside the package bytes, never merged into them. Gate A remains
+the Definition of Done for the commitment delivery leg; Gate B is the Definition of Done for
+INDEX evidence delivery (M4/M5).
 
 ### 11.4 Scrub semantics vs serving
 
@@ -517,8 +526,10 @@ lookup):
    delegation → canister-range coverage → exact path → value proof). A response failing
    verification is discarded and retried — never stored.
 2. **First valid evidence wins** — no overwrite, no certificate substitution.
-3. **Available (HTTP/Candid)** serves `PortablePackageV2` when INDEX evidence has been stored;
-   until then, Pending/FrozenWire-only behaviour applies (§14.5).
+3. **Serving (aligned with §11.2):**
+   - Frozen stored, INDEX evidence absent → Available **FrozenWire** (commitment-only).
+   - Frozen stored, INDEX evidence present → Available **`PortablePackageV2`**.
+   - No frozen yet → Pending.
 4. Public surfaces never emit verifier V3 verdicts; offline CVDR-Verify remains the authority.
 
 ### 14.4 Verifier obligations (offline)
@@ -559,6 +570,24 @@ OpenChatZD uses a **versioned outer package** (`PortablePackageV2`), while canon
 module-hash evidence differently. This is a deliberate governed divergence requiring permanent
 support for: two verifier input shapes; two conformance-corpus paths; and configuration-specific
 documentation. Do not silently unify shapes.
+
+### 14.8 INDEX evidence capture workflow (normative outline for M4)
+
+Commitment finalization (§6 / §7) and INDEX evidence capture are **separate** stores and may
+complete in either order after receipt commit, subject to timing rules (§5). INDEX capture:
+
+1. **Trigger:** after `receipt_committed_at` (timer / sweep), once a commitment certificate is
+   available or in parallel with commitment finalization — implementor choice, but INDEX
+   certificate `/time` must not predate commitment certificate `/time` when both exist.
+2. **Outcall:** obtain a complete subnet system-state `read_state` response for
+   `/canister/<local_user_index>/module_hash` (not `canister_status.module_hash` alone).
+3. **Verify-before-store:** full BLS → NNS delegation → canister-range → exact path → value
+   proof (§14.3.1). Failures are discarded and retried — never stored.
+4. **Insert-only** under `receipt_id` lookup key; first valid wins.
+5. **Serving effect:** transitions Available body from FrozenWire to `PortablePackageV2` for
+   that `receipt_id` (§11.2 / §14.3).
+6. Timing qualifiers (§17.2) are applied by the offline verifier; on-chain store must not invent
+   verdict strings.
 
 **Status:** APPROVED with edits (Stef). Implement INDEX evidence capture, parallel insert-only
 storage, `PortablePackageV2` serving, and CVDR-Verify wiring under §14–§19.
@@ -640,3 +669,5 @@ When implementing M4+, keep these in sync with §12 / §14 / §17 / §18:
 3. CVDR-Verify OpenChatZD output strings and documentation — V3 outcomes + timing qualifiers;
    correct claim wording; support both Leaf and `PortablePackageV2` input shapes (§14.7).
 4. This build spec remains authoritative for OpenChatZD wire/store rules.
+5. Delivery contract §11.2 / §11.3 / Candid API — Available dual-shape (FrozenWire +
+   `PortablePackageV2`) and Gate A/B byte-equality tests must land with M4/M5.
