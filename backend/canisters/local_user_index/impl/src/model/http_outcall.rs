@@ -58,18 +58,38 @@ pub struct HttpRequestResult {
 /// Make a NON-replicated GET outcall (`is_replicated: Some(false)`) to `url`, capping the
 /// response at `max_response_bytes`. Returns the raw result or a stringified failure.
 pub async fn non_replicated_get(url: String, max_response_bytes: u64) -> Result<HttpRequestResult, String> {
+    non_replicated_http(url, HttpMethod::Get, Vec::new(), None, max_response_bytes).await
+}
+
+/// Make a NON-replicated POST outcall with an optional body and headers.
+pub async fn non_replicated_post(
+    url: String,
+    headers: Vec<HttpHeader>,
+    body: Vec<u8>,
+    max_response_bytes: u64,
+) -> Result<HttpRequestResult, String> {
+    non_replicated_http(url, HttpMethod::Post, headers, Some(body), max_response_bytes).await
+}
+
+async fn non_replicated_http(
+    url: String,
+    method: HttpMethod,
+    headers: Vec<HttpHeader>,
+    body: Option<Vec<u8>>,
+    max_response_bytes: u64,
+) -> Result<HttpRequestResult, String> {
+    let body_len = body.as_ref().map(|b| b.len() as u64).unwrap_or(0);
+    let header_len: u64 = headers.iter().map(|h| (h.name.len() + h.value.len()) as u64).sum();
     let args = HttpRequestArgs {
         url,
         max_response_bytes: Some(max_response_bytes),
-        method: HttpMethod::Get,
-        headers: Vec::new(),
-        body: None,
+        method,
+        headers,
+        body,
         is_replicated: Some(false),
     };
 
-    // Request size for pricing: URL + (no headers/body). cost_http_request prices the replicated
-    // path; the surplus over the non-replicated actual cost is refunded by the mgmt canister.
-    let request_size = args.url.len() as u64;
+    let request_size = args.url.len() as u64 + header_len + body_len;
     let cycles = ic_cdk::api::cost_http_request(request_size, max_response_bytes);
 
     Call::unbounded_wait(Principal::management_canister(), "http_request")

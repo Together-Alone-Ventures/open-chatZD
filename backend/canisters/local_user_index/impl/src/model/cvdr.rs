@@ -319,6 +319,74 @@ pub fn verify_certificate(
     Ok(VerifiedCert { certified_data, cert_time_ns })
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct VerifiedIndexModuleHash {
+    pub module_hash: Vec<u8>,
+    pub cert_time_ns: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexEvidenceRejectReason {
+    Certificate(CertRejectReason),
+    ModuleHashMissing,
+    CertTimeBeforeCommitment,
+}
+
+impl IndexEvidenceRejectReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            IndexEvidenceRejectReason::Certificate(r) => r.as_str(),
+            IndexEvidenceRejectReason::ModuleHashMissing => "index_module_hash_path_missing",
+            IndexEvidenceRejectReason::CertTimeBeforeCommitment => "index_cert_time_before_commitment",
+        }
+    }
+}
+
+/// Store-gate for INDEX code-identity evidence (spec §14.3 / §14.8): BLS → NNS → range →
+/// exact path `/canister/<self>/module_hash` → `/time`. Optionally rejects if cert time predates
+/// the commitment certificate time. Does **not** compare to captured `h_index` (offline V3).
+pub fn verify_index_module_hash_evidence(
+    certificate: &[u8],
+    self_canister_id: Principal,
+    ic_root_key: &[u8],
+    now: TimestampMillis,
+    commitment_certificate_time_ns: Option<u64>,
+) -> Result<VerifiedIndexModuleHash, IndexEvidenceRejectReason> {
+    use ic_cbor::CertificateToCbor;
+    use ic_certificate_verification::VerifyCertificate;
+    use ic_certification::{Certificate, LookupResult};
+
+    let cert = Certificate::from_cbor(certificate).map_err(|_| {
+        IndexEvidenceRejectReason::Certificate(CertRejectReason::CborDecodeFailed)
+    })?;
+    let now_nanos = (now as u128).saturating_mul(NANOS_PER_MILLI);
+    let max_offset_nanos = (CERT_MAX_OFFSET_MS as u128).saturating_mul(NANOS_PER_MILLI);
+    cert.verify(self_canister_id.as_slice(), ic_root_key, &now_nanos, &max_offset_nanos)
+        .map_err(|e| IndexEvidenceRejectReason::Certificate(map_cert_verification_error(&e)))?;
+
+    let module_hash = match cert.tree.lookup_path([
+        b"canister".as_ref(),
+        self_canister_id.as_slice(),
+        b"module_hash".as_ref(),
+    ]) {
+        LookupResult::Found(d) => d.to_vec(),
+        _ => return Err(IndexEvidenceRejectReason::ModuleHashMissing),
+    };
+    let cert_time_ns = match cert.tree.lookup_path([b"time".as_ref()]) {
+        LookupResult::Found(t) => leb128_u64(t),
+        _ => return Err(IndexEvidenceRejectReason::Certificate(CertRejectReason::TimeMissing)),
+    };
+    if let Some(commitment_time) = commitment_certificate_time_ns {
+        if cert_time_ns < commitment_time {
+            return Err(IndexEvidenceRejectReason::CertTimeBeforeCommitment);
+        }
+    }
+    Ok(VerifiedIndexModuleHash {
+        module_hash,
+        cert_time_ns,
+    })
+}
+
 /// Distinct reason the store-gate ([`verify_finalization_package`]) REJECTED a submission (spec §7
 /// rules 2–5). A reject NEVER creates a frozen package (HARD SECURITY RULE). Internal diagnostics;
 /// the backstop maps these to `Rejected(text)`.
@@ -791,6 +859,10 @@ impl FrozenPackageStore {
             })
             .collect()
     }
+
+    pub fn receipt_ids(&self) -> Vec<Hash> {
+        self.primary.iter().map(|e| e.key().0).collect()
+    }
 }
 
 /// Durable, upgrade-surviving CVDR stores: the in-flight draft map (by user_canister_id) and the
@@ -881,6 +953,14 @@ impl CvdrStore {
     /// `(receipt_id, receipt_hash)` for every frozen package — for the post_upgrade tree rebuild.
     pub fn frozen_receipt_leaves(&self) -> Vec<(Hash, Hash)> {
         self.frozen.receipt_leaves()
+    }
+
+    pub fn frozen_receipt_ids_missing_index_evidence(&self) -> Vec<Hash> {
+        self.frozen
+            .receipt_ids()
+            .into_iter()
+            .filter(|id| !self.index_evidence.contains(id))
+            .collect()
     }
 
     pub fn insert_index_evidence(
@@ -1290,6 +1370,42 @@ mod tests {
         assert!(!s.has_index_evidence(&receipt_id));
     }
 
+    #[test]
+    fn frozen_receipt_ids_missing_index_evidence_lists_only_pending() {
+        use crate::model::cvdr_index_evidence::IndexCodeIdentityEvidence;
+
+        let mut s = CvdrStore::default();
+        let record_id = record_id_for(p(5).into());
+        let receipt_a = receipt_id_for(&record_id, 1, &[5u8; 32]);
+        let receipt_b = receipt_id_for(&record_id, 2, &[6u8; 32]);
+        let pkg = |n: u8| FrozenCvdrPackage {
+            receipt_body: vec![n],
+            receipt_hash: [n; 32],
+            tree_root: [n; 32],
+            witness_bytes: vec![n],
+            certificate_bytes: vec![n],
+            certificate_time: n as u64,
+        };
+        assert_eq!(s.insert_frozen_package(receipt_a, record_id, 1, pkg(1)), Ok(()));
+        assert_eq!(s.insert_frozen_package(receipt_b, record_id, 2, pkg(2)), Ok(()));
+        let mut missing = s.frozen_receipt_ids_missing_index_evidence();
+        missing.sort();
+        let mut expected = vec![receipt_a, receipt_b];
+        expected.sort();
+        assert_eq!(missing, expected);
+
+        assert_eq!(
+            s.insert_index_evidence(
+                receipt_a,
+                IndexCodeIdentityEvidence {
+                    certificate_bytes: vec![0xaa],
+                }
+            ),
+            Ok(())
+        );
+        assert_eq!(s.frozen_receipt_ids_missing_index_evidence(), vec![receipt_b]);
+    }
+
     // ---- Slice 2: §6 store-gate verification, proven with REAL mainnet A1 certificate bytes ----
 
     /// The reused BLS -> subnet delegation -> NNS -> `certified_data` verification path accepts a
@@ -1323,6 +1439,16 @@ mod tests {
             "certified_data == the A1 canister's certified root"
         );
         assert_eq!(v.cert_time_ns, time_ns, "cert /time round-trips");
+
+        // INDEX path: commitment certificates do not carry `/canister/.../module_hash`.
+        assert_eq!(
+            verify_index_module_hash_evidence(CERT, self_id, constants::IC_ROOT_KEY, now_ms, None),
+            Err(IndexEvidenceRejectReason::ModuleHashMissing)
+        );
+        assert_eq!(
+            verify_index_module_hash_evidence(&[0xde, 0xad, 0xbe, 0xef], self_id, constants::IC_ROOT_KEY, now_ms, None),
+            Err(IndexEvidenceRejectReason::Certificate(CertRejectReason::CborDecodeFailed))
+        );
 
         // NEGATIVE (distinct reasons):
         // (a) garbage bytes — not a decodable certificate.

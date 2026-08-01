@@ -3,6 +3,7 @@ use ic_cdk::management_canister::ClearChunkStoreArgs;
 use tracing::info;
 
 pub mod delete_users;
+pub mod self_capture_index_evidence;
 pub mod self_finalize_cvdr;
 pub mod topup_canister_pool;
 pub mod topup_canisters;
@@ -18,6 +19,8 @@ pub(crate) fn start(state: &RuntimeState) {
     // Self-finalization loop (spec §6): re-drives any AwaitingCertificate receipts (e.g. after an
     // upgrade) to capture + store their certificate.
     self_finalize_cvdr::start_if_required(state);
+    // INDEX Module Hash evidence capture (spec §14.8): after frozen packages exist.
+    self_capture_index_evidence::start_if_required(state);
     topup_canister_pool::start_job_if_required(state, None);
     topup_canisters::start_job();
     upgrade_communities::start_job_if_required(state);

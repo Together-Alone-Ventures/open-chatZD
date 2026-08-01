@@ -135,6 +135,7 @@ fn store_verified_package(
             draft.stage = stage;
             draft.scrub_sensitive();
             state.data.cvdr.upsert_draft(draft);
+            crate::jobs::self_capture_index_evidence::start_if_required(state);
             success
         }
         // First-wins (rule 6/7): a concurrent path already stored it. No-op, not an error.

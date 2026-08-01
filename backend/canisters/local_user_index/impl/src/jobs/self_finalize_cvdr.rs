@@ -169,6 +169,7 @@ async fn attempt_finalize(draft: CvdrDraft) {
                         captured.scrub_sensitive();
                         state.data.cvdr.upsert_draft(captured);
                         trace!(receipt = %hex::encode(d.receipt_id), "cvdr certificate captured + stored");
+                        crate::jobs::self_capture_index_evidence::start_if_required(state);
                     }
                     Err(FrozenInsertError::LogFull) => {
                         warn!(event = "cvdr_frozen_log_full", receipt = %hex::encode(d.receipt_id), "frozen-package log full");
