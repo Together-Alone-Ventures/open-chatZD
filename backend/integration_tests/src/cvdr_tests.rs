@@ -203,8 +203,12 @@ fn module_hash_is_none(env: &PocketIc, user: &User) -> bool {
 fn wait_for_lui_version(env: &mut PocketIc, lui: CanisterId, expected: types::BuildVersion) {
     let req = HttpRequest { method: "GET".to_string(), url: "/metrics".to_string(), headers: Vec::new(), body: Vec::new() };
     let payload = candid::encode_one(&req).unwrap();
-    for _ in 0..300 {
+    for i in 0..300 {
         tick_many(env, 1);
+        // Upgrade job is timer-driven; without a time nudge it can stall (esp. after long clock jumps).
+        if i % 4 == 3 {
+            env.advance_time(Duration::from_secs(1));
+        }
         // Raw query: a reject (canister stopping/upgrading) is tolerated, not panicked.
         let Ok(bytes) = env.query_call(lui, Principal::anonymous(), "http_request", payload.clone()) else {
             continue;
@@ -1052,6 +1056,55 @@ fn late_valid_certificate_is_stored_as_late_finalized() {
     // A frozen package WAS stored (late is stored, not rejected) — exactly one.
     let (_, released, _) = cvdr_metrics(env, lui);
     assert_eq!(released, base_r + 1, "a late-but-valid package is stored (as LateFinalized), not rejected");
+}
+
+/// M7: `FailedStuck` leaf must survive LUI upgrade so `/cvdr_live` + backstop still work.
+/// Dedicated env (clock jump + real upgrade).
+#[test]
+fn failed_stuck_survives_upgrade_then_backstop() {
+    let mut owned_env = crate::setup::setup_new_env(None);
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+    } = &mut owned_env;
+    let (user, user_auth) = register_user_and_include_auth(env, canister_ids);
+    let lui = user.local_user_index;
+    let (_, base_r, _) = cvdr_metrics(env, lui);
+
+    delete_and_reach_awaiting(env, canister_ids, &user, &user_auth);
+    let (_, receipt_id, _, _) = find_servable_cvdr_live(env, lui);
+    let receipt_hex = hex::encode(receipt_id);
+
+    env.advance_time(Duration::from_secs(25 * 60 * 60));
+    tick_many(env, 5);
+
+    let m = metrics_json(env, lui);
+    assert!(
+        m["cvdr_failed_stuck_count"].as_u64().unwrap_or(0) >= 1,
+        "give-up must park at least one FailedStuck draft before upgrade"
+    );
+    fetch_cvdr_live(env, lui, &receipt_hex).expect("/cvdr_live serves FailedStuck pre-upgrade");
+
+    let mut new_wasm = crate::wasms::LOCAL_USER_INDEX.clone();
+    new_wasm.version = types::BuildVersion::new(0, 0, 3);
+    client::user_index::happy_path::upgrade_local_user_index_canister_wasm(env, *controller, canister_ids.user_index, new_wasm);
+    wait_for_lui_version(env, lui, types::BuildVersion::new(0, 0, 3));
+
+    // Post-upgrade: tree rebuilt including FailedStuck → live witness still available.
+    let (certificate, witness) = fetch_cvdr_live(env, lui, &receipt_hex)
+        .expect("M7: FailedStuck must remain /cvdr_live-servable after LUI upgrade");
+    assert!(matches!(
+        finalize(env, lui, receipt_id, certificate, witness),
+        finalize_cvdr::Response::LateFinalized
+    ));
+
+    let (_, released, _) = cvdr_metrics(env, lui);
+    assert_eq!(released, base_r + 1);
+    assert!(matches!(
+        fetch_cvdr(env, lui, receipt_id),
+        get_cvdr::Response::Available(_)
+    ));
 }
 
 /// Offline verifier round-trip: take a stored CVDR's bytes and verify V1–V3 with NO live

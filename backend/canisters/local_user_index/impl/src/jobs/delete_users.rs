@@ -273,38 +273,60 @@ enum ProcessOutcome {
     Retry { error_class: &'static str },
 }
 
+/// Stages whose receipt leaf must be re-inserted into the heap tree after upgrade (spec §4 / M7).
+/// `FailedStuck` remains finalizable via §7 backstop and still needs `/cvdr_live` witnesses.
+pub(crate) fn should_reinsert_receipt_leaf(stage: DraftStage) -> bool {
+    matches!(stage, DraftStage::AwaitingCertificate | DraftStage::FailedStuck)
+}
+
+/// Stages that should re-enter the delete queue after upgrade (irreversible mid-flight only).
+pub(crate) fn should_resume_delete_queue(stage: DraftStage) -> bool {
+    matches!(
+        stage,
+        DraftStage::Captured | DraftStage::Uninstalled | DraftStage::AwaitingCertificate
+    )
+}
+
+/// Rebuild heap receipt-tree leaves from durable CVDR state (frozen packages + finalizable drafts).
+/// Does not touch `certified_data` — caller asserts the root after rebuild.
+pub(crate) fn rebuild_receipt_tree_from_durable(
+    cvdr: &crate::model::cvdr::CvdrStore,
+    tree: &mut crate::model::cvdr::ReceiptTree,
+) {
+    for (receipt_id, receipt_hash) in cvdr.frozen_receipt_leaves() {
+        tree.insert(&receipt_id, &receipt_hash);
+    }
+    for draft in cvdr.all_drafts() {
+        if should_reinsert_receipt_leaf(draft.stage) {
+            tree.insert(&draft.receipt_id, &draft.receipt_hash());
+        }
+    }
+}
+
 /// Post-upgrade CVDR recovery. Two pieces of state do not survive a local_user_index upgrade:
 /// the heap-resident certified receipt tree, and the IC `certified_data` (cleared on upgrade).
 ///
 /// Per spec §4, rebuild the receipt tree from durable state — every frozen package PLUS every
-/// in-flight `AwaitingCertificate` draft (published-but-unfinalized receipts must stay in the
-/// tree so their certificate can still be captured) — then re-assert `certified_data_set(root)`.
+/// in-flight `AwaitingCertificate` draft **and** `FailedStuck` draft (published-but-unfinalized
+/// receipts must stay in the tree so `/cvdr_live` + §7 backstop still work after upgrade) —
+/// then re-assert `certified_data_set(root)`.
 /// Also re-enqueue any draft whose user was popped off the volatile delete queue before the
 /// upgrade, so the forward-only job drives it to completion. Called from `init_state`; on a
 /// fresh install the stores are empty and this is a no-op.
 pub(crate) fn resume_in_flight_drafts(state: &mut RuntimeState) {
-    // Finalized receipts (frozen packages) — reuse the stored receipt_hash verbatim.
-    for (receipt_id, receipt_hash) in state.data.cvdr.frozen_receipt_leaves() {
-        state.data.cvdr_receipt_tree.insert(&receipt_id, &receipt_hash);
-    }
+    rebuild_receipt_tree_from_durable(&state.data.cvdr, &mut state.data.cvdr_receipt_tree);
 
     let drafts = state.data.cvdr.all_drafts();
     let queued: std::collections::HashSet<UserId> =
         state.data.users_to_delete_queue.iter().map(|u| u.user_id).collect();
 
     for draft in &drafts {
-        // Published-but-unfinalized receipts: recompute the leaf and re-insert.
-        if draft.stage == DraftStage::AwaitingCertificate {
-            state.data.cvdr_receipt_tree.insert(&draft.receipt_id, &draft.receipt_hash());
-        }
         // Re-enqueue mid-flight irreversible deletions the queue lost on upgrade.
         // Do NOT enqueue `Prepared` — that would uninstall without user RevealWire ack /
         // identity delete commit (spec §11.4).
-        let should_resume = matches!(
-            draft.stage,
-            DraftStage::Captured | DraftStage::Uninstalled | DraftStage::AwaitingCertificate
-        );
-        if should_resume && !queued.contains(&draft.user_id) {
+        // FailedStuck is not re-queued for uninstall (already past uninstall); self-finalize
+        // / backstop own remediation.
+        if should_resume_delete_queue(draft.stage) && !queued.contains(&draft.user_id) {
             state.data.users_to_delete_queue.push_back(UserToDelete {
                 user_id: draft.user_id,
                 #[allow(deprecated)]
@@ -322,7 +344,7 @@ pub(crate) fn resume_in_flight_drafts(state: &mut RuntimeState) {
 
 #[cfg(test)]
 mod scheduler_tests {
-    use super::{successor_delay_ms, successor_timer_delay, ScheduleKind, FAST_RETRY_INTERVAL_MS};
+    use super::*;
     use candid::Principal;
     use std::collections::VecDeque;
     use types::UserId;
@@ -339,6 +361,102 @@ mod scheduler_tests {
         }
         let next_front = q.front().copied().map(uid);
         successor_timer_delay(kind, next_front, uid(attempted))
+    }
+
+    #[test]
+    fn resume_stage_policy_matches_helpers() {
+        assert!(should_reinsert_receipt_leaf(DraftStage::AwaitingCertificate));
+        assert!(should_reinsert_receipt_leaf(DraftStage::FailedStuck));
+        assert!(!should_reinsert_receipt_leaf(DraftStage::Prepared));
+        assert!(!should_reinsert_receipt_leaf(DraftStage::Captured));
+        assert!(!should_reinsert_receipt_leaf(DraftStage::CertificateCaptured));
+        assert!(!should_reinsert_receipt_leaf(DraftStage::LateFinalized));
+
+        assert!(should_resume_delete_queue(DraftStage::Captured));
+        assert!(should_resume_delete_queue(DraftStage::Uninstalled));
+        assert!(should_resume_delete_queue(DraftStage::AwaitingCertificate));
+        assert!(!should_resume_delete_queue(DraftStage::FailedStuck));
+        assert!(!should_resume_delete_queue(DraftStage::Prepared));
+    }
+
+    #[test]
+    fn rebuild_tree_reinserts_failed_stuck_leaf_for_witness() {
+        use crate::model::cvdr::{CvdrDraft, CvdrStore, ReceiptTree};
+        use ic_certification::{HashTree, LookupResult};
+
+        let mut store = CvdrStore::default();
+        let stuck = CvdrDraft {
+            user_id: uid(1),
+            user_canister_id: Principal::from_slice(&[1u8; 29]),
+            index_canister_id: Principal::from_slice(&[2u8; 29]),
+            record_id: [1u8; 32],
+            deletion_seq: 1,
+            nonce: [2u8; 32],
+            receipt_id: [9u8; 32],
+            module_hash_pre: vec![],
+            executor_module_hash: vec![7u8; 32],
+            h_user_pre: [3u8; 32],
+            h_index: [4u8; 32],
+            commitment: [5u8; 32],
+            salt: [0xABu8; 32],
+            canisters_to_notify: vec![Principal::from_slice(&[5u8; 29])],
+            uninstall_completed_at: 111,
+            receipt_committed_at: 222,
+            finalize_attempt: 3,
+            finalize_last_attempt_at: 333,
+            created_at: 1,
+            attempt: 0,
+            stage: DraftStage::FailedStuck,
+        };
+        let expected_hash = stuck.receipt_hash();
+        let stuck_id = stuck.receipt_id;
+        store.upsert_draft(stuck);
+
+        let prepared_id = [7u8; 32];
+        store.upsert_draft(CvdrDraft {
+            user_id: uid(2),
+            user_canister_id: Principal::from_slice(&[8u8; 29]),
+            index_canister_id: Principal::from_slice(&[2u8; 29]),
+            record_id: [8u8; 32],
+            deletion_seq: 1,
+            nonce: [2u8; 32],
+            receipt_id: prepared_id,
+            module_hash_pre: vec![],
+            executor_module_hash: vec![],
+            h_user_pre: [0u8; 32],
+            h_index: [0u8; 32],
+            commitment: [0u8; 32],
+            salt: [0xCDu8; 32],
+            canisters_to_notify: vec![],
+            uninstall_completed_at: 0,
+            receipt_committed_at: 0,
+            finalize_attempt: 0,
+            finalize_last_attempt_at: 0,
+            created_at: 1,
+            attempt: 0,
+            stage: DraftStage::Prepared,
+        });
+
+        // Simulate upgrade: heap tree wiped, rebuild from durable drafts.
+        let mut tree = ReceiptTree::default();
+        rebuild_receipt_tree_from_durable(&store, &mut tree);
+        assert!(!tree.is_empty());
+
+        let witness: HashTree =
+            serde_cbor::from_slice(&tree.witness_cbor(&stuck_id)).expect("witness decodes");
+        assert_eq!(witness.digest(), tree.root());
+        match witness.lookup_path([b"receipts".as_slice(), stuck_id.as_slice()]) {
+            LookupResult::Found(v) => assert_eq!(v, expected_hash.as_slice()),
+            other => panic!("FailedStuck leaf missing after rebuild: {other:?}"),
+        }
+        match witness.lookup_path([b"receipts".as_slice(), prepared_id.as_slice()]) {
+            LookupResult::Found(_) => panic!("Prepared must not appear as a receipt leaf"),
+            _ => {}
+        }
+
+        // Cleanup shared stable draft memory for other unit tests in this process.
+        store.remove_draft(&Principal::from_slice(&[1u8; 29]));
+        store.remove_draft(&Principal::from_slice(&[8u8; 29]));
     }
 
     #[test]
