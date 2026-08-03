@@ -96,16 +96,34 @@ mod tests {
         );
     }
 
-    /// Drift guard: when the sibling CVDR-Verify checkout is present (Together-alone layout),
+    /// Drift guard: when the sibling `CVDR-Verify` repo is checked out (Together-alone layout),
     /// OpenChatZD labels must appear verbatim in the offline verifier.
+    ///
+    /// If the sibling repo root exists but the OpenChatZD attestation module is missing
+    /// (e.g. pin `v0.6.1` predates amended INDEX labels), this test **fails**. It must not
+    /// silently pass that pin gap. Skip only when `CVDR-Verify` is not checked out at all.
     #[test]
     fn labels_match_sibling_cvdr_verify_when_present() {
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../../../CVDR-Verify/mktd02/mktd02-verify/src/openchatzd/index_attestation.rs");
-        if !path.exists() {
-            eprintln!("skip cross-repo labels: {} not present", path.display());
+        let verify_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../../../CVDR-Verify");
+        let path = verify_root
+            .join("mktd02/mktd02-verify/src/openchatzd/index_attestation.rs");
+        if !verify_root.exists() {
+            eprintln!(
+                "skip cross-repo labels: CVDR-Verify sibling not checked out at {}",
+                verify_root.display()
+            );
             return;
         }
+        assert!(
+            path.exists(),
+            "CVDR-Verify is present at {} but {} is missing. \
+             Pin gap or moved path: amended OpenChatZD INDEX labels are not in this checkout \
+             (v0.6.1 predates PortablePackageV2 / INDEX attestation). \
+             Amend CVDR-Verify or check out a tip that includes openchatzd/index_attestation.rs.",
+            verify_root.display(),
+            path.display()
+        );
         let src = std::fs::read_to_string(&path).expect("read CVDR-Verify index_attestation");
         for label in [
             INDEX_HASH_MATCH_AT_CERT_TIME,

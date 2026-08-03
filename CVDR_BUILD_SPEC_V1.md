@@ -561,10 +561,10 @@ additional evidence. Verifier output must make that absence explicit
 Confirm whether any **mainnet OpenChatZD** FrozenWire packages already exist before Available
 v2 cutover. This is migration inventory only and does **not** reopen the frozen-format ruling.
 
-**Working inventory (Antoine, 2026-08-01):** no known OpenChatZD-product mainnet deployments of
-the §11 FrozenWire Available path with stored packages under this fork’s CVDR delivery leg
-(delivery/INDEX evidence not yet shipped). Upstream OpenChat mainnet is out of scope. Reconfirm
-with Stef/G at M4/M5 cutover if any non-prod shared canisters already hold FrozenWire bytes.
+**Inventory answer (Antoine, reconfirmed 2026-08-03):** **No.** There are no known mainnet
+OpenChatZD FrozenWire packages under this fork’s CVDR delivery leg. OpenChatZD CVDR Available /
+INDEX evidence has not shipped to mainnet on this product path. Upstream OpenChat mainnet is out
+of scope. Compatibility population only; this does not reopen the frozen-schema ruling.
 
 ### 14.7 Leaf / OpenChatZD package-shape divergence (governed)
 

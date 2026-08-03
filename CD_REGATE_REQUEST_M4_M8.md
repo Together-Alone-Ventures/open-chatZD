@@ -3,8 +3,9 @@
 **From:** Antoine (CC)  
 **To:** CD (independent re-gate)  
 **Date:** 2026-08-01  
-**Branch:** `antek` @ `c8da2da89`  
-**Base:** `master` @ `7fb5569bd`
+**Branch:** `antek` (tip advances; see PR)  
+**Base:** `master` @ `7fb5569bd`  
+**CD interim reply (2026-08-03):** packaging approved; verifier pin gap is TAV-owned; CC follow-ups below.
 
 > **Not a certification.** CC does not certify its own work (spec §10).  
 > CD re-runs load-bearing commands from source and records PASS / FAIL / HOLD with file:line.
@@ -62,11 +63,26 @@ cargo test -p local_user_index_canister_impl --lib cvdr
 git -C ../CVDR-Verify rev-list -n 1 v0.6.1
 # expect ad16f2ae7c572c0007784ee45dd801dba35191dc
 cd ../CVDR-Verify/mktd02/mktd02-verify && cargo test
-# Antoine: 74 passed
+# Pin v0.6.1: expect 58 passed / 0 failed / 0 ignored
+# (Earlier pack text said ~74; that does not reproduce on this pin. Use 58.)
 ```
 
 If `wasms/` stale: `unset CARGO_TARGET_DIR && ./scripts/generate-all-canister-wasms.sh`  
 (or `./scripts/generate-wasm.sh local_user_index`).
+
+---
+
+## CC follow-ups to CD interim (2026-08-03)
+
+1. **M2 claim restated:** same-window Docker dual-build identity only; not network-hermetic
+   (mutable `ubuntu:24.04`, apt, rustup, `cargo install`, git deps). See local evidence
+   `OpenChatZD_M2_Evidence.md`.
+2. **Verify count:** pin `v0.6.1` = **58** passed (not 74).
+3. **Migration inventory:** **No** known mainnet OpenChatZD FrozenWire packages (§14.6).
+4. **`labels_match_sibling_cvdr_verify_when_present`:** no longer silent-pass when
+   `CVDR-Verify` is present but `openchatzd/index_attestation.rs` is missing (pin gap fails loud).
+5. **Naming:** OpenChatZD = ICP Tree corridor. Leaf demo / Zombie Sandbox / DaffyDefs is a
+   separate track from this re-gate.
 
 ---
 
