@@ -50,7 +50,11 @@ git fetch && git checkout antek && git rev-parse HEAD   # c8da2da89…
 unset CARGO_TARGET_DIR
 
 cargo test -p local_user_index_canister_impl --lib cvdr
-# expect ~40 passed
+# expect all green when CVDR-Verify sibling is absent, OR when sibling tip includes
+# openchatzd/index_attestation.rs with amended labels.
+# Known pin-gap: if ../CVDR-Verify is checked out at tag v0.6.1 (no openchatzd module),
+# labels_match_sibling_cvdr_verify_when_present FAILS by design (not a canister regression).
+# Re-run without the sibling, or on an amended verifier tip, for a clean suite.
 
 ./scripts/run-integration-tests.sh local 4 cvdr_
 # Antoine: 15 passed, 6 ignored (legacy #[ignore])
@@ -81,6 +85,8 @@ If `wasms/` stale: `unset CARGO_TARGET_DIR && ./scripts/generate-all-canister-wa
 3. **Migration inventory:** **No** known mainnet OpenChatZD FrozenWire packages (§14.6).
 4. **`labels_match_sibling_cvdr_verify_when_present`:** no longer silent-pass when
    `CVDR-Verify` is present but `openchatzd/index_attestation.rs` is missing (pin gap fails loud).
+   Pure guard helpers are unit-tested (`sibling_label_guard`, `sibling_source_matches_openchatzd_labels`).
+   Expected FAIL against tag `v0.6.1` sibling checkout; PASS when sibling absent or amended tip.
 5. **Naming:** OpenChatZD = ICP Tree corridor. Leaf demo / Zombie Sandbox / DaffyDefs is a
    separate track from this re-gate.
 
