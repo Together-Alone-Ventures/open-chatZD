@@ -310,6 +310,10 @@ pub fn verify_certificate(
     let max_offset_nanos = (CERT_MAX_OFFSET_MS as u128).saturating_mul(NANOS_PER_MILLI);
     cert.verify(self_canister_id.as_slice(), ic_root_key, &now_nanos, &max_offset_nanos)
         .map_err(|e| map_cert_verification_error(&e))?;
+    // Independent fail-closed range check (Stef B1): do not rely on vacuous
+    // upstream sharded-range behaviour after BLS/delegation verify.
+    crate::model::cvdr_canister_ranges::assert_delegation_range_containment(&cert, self_canister_id)
+        .map_err(|_| CertRejectReason::CanisterNotInRange)?;
 
     let certified_data =
         match cert
@@ -372,6 +376,10 @@ pub fn verify_index_module_hash_evidence(
     let max_offset_nanos = (CERT_MAX_OFFSET_MS as u128).saturating_mul(NANOS_PER_MILLI);
     cert.verify(self_canister_id.as_slice(), ic_root_key, &now_nanos, &max_offset_nanos)
         .map_err(|e| IndexEvidenceRejectReason::Certificate(map_cert_verification_error(&e)))?;
+    crate::model::cvdr_canister_ranges::assert_delegation_range_containment(&cert, self_canister_id)
+        .map_err(|_| {
+            IndexEvidenceRejectReason::Certificate(CertRejectReason::CanisterNotInRange)
+        })?;
 
     let module_hash = match cert
         .tree

@@ -9849,19 +9849,94 @@ export class OpenChat {
         return pollCvdrHttp(this.cvdrDownloadUrl(localUserIndex, receiptIdHex));
     }
 
+    /**
+     * Persist retrieval capability before irreversible delete.
+     * Returns false if write/readback fails — caller must block reveal/delete.
+     */
     persistCvdrReceiptSession(
         userId: string | undefined,
         session: { receiptId: string; localUserIndex: string },
-    ): void {
+    ): boolean {
         try {
             const raw = serializeCvdrReceiptSession(session);
+            const expectedId = session.receiptId.toLowerCase();
             if (userId !== undefined) {
                 localStorage.setItem(cvdrReceiptStorageKey(userId), raw);
             }
             localStorage.setItem(CVDR_RECEIPT_PENDING_KEY, raw);
+            const pending = parseCvdrReceiptSession(
+                localStorage.getItem(CVDR_RECEIPT_PENDING_KEY),
+            );
+            if (
+                pending === undefined ||
+                pending.receiptId !== expectedId ||
+                pending.localUserIndex !== session.localUserIndex
+            ) {
+                return false;
+            }
+            if (userId !== undefined) {
+                const fromUser = parseCvdrReceiptSession(
+                    localStorage.getItem(cvdrReceiptStorageKey(userId)),
+                );
+                if (
+                    fromUser === undefined ||
+                    fromUser.receiptId !== expectedId ||
+                    fromUser.localUserIndex !== session.localUserIndex
+                ) {
+                    return false;
+                }
+            }
+            return true;
         } catch {
-            /* ignore */
+            return false;
         }
+    }
+
+    /**
+     * Poll `/cvdr/<receipt_id>` until available or attempts exhausted.
+     * Does not logout or clear the persisted session.
+     */
+    async pollCvdrDelivery(
+        localUserIndex: string,
+        receiptId: string,
+        options?: {
+            maxAttempts?: number;
+            softWaitUnknownAttempts?: number;
+            onStatus?: (status: string) => void;
+        },
+    ): Promise<
+        | { kind: "available"; body: Uint8Array; contentType: string }
+        | { kind: "delayed" }
+    > {
+        const maxAttempts = options?.maxAttempts ?? 60;
+        const softWaitUnknown = options?.softWaitUnknownAttempts ?? 5;
+        for (let i = 0; i < maxAttempts; i++) {
+            const status: CvdrPollStatus = await this.pollCvdr(localUserIndex, receiptId);
+            if (status.kind === "available") {
+                return {
+                    kind: "available",
+                    body: status.body,
+                    contentType: status.contentType,
+                };
+            }
+            if (status.kind === "pending") {
+                options?.onStatus?.(
+                    `Receipt pending… retry in ${status.retryAfterSecs}s`,
+                );
+                await new Promise((r) =>
+                    setTimeout(r, Math.max(1, status.retryAfterSecs) * 1000),
+                );
+                continue;
+            }
+            if (status.kind === "unknown" && i < softWaitUnknown) {
+                options?.onStatus?.("Not found yet — waiting for draft…");
+                await new Promise((r) => setTimeout(r, 2000));
+                continue;
+            }
+            options?.onStatus?.(status.kind === "error" ? status.detail : status.kind);
+            await new Promise((r) => setTimeout(r, 3000));
+        }
+        return { kind: "delayed" };
     }
 
     loadPersistedCvdrReceiptSession(

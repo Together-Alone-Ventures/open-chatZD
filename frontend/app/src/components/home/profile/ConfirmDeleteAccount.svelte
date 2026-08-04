@@ -5,7 +5,6 @@
         downloadBytesAsFile,
         i18nKey,
         OpenChat,
-        type CvdrPollStatus,
     } from "openchat-client";
     import ModalContent from "../../ModalContent.svelte";
     import Overlay from "../../Overlay.svelte";
@@ -38,6 +37,7 @@
         | "authenticating"
         | "deleting"
         | "polling"
+        | "delayed"
         | "done"
         | "error";
 
@@ -81,10 +81,15 @@
         revealWireJson = resp.revealWireJson;
         localUserIndex = resp.localUserIndex;
         bearerUrl = client.cvdrDownloadUrl(localUserIndex, receiptId);
-        client.persistCvdrReceiptSession(currentUserIdStore.value, {
+        const persisted = client.persistCvdrReceiptSession(currentUserIdStore.value, {
             receiptId,
             localUserIndex,
         });
+        if (!persisted) {
+            errorMessage = interpolate($_, i18nKey("danger.cvdr.persistFailed"));
+            step = "error";
+            return;
+        }
         revealAck = false;
         step = "reveal";
     }
@@ -143,38 +148,30 @@
             errorMessage = "Missing receipt session — reopen delete after prepare.";
             return;
         }
-        for (let i = 0; i < 60; i++) {
-            const status: CvdrPollStatus = await client.pollCvdr(lui, receiptId);
-            if (status.kind === "available") {
-                downloadBytesAsFile(
-                    status.body,
-                    `openchatzd-cvdr-${receiptId.slice(0, 8)}.json`,
-                    status.contentType,
-                );
-                client.clearPersistedCvdrReceiptSession(currentUserIdStore.value);
-                step = "done";
-                if (logoutWhenDone) {
-                    await client.finishDeleteAccountLogout();
-                }
-                return;
+        const result = await client.pollCvdrDelivery(lui, receiptId, {
+            onStatus: (s) => (pollStatus = s),
+        });
+        if (result.kind === "available") {
+            downloadBytesAsFile(
+                result.body,
+                `openchatzd-cvdr-${receiptId.slice(0, 8)}.json`,
+                result.contentType,
+            );
+            client.clearPersistedCvdrReceiptSession(currentUserIdStore.value);
+            step = "done";
+            if (logoutWhenDone) {
+                await client.finishDeleteAccountLogout();
             }
-            if (status.kind === "pending") {
-                pollStatus = `Receipt pending… retry in ${status.retryAfterSecs}s`;
-                await new Promise((r) => setTimeout(r, Math.max(1, status.retryAfterSecs) * 1000));
-                continue;
-            }
-            if (status.kind === "unknown" && i < 5) {
-                pollStatus = "Not found yet — waiting for draft…";
-                await new Promise((r) => setTimeout(r, 2000));
-                continue;
-            }
-            pollStatus = status.kind === "error" ? status.detail : status.kind;
-            await new Promise((r) => setTimeout(r, 3000));
+            return;
         }
-        step = "done";
-        if (logoutWhenDone) {
-            await client.finishDeleteAccountLogout();
-        }
+        // Exhaustion is delayed/pending — never success, never logout here.
+        step = "delayed";
+    }
+
+    /** Explicit handoff to anonymous App recovery while keeping the pending capability. */
+    async function handoffToAnonymousRecovery() {
+        await client.finishDeleteAccountLogout();
+        onClose();
     }
 </script>
 
@@ -202,6 +199,7 @@
                 <Markdown inline={false} text={interpolate($_, i18nKey("danger.cvdr.revealHelp"))} />
                 <p class="mono">receipt: {receiptId}</p>
                 <p class="warn"><Translatable resourceKey={i18nKey("danger.cvdr.secretWarning")} /></p>
+                <p class="warn"><Translatable resourceKey={i18nKey("danger.cvdr.abandonWarning")} /></p>
                 <ButtonGroup align="start">
                     <Button small onClick={downloadReveal}>
                         <Translatable resourceKey={i18nKey("danger.cvdr.downloadReveal")} />
@@ -223,6 +221,9 @@
             {:else if step === "polling"}
                 <Markdown inline={false} text={interpolate($_, i18nKey("danger.cvdr.polling"))} />
                 {#if pollStatus}<p class="mono">{pollStatus}</p>{/if}
+            {:else if step === "delayed"}
+                <Markdown inline={false} text={interpolate($_, i18nKey("danger.cvdr.delayed"))} />
+                {#if pollStatus}<p class="mono">{pollStatus}</p>{/if}
             {:else if step === "done"}
                 <Markdown inline={false} text={interpolate($_, i18nKey("danger.cvdr.done"))} />
             {:else if step === "error"}
@@ -231,7 +232,7 @@
         {/snippet}
         {#snippet footer()}
             <ButtonGroup>
-                {#if step !== "done" && step !== "deleting" && step !== "preparing" && step !== "polling"}
+                {#if step !== "done" && step !== "deleting" && step !== "preparing" && step !== "polling" && step !== "delayed"}
                     <Button small onClick={onClose} secondary>
                         <Translatable resourceKey={i18nKey("cancel")} />
                     </Button>
@@ -258,6 +259,13 @@
                 {:else if step === "error"}
                     <Button small onClick={() => (step = "intro")}>
                         <Translatable resourceKey={i18nKey("danger.cvdr.retry")} />
+                    </Button>
+                {:else if step === "delayed"}
+                    <Button small secondary onClick={() => void pollUntilAvailable(true)}>
+                        <Translatable resourceKey={i18nKey("danger.cvdr.retryPoll")} />
+                    </Button>
+                    <Button small onClick={() => void handoffToAnonymousRecovery()}>
+                        <Translatable resourceKey={i18nKey("danger.cvdr.handoffAnonymous")} />
                     </Button>
                 {:else if step === "done"}
                     <Button small onClick={onClose}>

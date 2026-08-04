@@ -47,10 +47,10 @@ fn backoff_ms(attempt: u32) -> u64 {
     }
 }
 
-/// Spec §5 completion window is anchored on `receipt_committed_at`; fall back to frozen
-/// commitment certificate time when the draft is gone.
-pub(crate) fn give_up_anchor_ns(receipt_committed_at_ns: Option<u64>, frozen_certificate_time_ns: u64) -> u64 {
-    receipt_committed_at_ns.unwrap_or(frozen_certificate_time_ns)
+/// Permanent 24h INDEX give-up window anchor: `receipt_committed_at` only (Stef B timing).
+/// Never re-anchors to a later certificate time when the draft/anchor is absent.
+pub(crate) fn give_up_anchor_ns(receipt_committed_at_ns: Option<u64>) -> Option<u64> {
+    receipt_committed_at_ns.filter(|&t| t > 0)
 }
 
 pub(crate) fn start_if_required(state: &RuntimeState) -> bool {
@@ -75,30 +75,40 @@ fn run_sweep() {
                 continue;
             };
             let receipt_committed_at = state.data.cvdr.receipt_committed_at_ns(&receipt_id);
-            let anchor_ns = give_up_anchor_ns(receipt_committed_at, pkg.certificate_time);
-            let age_from_anchor_ms = now_ns.saturating_sub(anchor_ns) / NS_PER_MS;
-            if age_from_anchor_ms > GIVE_UP_MS {
-                ATTEMPTS.with(|m| {
-                    m.borrow_mut().remove(&receipt_id);
-                });
-                warn!(
-                    event = "cvdr_index_evidence_give_up",
-                    receipt_prefix = %cvdr::receipt_id_prefix(&receipt_id),
-                    "INDEX evidence not captured within 24h of receipt_committed_at; leaving UNAVAILABLE"
-                );
-                continue;
-            }
-            let attempt_state = ATTEMPTS.with(|m| *m.borrow().get(&receipt_id).unwrap_or(&AttemptState::default()));
-            let due_at_ns = if attempt_state.attempt == 0 {
-                anchor_ns.saturating_add(backoff_ms(0) * NS_PER_MS)
-            } else {
-                attempt_state
+            let attempt_state =
+                ATTEMPTS.with(|m| *m.borrow().get(&receipt_id).unwrap_or(&AttemptState::default()));
+            if let Some(anchor_ns) = give_up_anchor_ns(receipt_committed_at) {
+                let age_from_anchor_ms = now_ns.saturating_sub(anchor_ns) / NS_PER_MS;
+                if age_from_anchor_ms > GIVE_UP_MS {
+                    ATTEMPTS.with(|m| {
+                        m.borrow_mut().remove(&receipt_id);
+                    });
+                    warn!(
+                        event = "cvdr_index_evidence_give_up",
+                        receipt_prefix = %cvdr::receipt_id_prefix(&receipt_id),
+                        "INDEX evidence not captured within 24h of receipt_committed_at; leaving UNAVAILABLE"
+                    );
+                    continue;
+                }
+                let due_at_ns = if attempt_state.attempt == 0 {
+                    anchor_ns.saturating_add(backoff_ms(0) * NS_PER_MS)
+                } else {
+                    attempt_state
+                        .last_attempt_at_ns
+                        .saturating_add(backoff_ms(attempt_state.attempt) * NS_PER_MS)
+                };
+                if now_ns < due_at_ns {
+                    continue;
+                }
+            } else if attempt_state.attempt > 0 {
+                let due_at_ns = attempt_state
                     .last_attempt_at_ns
-                    .saturating_add(backoff_ms(attempt_state.attempt) * NS_PER_MS)
-            };
-            if now_ns >= due_at_ns {
-                due.push((receipt_id, pkg.certificate_time));
+                    .saturating_add(backoff_ms(attempt_state.attempt) * NS_PER_MS);
+                if now_ns < due_at_ns {
+                    continue;
+                }
             }
+            due.push((receipt_id, pkg.certificate_time));
         }
         due
     });
@@ -286,9 +296,10 @@ mod tests {
     }
 
     #[test]
-    fn give_up_prefers_receipt_committed_at() {
-        assert_eq!(give_up_anchor_ns(Some(100), 999), 100);
-        assert_eq!(give_up_anchor_ns(None, 999), 999);
+    fn give_up_anchor_is_receipt_committed_at_only() {
+        assert_eq!(give_up_anchor_ns(Some(100)), Some(100));
+        assert_eq!(give_up_anchor_ns(Some(0)), None);
+        assert_eq!(give_up_anchor_ns(None), None);
     }
 
     #[test]

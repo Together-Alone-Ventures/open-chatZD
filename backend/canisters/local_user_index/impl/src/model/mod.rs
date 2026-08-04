@@ -1,6 +1,7 @@
 pub mod bots_map;
 pub mod community_event_batch;
 pub mod cvdr;
+pub mod cvdr_canister_ranges;
 pub mod cvdr_index_attestation;
 pub mod cvdr_index_evidence;
 pub mod export_pending;
