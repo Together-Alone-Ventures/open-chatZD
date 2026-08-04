@@ -23,9 +23,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Require CVDR_VERIFY_READ_TOKEN
+        env:
+          CVDR_VERIFY_READ_TOKEN: ${{ secrets.CVDR_VERIFY_READ_TOKEN }}
+        run: |
+          if [ -z "${CVDR_VERIFY_READ_TOKEN}" ]; then
+            echo "::error::CVDR_VERIFY_READ_TOKEN is required (private git deps: ICP-Delete-Leaf + CVDR-Verify)."
+            exit 1
+          fi
       - uses: ./.github/workflows/setup-rust
         with:
           cache: read
+          private_git_token: ${{ secrets.CVDR_VERIFY_READ_TOKEN }}
       - uses: arduino/setup-protoc@v1
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
@@ -44,7 +53,7 @@ jobs:
           CVDR_VERIFY_READ_TOKEN: ${{ secrets.CVDR_VERIFY_READ_TOKEN }}
         run: |
           if [ -z "${CVDR_VERIFY_READ_TOKEN}" ]; then
-            echo "::error::CVDR_VERIFY_READ_TOKEN secret is required (internal sibling checkout of CVDR-Verify @ v0.7.0)."
+            echo "::error::CVDR_VERIFY_READ_TOKEN is required (private git deps: ICP-Delete-Leaf + CVDR-Verify @ v0.7.0)."
             exit 1
           fi
       - name: Clear any PR-supplied CVDR-Verify stub
@@ -61,6 +70,7 @@ jobs:
       - uses: ./.github/workflows/setup-rust
         with:
           cache: read
+          private_git_token: ${{ secrets.CVDR_VERIFY_READ_TOKEN }}
       - uses: actions-rs/cargo@v1
         with:
           command: test

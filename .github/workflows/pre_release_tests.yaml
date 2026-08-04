@@ -20,9 +20,18 @@ jobs:
         run: |
           curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused -fsSL "https://sh.rustup.rs" | sh -s -- --default-toolchain none -y
       - uses: actions/checkout@v4
+      - name: Require CVDR_VERIFY_READ_TOKEN
+        env:
+          CVDR_VERIFY_READ_TOKEN: ${{ secrets.CVDR_VERIFY_READ_TOKEN }}
+        run: |
+          if [ -z "${CVDR_VERIFY_READ_TOKEN}" ]; then
+            echo "::error::CVDR_VERIFY_READ_TOKEN is required (private git deps: ICP-Delete-Leaf)."
+            exit 1
+          fi
       - uses: ./.github/workflows/setup-rust
         with:
           cache: read
+          private_git_token: ${{ secrets.CVDR_VERIFY_READ_TOKEN }}
       - name: Wait for wasms to be built
         uses: lewagon/wait-on-check-action@v1.3.3
         with:

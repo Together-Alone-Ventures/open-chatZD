@@ -3,10 +3,26 @@ inputs:
   cache:
     description: 'Cache behaviour (use "read", "write", or leave empty)'
     type: string
+  private_git_token:
+    description: >-
+      PAT with read access to private Together-Alone-Ventures git crates
+      (ICP-Delete-Leaf / mktd02, and ideally CVDR-Verify). Pass
+      secrets.CVDR_VERIFY_READ_TOKEN from calling workflows.
+    required: false
+    type: string
+    default: ''
 
 runs:
   using: 'composite'
   steps:
+    - name: Auth private GitHub cargo deps
+      if: ${{ inputs.private_git_token != '' }}
+      shell: bash
+      env:
+        TOKEN: ${{ inputs.private_git_token }}
+      run: |
+        git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
+
     - name: Install Rust toolchain
       uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
