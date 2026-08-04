@@ -488,15 +488,13 @@ fn await_lui_upgrades_complete(env: &mut PocketIc, canister_ids: &CanisterIds) -
                 body: Vec::new(),
             },
         );
-        if resp.status_code == 200 {
-            if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&resp.body) {
-                let pending = json["canister_upgrades_pending"].as_u64().unwrap_or(1);
-                let in_progress = json["canister_upgrades_in_progress"].as_u64().unwrap_or(1);
-                if pending == 0 && in_progress == 0 {
-                    // Let the just-restarted LUIs settle their post_upgrade timers.
-                    tick_many(env, 4);
-                    return true;
-                }
+        if let (200, Ok(json)) = (resp.status_code, serde_json::from_slice::<serde_json::Value>(&resp.body)) {
+            let pending = json["canister_upgrades_pending"].as_u64().unwrap_or(1);
+            let in_progress = json["canister_upgrades_in_progress"].as_u64().unwrap_or(1);
+            if pending == 0 && in_progress == 0 {
+                // Let the just-restarted LUIs settle their post_upgrade timers.
+                tick_many(env, 4);
+                return true;
             }
         }
         if i % 4 == 3 {
