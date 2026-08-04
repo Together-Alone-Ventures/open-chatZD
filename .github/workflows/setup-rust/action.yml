@@ -21,8 +21,12 @@ runs:
       env:
         TOKEN: ${{ inputs.private_git_token }}
       run: |
-        # Cargo's libgit2 often ignores url.insteadOf; force the git CLI so the
-        # rewrite below is used for private deps (ICP-Delete-Leaf, zombie-core).
+        # actions/checkout injects GITHUB_TOKEN via http.extraheader for all
+        # github.com HTTPS; that token cannot read other private repos and
+        # overrides URL credentials → 403 "Write access not granted".
+        git config --local --unset-all http.https://github.com/.extraheader || true
+        git config --global --unset-all http.https://github.com/.extraheader || true
+        # Cargo's libgit2 often ignores url.insteadOf; force the git CLI.
         echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
         git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
 
