@@ -5,8 +5,8 @@ inputs:
     type: string
   private_git_token:
     description: >-
-      PAT with read access to private Together-Alone-Ventures git crates
-      (ICP-Delete-Leaf / mktd02, and ideally CVDR-Verify). Pass
+      PAT with Contents:Read on private Together-Alone-Ventures git crates:
+      ICP-Delete-Leaf, zombie-core, and CVDR-Verify. Pass
       secrets.CVDR_VERIFY_READ_TOKEN from calling workflows.
     required: false
     type: string
@@ -21,6 +21,9 @@ runs:
       env:
         TOKEN: ${{ inputs.private_git_token }}
       run: |
+        # Cargo's libgit2 often ignores url.insteadOf; force the git CLI so the
+        # rewrite below is used for private deps (ICP-Delete-Leaf, zombie-core).
+        echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
         git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
 
     - name: Install Rust toolchain

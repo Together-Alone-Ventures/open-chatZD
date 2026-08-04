@@ -28,7 +28,7 @@ jobs:
           CVDR_VERIFY_READ_TOKEN: ${{ secrets.CVDR_VERIFY_READ_TOKEN }}
         run: |
           if [ -z "${CVDR_VERIFY_READ_TOKEN}" ]; then
-            echo "::error::CVDR_VERIFY_READ_TOKEN is required (private git deps: ICP-Delete-Leaf + CVDR-Verify)."
+            echo "::error::CVDR_VERIFY_READ_TOKEN is required (private git deps: ICP-Delete-Leaf, zombie-core, CVDR-Verify)."
             exit 1
           fi
       - uses: ./.github/workflows/setup-rust
@@ -53,7 +53,7 @@ jobs:
           CVDR_VERIFY_READ_TOKEN: ${{ secrets.CVDR_VERIFY_READ_TOKEN }}
         run: |
           if [ -z "${CVDR_VERIFY_READ_TOKEN}" ]; then
-            echo "::error::CVDR_VERIFY_READ_TOKEN is required (private git deps: ICP-Delete-Leaf + CVDR-Verify @ v0.7.0)."
+            echo "::error::CVDR_VERIFY_READ_TOKEN is required (private git deps: ICP-Delete-Leaf, zombie-core, CVDR-Verify)."
             exit 1
           fi
       - name: Clear any PR-supplied CVDR-Verify stub
