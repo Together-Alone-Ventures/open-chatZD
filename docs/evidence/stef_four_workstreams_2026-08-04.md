@@ -8,9 +8,11 @@
 
 | Repo | Branch / note | SHA |
 |------|---------------|-----|
-| open-chatZD | `antek` implementation (B1/timing/A + RTS) | `f59bcadbf36a14c106b6d4ecb434614f6f256315` |
-| open-chatZD | `antek` evidence package | parent of tip is impl `f59bcadb`; tip = HEAD of this docs commit |
-| CVDR-Verify | `openchatzd-portable-v2-bytes-receipt-id` | `c760a2e3d8b723312bb00a170d13d3064a3e251b` |
+| open-chatZD | `antek` post-review tip | `8df74b35dd89f49314ad562000401a0b7946bd3d` |
+| open-chatZD | initial Stef four-workstream impl (B1/timing/A + RTS) | `f59bcadbf36a14c106b6d4ecb434614f6f256315` |
+| open-chatZD | evidence package | tip of antek after this docs commit |
+| CVDR-Verify | `openchatzd-portable-v2-bytes-receipt-id` tip | `27e620667a94cf739b745be27a902c4846b26b09` |
+| CVDR-Verify | PortablePackageV2 bytes-only + receipt_id recompute | `c760a2e3d8b723312bb00a170d13d3064a3e251b` |
 
 Parent pins: open-chatZD parent `dd65774c54f04cd7335cab95d43f289de60c79c9`; CVDR-Verify base tag `v0.7.0` = `e884ac43b905a5a8ce6e82c0f591b728174b5593`.
 
@@ -20,11 +22,11 @@ Parent pins: open-chatZD parent `dd65774c54f04cd7335cab95d43f289de60c79c9`; CVDR
 
 | ID | Severity | Done |
 |----|----------|------|
-| **B1** | BLOCKER | Independent `authorize_canister_ranges` in store-gate after `cert.verify`; empty/malformed → reject |
-| **B timing** | MAJOR | INDEX give-up anchors only on `receipt_committed_at > 0`; no `certificate_time` fallback |
+| **B1** | BLOCKER | Independent `authorize_canister_ranges` after `cert.verify`; empty/malformed ≠ vacuous pass; distinct `NotInRange` / `RangesMissing` / `Malformed` |
+| **B timing** | MAJOR | INDEX give-up anchors only on `receipt_committed_at > 0`; sticky given-up set stops timer spam |
 | **C** | BLOCKER | PortablePackageV2 `frozen` = exact bytes only; `receipt_id` recompute before witness |
-| **D** | MAJOR | Timing ⊥ outcome (`predate_timing_keeps_match_outcome`); no live V3-A labels; cross-repo guard green |
-| **A** | BLOCKER | Persist readback blocks reveal; delayed ≠ done; no logout on exhaustion; App anonymous recovery; RT-OCZD-5 |
+| **D** | MAJOR | Timing ⊥ outcome (incl. PREDATES + HASH_MISMATCH); no live V3-A labels; cross-repo guard green |
+| **A** | BLOCKER | Persist readback blocks reveal; delayed ≠ done; no logout on exhaustion; anonymous recovery gated on `deletionStarted`; RT-OCZD-5 |
 
 ---
 
@@ -34,31 +36,28 @@ Parent pins: open-chatZD parent `dd65774c54f04cd7335cab95d43f289de60c79c9`; CVDR
 
 ```
 cargo test -p local_user_index_canister_impl --lib -- cvdr_canister_ranges
-# 10 passed (wrong-range, empty-range-set, malformed shard, both layouts, …)
+# 12 passed
 
-cargo test -p local_user_index_canister_impl --lib -- give_up_anchor
-# 1 passed — give_up_anchor_is_receipt_committed_at_only
+cargo test -p local_user_index_canister_impl --lib -- give_up_anchor index_given_up
+# 2 passed
 
 cargo test -p local_user_index_canister_impl --lib -- labels_match_sibling
-# 1 passed — labels_match_sibling_cvdr_verify_when_present (sibling CVDR-Verify present)
+# 1 passed
 ```
 
 ### CVDR-Verify — `mktd02-verify`
 
 ```
-cd CVDR-Verify/mktd02/mktd02-verify && cargo test --locked
-# 82 passed; 0 failed; 0 ignored
-# Includes: portable_v2_rejects_object_form_frozen, receipt_id recompute path,
-#   predate_timing_keeps_match_outcome, match_and_outside_window_coexist_not_unqualified
+cd CVDR-Verify/mktd02/mktd02-verify && cargo test --locked openchatzd
+# 54+ passed including receipt_id_mismatch_rejects_before_witness,
+# predate_timing_keeps_mismatch_outcome, portable_v2_rejects_non_string_frozen
 ```
-
-OpenChatZD-filtered subset: **51** `openchatzd::*` passed.
 
 ### Frontend shared
 
 ```
 cd frontend/openchat-shared && npx vitest run src/domain/cvdr.spec.ts
-# 9 passed
+# 15 passed
 ```
 
 ---
@@ -69,111 +68,62 @@ cd frontend/openchat-shared && npx vitest run src/domain/cvdr.spec.ts
 
 | Case | Result |
 |------|--------|
-| Legacy in-range | authorize OK |
-| Sharded in-range | authorize OK |
-| Out of range (legacy/sharded) | reject |
-| Empty resolved sharded set | authorization failure (not vacuous pass) |
-| Malformed CBOR leaf | reject |
-| Later shard malformed | reject |
-| Deeper descendant path | reject |
-| Wrong subnet | reject |
-| Absent from both layouts | reject |
+| Out of range | `NotInRange` → `CanisterNotInRange` |
+| Empty / absent layouts | `RangesMissing` → `CanisterRangesMissing` |
+| Malformed CBOR / depth / nested | `Malformed` → `CanisterRangesMalformed` |
 
 ### PortablePackageV2 (C)
 
 | Case | Result |
 |------|--------|
-| Object-form `frozen` | structural reject |
-| Non-exact `version` | reject |
-| Null/empty INDEX evidence | malformed (not UNAVAILABLE) |
-| Whitespace-equivalent JSON bytes | sha256 reject |
-| Hex/base64 Gate A agree | pass |
-| `receipt_id` mismatch vs recompute | Reject before witness |
+| Object-form / non-string `frozen` | structural reject |
+| `receipt_id` mismatch | Reject before witness/§9 |
 
 ---
 
 ## PocketIC / FailedStuck + `#[ignore]` inventory
 
-**FailedStuck path (active, not ignored):**  
-`cvdr_tests.rs` — give-up → `FailedStuck` → `/cvdr_live` backstop;  
-`failed_stuck_survives_upgrade` (M7).
+Six ignored in `cvdr_tests.rs` (Slice 2/3 / superseded). Active FailedStuck path covered.
 
-**Six `#[ignore]` in `cvdr_tests.rs` (legacy / Slice 2–3):**
+**Re-run 2026-08-04:** `./scripts/run-integration-tests.sh local 4 cvdr_`
 
-1. `cvdr_store_fetch_round_trip` — superseded by gate-A HTTP/Candid match  
-2. `absent_finalizer_withholds_completion_and_resumes` — Slice 2/3 inverted by §8  
-3. `p2_export_path_is_banked_not_half_alive` — Slice 2/3 finalize gating  
-4. `draft_survives_upgrade_then_finalizes` — Slice 2/3 finalize tail  
-5. `offline_verifier_round_trip_from_bytes` — needs stored package  
-6. `captured_executor_hash_survives_mid_flight_upgrade` — needs stored receipt  
-
-(Additional banked ignores under `receipts_tests.rs` for P2 LUI→receipts export.)
-
-PocketIC full suite not re-run in this evidence window; prior CD_REGATE baseline: `./scripts/run-integration-tests.sh local 4 cvdr_` → 15 passed / 6 ignored.
+```
+test result: ok. 15 passed; 0 failed; 6 ignored; finished in 162.23s
+```
 
 ---
 
 ## Dual-build hashes
 
-Script: `scripts/m2-repro-local-user-index.sh` (same-window Docker dual-build identity).  
-Not re-executed in this completion window (long Docker). Re-run before network cut if M2 claim is re-asserted:
+**Re-run 2026-08-04** at `78b9091a43e844878c8f0ac69389c1947a4dbba6`:
 
 ```
-./scripts/m2-repro-local-user-index.sh
-# compare dest/*/SHA256 for local_user_index.wasm.gz
+build1=7a646d2e20ccacc63e6a962755ee8d34bc0693db6a05b860adaf237323d7b780
+build2=7a646d2e20ccacc63e6a962755ee8d34bc0693db6a05b860adaf237323d7b780
+PASS: byte-identical local_user_index.wasm.gz
 ```
+
+Tip `8df74b35` changes canister sources — re-run M2 on tip if claiming identity for the final SHA.
 
 ---
 
 ## Cross-repo guard
 
-With sibling `../CVDR-Verify` at `c760a2e3d8b723312bb00a170d13d3064a3e251b`:
-
-- `labels_match_sibling_cvdr_verify_when_present` — **PASS**  
-- No live OpenChatZD outcome tokens `V3-A` / `V3A` / `V3_A_` (retirement comments + guard tests only; VAPID base64 substrings in build scripts are unrelated)
+Sibling CVDR-Verify at `27e620667a94cf739b745be27a902c4846b26b09`: labels match; no live V3-A tokens.
 
 ---
 
 ## Frontend recovery walkthrough (manual repro)
 
-**Capability persist + block**
-
-1. Open Delete account → Continue → Prepare.  
-2. Simulate storage failure (DevTools → block localStorage / quota).  
-3. Expect: error `danger.cvdr.persistFailed`, **no** reveal step, **no** delete.
-
-**Close-tab mid-pending**
-
-1. Prepare → save RevealWire → ack → reauth → delete.  
-2. While UI shows polling, close the tab (leave `oc_cvdr_receipt_pending` in localStorage).  
-3. Reopen app logged out / anonymous.  
-4. Expect: `CvdrAnonymousRecovery` polls `/cvdr/<receipt_id>`, downloads when Available, clears pending, shows done.  
-5. If still pending after poll budget: UI shows **delayed** (not done); pending key retained.
-
-**Exhaustion ≠ success**
-
-1. Force poll failures (block network to raw host).  
-2. After attempts: step `delayed`, **no** `finishDeleteAccountLogout` unless user chooses “Sign out and keep waiting” (explicit handoff; pending kept).
-
-**Abandon residual (RT-OCZD-5)**
-
-1. At reveal, copy warns: destroying saved capability is unrecoverable.  
-2. RTS § RT-OCZD-5 states the same residual.
+1. Persist failure blocks reveal/delete.  
+2. Prepare-only remount → re-auth (not auto-poll).  
+3. Post-delete close-tab → anonymous recovery when `deletionStarted`.  
+4. Poll exhaustion → delayed, never done; RT-OCZD-5 for abandoned capability.
 
 ---
 
-## Key paths touched
+## Key paths
 
-**open-chatZD**
+**open-chatZD:** `cvdr_canister_ranges.rs`, `cvdr.rs`, `self_capture_index_evidence.rs`, `cvdr.ts`, ConfirmDeleteAccount (desktop/mobile), `CvdrAnonymousRecovery.svelte`, RTS RT-OCZD-5  
 
-- `backend/.../model/cvdr_canister_ranges.rs` (new)  
-- `backend/.../model/cvdr.rs` (store-gate call)  
-- `backend/.../jobs/self_capture_index_evidence.rs`  
-- `frontend/openchat-client/src/openchat.ts` (`persist` boolean + `pollCvdrDelivery`)  
-- `ConfirmDeleteAccount.svelte` desktop + mobile  
-- `CvdrAnonymousRecovery.svelte` + both `App.svelte`  
-- `OpenChatZD_RTS_draft.md` (RT-OCZD-5)
-
-**CVDR-Verify**
-
-- `mktd02-verify/src/openchatzd/{package,body,mod}.rs`
+**CVDR-Verify:** `openchatzd/{package,body,mod,fixtures,index_attestation}.rs`
