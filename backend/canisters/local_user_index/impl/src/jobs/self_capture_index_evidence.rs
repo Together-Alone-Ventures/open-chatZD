@@ -13,7 +13,7 @@ use constants::SECOND_IN_MS;
 use ic_cdk_timers::TimerId;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tracing::{trace, warn};
 use types::{CanisterId, Milliseconds};
@@ -21,6 +21,9 @@ use types::{CanisterId, Milliseconds};
 thread_local! {
     static TIMER_ID: std::cell::Cell<Option<TimerId>> = const { std::cell::Cell::new(None) };
     static ATTEMPTS: RefCell<HashMap<Hash, AttemptState>> = RefCell::new(HashMap::new());
+    /// Receipts that already hit the 24h INDEX give-up (epoch-local). Stops re-log spam and
+    /// prevents the sweep timer from being re-armed forever for the same IDs.
+    static INDEX_GIVEN_UP: RefCell<HashSet<Hash>> = RefCell::new(HashSet::new());
 }
 
 #[derive(Clone, Copy, Default)]
@@ -54,7 +57,12 @@ pub(crate) fn give_up_anchor_ns(receipt_committed_at_ns: Option<u64>) -> Option<
 }
 
 pub(crate) fn start_if_required(state: &RuntimeState) -> bool {
-    let pending = !state.data.cvdr.frozen_receipt_ids_missing_index_evidence().is_empty();
+    let pending = state
+        .data
+        .cvdr
+        .frozen_receipt_ids_missing_index_evidence()
+        .into_iter()
+        .any(|id| !INDEX_GIVEN_UP.with(|g| g.borrow().contains(&id)));
     if TIMER_ID.with(|t| t.get().is_none()) && pending {
         let timer_id = ic_cdk_timers::set_timer(Duration::from_millis(SWEEP_INTERVAL_MS), run_sweep);
         TIMER_ID.with(|t| t.set(Some(timer_id)));
@@ -71,6 +79,9 @@ fn run_sweep() {
     let due: Vec<(Hash, u64)> = mutate_state(|state| {
         let mut due = Vec::new();
         for receipt_id in state.data.cvdr.frozen_receipt_ids_missing_index_evidence() {
+            if INDEX_GIVEN_UP.with(|g| g.borrow().contains(&receipt_id)) {
+                continue;
+            }
             let Some(pkg) = state.data.cvdr.get_frozen_package(&receipt_id) else {
                 continue;
             };
@@ -82,6 +93,9 @@ fn run_sweep() {
                 if age_from_anchor_ms > GIVE_UP_MS {
                     ATTEMPTS.with(|m| {
                         m.borrow_mut().remove(&receipt_id);
+                    });
+                    INDEX_GIVEN_UP.with(|g| {
+                        g.borrow_mut().insert(receipt_id);
                     });
                     warn!(
                         event = "cvdr_index_evidence_give_up",
@@ -300,6 +314,23 @@ mod tests {
         assert_eq!(give_up_anchor_ns(Some(100)), Some(100));
         assert_eq!(give_up_anchor_ns(Some(0)), None);
         assert_eq!(give_up_anchor_ns(None), None);
+    }
+
+    #[test]
+    fn index_given_up_is_sticky_within_epoch() {
+        let id = [0x11u8; 32];
+        INDEX_GIVEN_UP.with(|g| g.borrow_mut().clear());
+        assert!(!INDEX_GIVEN_UP.with(|g| g.borrow().contains(&id)));
+        INDEX_GIVEN_UP.with(|g| {
+            g.borrow_mut().insert(id);
+        });
+        assert!(INDEX_GIVEN_UP.with(|g| g.borrow().contains(&id)));
+        // Second insert is idempotent — models "do not re-log / re-queue".
+        INDEX_GIVEN_UP.with(|g| {
+            g.borrow_mut().insert(id);
+        });
+        assert_eq!(INDEX_GIVEN_UP.with(|g| g.borrow().len()), 1);
+        INDEX_GIVEN_UP.with(|g| g.borrow_mut().clear());
     }
 
     #[test]

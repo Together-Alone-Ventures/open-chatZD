@@ -10,6 +10,28 @@
 use candid::Principal;
 use ic_certification::{Certificate, LookupResult, SubtreeLookupResult};
 
+/// Distinct failure modes for the independent range check (D2 honest taxonomy).
+/// Mapped into [`crate::model::cvdr::CertRejectReason`] at the store-gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RangeAuthError {
+    /// Ranges present and decoded, but `effective_canister_id` is outside every range.
+    NotInRange,
+    /// Neither legacy nor sharded layout yields a non-empty resolved range set.
+    RangesMissing,
+    /// Delegation CBOR / nested delegation / shard depth / leaf CBOR decode failure.
+    Malformed,
+}
+
+impl RangeAuthError {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RangeAuthError::NotInRange => "certificate_canister_not_in_range",
+            RangeAuthError::RangesMissing => "certificate_canister_ranges_missing",
+            RangeAuthError::Malformed => "certificate_canister_ranges_malformed",
+        }
+    }
+}
+
 /// Authorize `effective_canister_id` against ranges proven in `delegated_cert` for `subnet_id`.
 ///
 /// - **Legacy:** `/subnet/<subnet_id>/canister_ranges` — single CBOR `Vec<(Principal, Principal)>`.
@@ -20,7 +42,7 @@ pub fn authorize_canister_ranges(
     delegated_cert: &Certificate,
     subnet_id: &[u8],
     effective_canister_id: &Principal,
-) -> Result<(), String> {
+) -> Result<(), RangeAuthError> {
     // Legacy single-blob layout.
     if let LookupResult::Found(blob) = delegated_cert.tree.lookup_path([
         b"subnet".as_ref(),
@@ -28,14 +50,11 @@ pub fn authorize_canister_ranges(
         b"canister_ranges".as_ref(),
     ]) {
         let ranges: Vec<(Principal, Principal)> = serde_cbor::from_slice(blob)
-            .map_err(|e| format!("Invalid canister_ranges payload (legacy layout): {e}"))?;
+            .map_err(|_| RangeAuthError::Malformed)?;
         return if principal_is_within_ranges(effective_canister_id, &ranges) {
             Ok(())
         } else {
-            Err(
-                "Certificate delegation is not authorized for this canister (legacy canister_ranges layout)"
-                    .to_string(),
-            )
+            Err(RangeAuthError::NotInRange)
         };
     }
 
@@ -51,21 +70,14 @@ pub fn authorize_canister_ranges(
         for path in subtree.list_paths() {
             present_shard = true;
             if path.len() != SHARDED_LEAF_DEPTH {
-                return Err(format!(
-                    "Invalid sharded canister_ranges layout: expected direct shard leaf at depth {SHARDED_LEAF_DEPTH} under /canister_ranges/<subnet_id>, found authenticated leaf at depth {}",
-                    path.len()
-                ));
+                return Err(RangeAuthError::Malformed);
             }
             let leaf = match subtree.lookup_path(&path) {
                 LookupResult::Found(leaf) => leaf,
-                other => {
-                    return Err(format!(
-                        "Sharded canister_ranges path enumerated by list_paths did not resolve to a Found leaf (lookup result: {other:?})"
-                    ));
-                }
+                _ => return Err(RangeAuthError::Malformed),
             };
-            let ranges: Vec<(Principal, Principal)> = serde_cbor::from_slice(leaf)
-                .map_err(|e| format!("Invalid canister_ranges payload (sharded layout): {e}"))?;
+            let ranges: Vec<(Principal, Principal)> =
+                serde_cbor::from_slice(leaf).map_err(|_| RangeAuthError::Malformed)?;
             if principal_is_within_ranges(effective_canister_id, &ranges) {
                 authorized = true;
             }
@@ -74,19 +86,13 @@ pub fn authorize_canister_ranges(
             return if authorized {
                 Ok(())
             } else {
-                Err(
-                    "Certificate delegation is not authorized for this canister (sharded canister_ranges layout)"
-                        .to_string(),
-                )
+                Err(RangeAuthError::NotInRange)
             };
         }
         // Found subtree but no present leaves → empty resolved set → fail closed below.
     }
 
-    Err(
-        "Delegation certificate missing canister_ranges in both legacy (/subnet/<id>/canister_ranges) and sharded (/canister_ranges/<id>/<shard>) tree layouts"
-            .to_string(),
-    )
+    Err(RangeAuthError::RangesMissing)
 }
 
 /// After BLS/`cert.verify`, independently re-check range containment on the delegation
@@ -94,14 +100,14 @@ pub fn authorize_canister_ranges(
 pub fn assert_delegation_range_containment(
     cert: &Certificate,
     effective_canister_id: Principal,
-) -> Result<(), String> {
+) -> Result<(), RangeAuthError> {
     let Some(delegation) = &cert.delegation else {
         return Ok(());
     };
     let delegated: Certificate = serde_cbor::from_slice(delegation.certificate.as_ref())
-        .map_err(|e| format!("Failed to parse delegation certificate CBOR: {e}"))?;
+        .map_err(|_| RangeAuthError::Malformed)?;
     if delegated.delegation.is_some() {
-        return Err("Delegation certificate contains nested delegation (unsupported)".to_string());
+        return Err(RangeAuthError::Malformed);
     }
     authorize_canister_ranges(
         &delegated,
@@ -218,104 +224,109 @@ mod tests {
 
     #[test]
     fn legacy_layout_rejects_out_of_range() {
-        let err = authorize_canister_ranges(
-            &legacy_cert(),
-            SUBNET_ID,
-            &Principal::from_slice(OUT_OF_RANGE),
-        )
-        .unwrap_err();
-        assert!(err.contains("not authorized"), "unexpected error: {err}");
+        assert_eq!(
+            authorize_canister_ranges(
+                &legacy_cert(),
+                SUBNET_ID,
+                &Principal::from_slice(OUT_OF_RANGE),
+            ),
+            Err(RangeAuthError::NotInRange)
+        );
     }
 
     #[test]
     fn sharded_layout_rejects_out_of_range() {
-        let err = authorize_canister_ranges(
-            &sharded_cert(),
-            SUBNET_ID,
-            &Principal::from_slice(OUT_OF_RANGE),
-        )
-        .unwrap_err();
-        assert!(err.contains("not authorized"), "unexpected error: {err}");
+        assert_eq!(
+            authorize_canister_ranges(
+                &sharded_cert(),
+                SUBNET_ID,
+                &Principal::from_slice(OUT_OF_RANGE),
+            ),
+            Err(RangeAuthError::NotInRange)
+        );
     }
 
     #[test]
     fn rejects_when_ranges_absent_from_both_layouts() {
         let cert = cert_with_tree(label("time", leaf(vec![1, 2, 3])));
-        let err =
-            authorize_canister_ranges(&cert, SUBNET_ID, &Principal::from_slice(IN_RANGE)).unwrap_err();
-        assert!(
-            err.contains("missing canister_ranges in both"),
-            "unexpected error: {err}"
+        assert_eq!(
+            authorize_canister_ranges(&cert, SUBNET_ID, &Principal::from_slice(IN_RANGE)),
+            Err(RangeAuthError::RangesMissing)
         );
     }
 
     #[test]
     fn empty_resolved_sharded_set_is_authorization_failure() {
-        let err = authorize_canister_ranges(
-            &empty_sharded_subtree(),
-            SUBNET_ID,
-            &Principal::from_slice(IN_RANGE),
-        )
-        .unwrap_err();
-        assert!(
-            err.contains("missing canister_ranges in both"),
-            "empty set must fail closed, got: {err}"
+        assert_eq!(
+            authorize_canister_ranges(
+                &empty_sharded_subtree(),
+                SUBNET_ID,
+                &Principal::from_slice(IN_RANGE),
+            ),
+            Err(RangeAuthError::RangesMissing)
         );
     }
 
     #[test]
     fn sharded_layout_rejects_malformed_cbor_leaf() {
-        let err = authorize_canister_ranges(
-            &sharded_cert_malformed_leaf(),
-            SUBNET_ID,
-            &Principal::from_slice(IN_RANGE),
-        )
-        .unwrap_err();
-        assert!(
-            err.contains("Invalid canister_ranges payload (sharded layout)"),
-            "unexpected error: {err}"
+        assert_eq!(
+            authorize_canister_ranges(
+                &sharded_cert_malformed_leaf(),
+                SUBNET_ID,
+                &Principal::from_slice(IN_RANGE),
+            ),
+            Err(RangeAuthError::Malformed)
         );
     }
 
     #[test]
     fn rejects_when_ranges_signed_under_wrong_subnet() {
-        let err = authorize_canister_ranges(
-            &sharded_cert_wrong_subnet(),
-            SUBNET_ID,
-            &Principal::from_slice(IN_RANGE),
-        )
-        .unwrap_err();
-        assert!(
-            err.contains("missing canister_ranges in both"),
-            "unexpected error: {err}"
+        assert_eq!(
+            authorize_canister_ranges(
+                &sharded_cert_wrong_subnet(),
+                SUBNET_ID,
+                &Principal::from_slice(IN_RANGE),
+            ),
+            Err(RangeAuthError::RangesMissing)
         );
     }
 
     #[test]
     fn sharded_layout_rejects_when_a_later_leaf_is_malformed() {
-        let err = authorize_canister_ranges(
-            &sharded_cert_valid_then_malformed(),
-            SUBNET_ID,
-            &Principal::from_slice(IN_RANGE),
-        )
-        .unwrap_err();
-        assert!(
-            err.contains("Invalid canister_ranges payload (sharded layout)"),
-            "unexpected error: {err}"
+        assert_eq!(
+            authorize_canister_ranges(
+                &sharded_cert_valid_then_malformed(),
+                SUBNET_ID,
+                &Principal::from_slice(IN_RANGE),
+            ),
+            Err(RangeAuthError::Malformed)
         );
     }
 
     #[test]
     fn sharded_layout_rejects_deeper_descendant_path() {
-        let err = authorize_canister_ranges(
-            &sharded_cert_deeper_path(),
-            SUBNET_ID,
-            &Principal::from_slice(IN_RANGE),
-        )
-        .unwrap_err();
-        assert!(
-            err.contains("expected direct shard leaf"),
-            "unexpected error: {err}"
+        assert_eq!(
+            authorize_canister_ranges(
+                &sharded_cert_deeper_path(),
+                SUBNET_ID,
+                &Principal::from_slice(IN_RANGE),
+            ),
+            Err(RangeAuthError::Malformed)
         );
+    }
+
+    #[test]
+    fn assert_delegation_ok_when_no_delegation() {
+        assert_eq!(
+            assert_delegation_range_containment(&legacy_cert(), Principal::from_slice(IN_RANGE)),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn range_auth_error_strings_are_distinct() {
+        assert_ne!(RangeAuthError::NotInRange.as_str(), RangeAuthError::RangesMissing.as_str());
+        assert_ne!(RangeAuthError::NotInRange.as_str(), RangeAuthError::Malformed.as_str());
+        assert_ne!(RangeAuthError::RangesMissing.as_str(), RangeAuthError::Malformed.as_str());
     }
 }

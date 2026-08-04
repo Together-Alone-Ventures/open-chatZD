@@ -4,6 +4,7 @@
     import {
         AuthProvider,
         currentUserIdStore,
+        cvdrSessionAwaitingDelivery,
         downloadBytesAsFile,
         i18nKey,
         OpenChat,
@@ -52,13 +53,17 @@
     $effect(() => {
         if (resumed || step !== "confirm") return;
         const session = client.loadPersistedCvdrReceiptSession(currentUserIdStore.value);
-        if (session) {
-            resumed = true;
-            receiptId = session.receiptId;
-            localUserIndex = session.localUserIndex;
-            bearerUrl = client.cvdrDownloadUrl(localUserIndex, receiptId);
+        if (!session) return;
+        resumed = true;
+        receiptId = session.receiptId;
+        localUserIndex = session.localUserIndex;
+        bearerUrl = client.cvdrDownloadUrl(localUserIndex, receiptId);
+        if (cvdrSessionAwaitingDelivery(session)) {
             step = "polling";
             void pollUntilAvailable(true);
+        } else {
+            revealAck = true;
+            authenticating = true;
         }
     });
 
@@ -83,6 +88,7 @@
         const persisted = client.persistCvdrReceiptSession(currentUserIdStore.value, {
             receiptId,
             localUserIndex,
+            deletionStarted: false,
         });
         if (!persisted) {
             errorMessage = interpolate($_, i18nKey("danger.cvdr.persistFailed"));
@@ -126,6 +132,11 @@
                     toastStore.showFailureToast(i18nKey("danger.deleteAccountFailed"));
                     step = "error";
                     errorMessage = "Delete failed";
+                    return;
+                }
+                if (!client.markCvdrDeletionStarted(currentUserIdStore.value)) {
+                    step = "error";
+                    errorMessage = interpolate($_, i18nKey("danger.cvdr.persistFailed"));
                     return;
                 }
                 step = "polling";

@@ -242,8 +242,12 @@ pub enum CertRejectReason {
     /// BLS signature verification against the NNS root (via the delegation chain) failed —
     /// forged/tampered signature, or an invalid delegation key.
     SignatureInvalid,
-    /// The certificate does not cover `self_canister_id` (delegation range miss / missing ranges).
+    /// The certificate does not cover `self_canister_id` (delegation range miss).
     CanisterNotInRange,
+    /// Independent store-gate: canister_ranges leaf missing / empty resolved set.
+    CanisterRangesMissing,
+    /// Independent store-gate: ranges/delegation CBOR malformed, nested delegation, bad shard.
+    CanisterRangesMalformed,
     /// The certificate `/time` is outside the freshness offset of `now` (replay / clock skew).
     Stale,
     /// Verified, but no `certified_data` leaf for this canister was present.
@@ -261,11 +265,22 @@ impl CertRejectReason {
             CertRejectReason::CborDecodeFailed => "certificate_cbor_decode_failed",
             CertRejectReason::SignatureInvalid => "certificate_signature_invalid",
             CertRejectReason::CanisterNotInRange => "certificate_canister_not_in_range",
+            CertRejectReason::CanisterRangesMissing => "certificate_canister_ranges_missing",
+            CertRejectReason::CanisterRangesMalformed => "certificate_canister_ranges_malformed",
             CertRejectReason::Stale => "certificate_stale",
             CertRejectReason::CertifiedDataMissing => "certificate_certified_data_missing",
             CertRejectReason::TimeMissing => "certificate_time_missing",
             CertRejectReason::OtherVerificationFailure => "certificate_verification_failed",
         }
+    }
+}
+
+fn map_range_auth_error(err: crate::model::cvdr_canister_ranges::RangeAuthError) -> CertRejectReason {
+    use crate::model::cvdr_canister_ranges::RangeAuthError as E;
+    match err {
+        E::NotInRange => CertRejectReason::CanisterNotInRange,
+        E::RangesMissing => CertRejectReason::CanisterRangesMissing,
+        E::Malformed => CertRejectReason::CanisterRangesMalformed,
     }
 }
 
@@ -313,7 +328,7 @@ pub fn verify_certificate(
     // Independent fail-closed range check (Stef B1): do not rely on vacuous
     // upstream sharded-range behaviour after BLS/delegation verify.
     crate::model::cvdr_canister_ranges::assert_delegation_range_containment(&cert, self_canister_id)
-        .map_err(|_| CertRejectReason::CanisterNotInRange)?;
+        .map_err(map_range_auth_error)?;
 
     let certified_data =
         match cert
@@ -377,9 +392,7 @@ pub fn verify_index_module_hash_evidence(
     cert.verify(self_canister_id.as_slice(), ic_root_key, &now_nanos, &max_offset_nanos)
         .map_err(|e| IndexEvidenceRejectReason::Certificate(map_cert_verification_error(&e)))?;
     crate::model::cvdr_canister_ranges::assert_delegation_range_containment(&cert, self_canister_id)
-        .map_err(|_| {
-            IndexEvidenceRejectReason::Certificate(CertRejectReason::CanisterNotInRange)
-        })?;
+        .map_err(|e| IndexEvidenceRejectReason::Certificate(map_range_auth_error(e)))?;
 
     let module_hash = match cert
         .tree
@@ -1681,6 +1694,28 @@ mod tests {
             verify_certificate(CERT, self_id, constants::IC_ROOT_KEY, now_ms + 10 * 60 * 1000),
             Err(CertRejectReason::Stale),
             "expired freshness -> Stale"
+        );
+
+        // Independent range-auth taxonomy must stay distinct (Stef B1 / D2).
+        assert_ne!(
+            CertRejectReason::CanisterNotInRange.as_str(),
+            CertRejectReason::CanisterRangesMissing.as_str()
+        );
+        assert_ne!(
+            CertRejectReason::CanisterNotInRange.as_str(),
+            CertRejectReason::CanisterRangesMalformed.as_str()
+        );
+        assert_eq!(
+            map_range_auth_error(crate::model::cvdr_canister_ranges::RangeAuthError::NotInRange),
+            CertRejectReason::CanisterNotInRange
+        );
+        assert_eq!(
+            map_range_auth_error(crate::model::cvdr_canister_ranges::RangeAuthError::RangesMissing),
+            CertRejectReason::CanisterRangesMissing
+        );
+        assert_eq!(
+            map_range_auth_error(crate::model::cvdr_canister_ranges::RangeAuthError::Malformed),
+            CertRejectReason::CanisterRangesMalformed
         );
     }
 

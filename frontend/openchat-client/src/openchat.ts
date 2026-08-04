@@ -80,6 +80,7 @@ import {
     parseCvdrReceiptSession,
     pinNumberFailureFromError,
     pollCvdrHttp,
+    pollCvdrUntilSettled,
     publish,
     random64,
     removeEmailSignInSession,
@@ -9855,7 +9856,7 @@ export class OpenChat {
      */
     persistCvdrReceiptSession(
         userId: string | undefined,
-        session: { receiptId: string; localUserIndex: string },
+        session: { receiptId: string; localUserIndex: string; deletionStarted?: boolean },
     ): boolean {
         try {
             const raw = serializeCvdrReceiptSession(session);
@@ -9870,7 +9871,8 @@ export class OpenChat {
             if (
                 pending === undefined ||
                 pending.receiptId !== expectedId ||
-                pending.localUserIndex !== session.localUserIndex
+                pending.localUserIndex !== session.localUserIndex ||
+                pending.deletionStarted !== (session.deletionStarted === true)
             ) {
                 return false;
             }
@@ -9881,7 +9883,8 @@ export class OpenChat {
                 if (
                     fromUser === undefined ||
                     fromUser.receiptId !== expectedId ||
-                    fromUser.localUserIndex !== session.localUserIndex
+                    fromUser.localUserIndex !== session.localUserIndex ||
+                    fromUser.deletionStarted !== (session.deletionStarted === true)
                 ) {
                     return false;
                 }
@@ -9890,6 +9893,16 @@ export class OpenChat {
         } catch {
             return false;
         }
+    }
+
+    /** Flip session to post-delete so remount / anonymous recovery may auto-poll. */
+    markCvdrDeletionStarted(userId: string | undefined): boolean {
+        const existing = this.loadPersistedCvdrReceiptSession(userId);
+        if (!existing) return false;
+        return this.persistCvdrReceiptSession(userId, {
+            ...existing,
+            deletionStarted: true,
+        });
     }
 
     /**
@@ -9908,35 +9921,7 @@ export class OpenChat {
         | { kind: "available"; body: Uint8Array; contentType: string }
         | { kind: "delayed" }
     > {
-        const maxAttempts = options?.maxAttempts ?? 60;
-        const softWaitUnknown = options?.softWaitUnknownAttempts ?? 5;
-        for (let i = 0; i < maxAttempts; i++) {
-            const status: CvdrPollStatus = await this.pollCvdr(localUserIndex, receiptId);
-            if (status.kind === "available") {
-                return {
-                    kind: "available",
-                    body: status.body,
-                    contentType: status.contentType,
-                };
-            }
-            if (status.kind === "pending") {
-                options?.onStatus?.(
-                    `Receipt pending… retry in ${status.retryAfterSecs}s`,
-                );
-                await new Promise((r) =>
-                    setTimeout(r, Math.max(1, status.retryAfterSecs) * 1000),
-                );
-                continue;
-            }
-            if (status.kind === "unknown" && i < softWaitUnknown) {
-                options?.onStatus?.("Not found yet — waiting for draft…");
-                await new Promise((r) => setTimeout(r, 2000));
-                continue;
-            }
-            options?.onStatus?.(status.kind === "error" ? status.detail : status.kind);
-            await new Promise((r) => setTimeout(r, 3000));
-        }
-        return { kind: "delayed" };
+        return pollCvdrUntilSettled(() => this.pollCvdr(localUserIndex, receiptId), options);
     }
 
     loadPersistedCvdrReceiptSession(

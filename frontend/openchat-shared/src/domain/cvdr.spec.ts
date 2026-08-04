@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import {
     cvdrDownloadUrl,
     cvdrReceiptStorageKey,
+    cvdrSessionAwaitingDelivery,
     parseCvdrReceiptSession,
     pollCvdrHttp,
+    pollCvdrUntilSettled,
     serializeCvdrReceiptSession,
 } from "./cvdr";
 
@@ -38,11 +40,50 @@ describe("cvdr helpers", () => {
         expect(parseCvdrReceiptSession(raw)).toEqual({
             receiptId: "ab".repeat(32),
             localUserIndex: "aaaaa-aa",
+            deletionStarted: false,
         });
+    });
+
+    it("round-trips deletionStarted flag for post-delete recovery", () => {
+        const raw = serializeCvdrReceiptSession({
+            receiptId: "ab".repeat(32),
+            localUserIndex: "aaaaa-aa",
+            deletionStarted: true,
+        });
+        const parsed = parseCvdrReceiptSession(raw);
+        expect(parsed?.deletionStarted).toBe(true);
+        expect(cvdrSessionAwaitingDelivery(parsed!)).toBe(true);
+    });
+
+    it("prepare-only session is not awaiting delivery", () => {
+        expect(
+            cvdrSessionAwaitingDelivery({
+                receiptId: "ab".repeat(32),
+                localUserIndex: "aaaaa-aa",
+                deletionStarted: false,
+            }),
+        ).toBe(false);
+        expect(
+            cvdrSessionAwaitingDelivery({
+                receiptId: "ab".repeat(32),
+                localUserIndex: "aaaaa-aa",
+            }),
+        ).toBe(false);
     });
 
     it("rejects legacy bare receipt hex (missing LUI — cannot resume poll)", () => {
         expect(parseCvdrReceiptSession("ab".repeat(32))).toBeUndefined();
+    });
+
+    it("rejects non-hex 64-char receiptId", () => {
+        expect(
+            parseCvdrReceiptSession(
+                JSON.stringify({
+                    receiptId: "z".repeat(64),
+                    localUserIndex: "aaaaa-aa",
+                }),
+            ),
+        ).toBeUndefined();
     });
 
     it("rejects malformed session JSON", () => {
@@ -83,5 +124,48 @@ describe("pollCvdrHttp", () => {
         expect(await pollCvdrHttp("u", notFound)).toEqual({ kind: "unknown" });
         const bad = vi.fn(async () => new Response("{}", { status: 400 })) as unknown as typeof fetch;
         expect(await pollCvdrHttp("u", bad)).toEqual({ kind: "malformed" });
+    });
+});
+
+describe("pollCvdrUntilSettled", () => {
+    it("returns available without clearing anything", async () => {
+        const body = new Uint8Array([9]);
+        const result = await pollCvdrUntilSettled(
+            async () => ({ kind: "available", body, contentType: "application/json" }),
+            { sleep: async () => undefined },
+        );
+        expect(result).toEqual({ kind: "available", body, contentType: "application/json" });
+    });
+
+    it("returns delayed on exhaustion — never available", async () => {
+        let calls = 0;
+        const result = await pollCvdrUntilSettled(
+            async () => {
+                calls += 1;
+                return { kind: "pending", retryAfterSecs: 1 };
+            },
+            { maxAttempts: 3, softWaitUnknownAttempts: 0, sleep: async () => undefined },
+        );
+        expect(result).toEqual({ kind: "delayed" });
+        expect(calls).toBe(3);
+    });
+
+    it("soft-waits unknown then continues", async () => {
+        const statuses = [
+            { kind: "unknown" as const },
+            { kind: "unknown" as const },
+            {
+                kind: "available" as const,
+                body: new Uint8Array([1]),
+                contentType: "application/json",
+            },
+        ];
+        let i = 0;
+        const result = await pollCvdrUntilSettled(
+            async () => statuses[i++]!,
+            { maxAttempts: 5, softWaitUnknownAttempts: 5, sleep: async () => undefined },
+        );
+        expect(result.kind).toBe("available");
+        expect(i).toBe(3);
     });
 });

@@ -2,6 +2,7 @@
     import {
         AuthProvider,
         currentUserIdStore,
+        cvdrSessionAwaitingDelivery,
         downloadBytesAsFile,
         i18nKey,
         OpenChat,
@@ -50,16 +51,24 @@
     let bearerUrl = $state("");
     let errorMessage = $state("");
     let pollStatus = $state("");
+    let resumed = $state(false);
 
     $effect(() => {
-        if (step !== "intro") return;
+        if (resumed || step !== "intro") return;
         const session = client.loadPersistedCvdrReceiptSession(currentUserIdStore.value);
-        if (session) {
-            receiptId = session.receiptId;
-            localUserIndex = session.localUserIndex;
-            bearerUrl = client.cvdrDownloadUrl(localUserIndex, receiptId);
+        if (!session) return;
+        resumed = true;
+        receiptId = session.receiptId;
+        localUserIndex = session.localUserIndex;
+        bearerUrl = client.cvdrDownloadUrl(localUserIndex, receiptId);
+        if (cvdrSessionAwaitingDelivery(session)) {
+            // Delete already succeeded — resume delivery poll only.
             step = "polling";
             void pollUntilAvailable(true);
+        } else {
+            // Prepare-only: do not poll (no CVDR until delete). Continue to re-auth.
+            revealAck = true;
+            step = "authenticating";
         }
     });
 
@@ -84,6 +93,7 @@
         const persisted = client.persistCvdrReceiptSession(currentUserIdStore.value, {
             receiptId,
             localUserIndex,
+            deletionStarted: false,
         });
         if (!persisted) {
             errorMessage = interpolate($_, i18nKey("danger.cvdr.persistFailed"));
@@ -126,6 +136,12 @@
                     toastStore.showFailureToast(i18nKey("danger.deleteAccountFailed"));
                     step = "error";
                     errorMessage = "Delete failed";
+                    return;
+                }
+                if (!client.markCvdrDeletionStarted(currentUserIdStore.value)) {
+                    // Capability must remain pollable after logout — block success path.
+                    step = "error";
+                    errorMessage = interpolate($_, i18nKey("danger.cvdr.persistFailed"));
                     return;
                 }
                 step = "polling";

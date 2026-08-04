@@ -20,10 +20,15 @@ export type CvdrPollStatus =
     | { kind: "malformed" }
     | { kind: "error"; status: number; detail: string };
 
-/** Persisted so refresh recovery can poll `/cvdr` after logout without LUI in session. */
+/**
+ * Persisted so refresh recovery can poll `/cvdr` after logout without LUI in session.
+ * `deletionStarted` is set only after delete succeeds — auto-poll / anonymous recovery
+ * must not run for prepare-only sessions (would trap in delayed without a CVDR).
+ */
 export type CvdrReceiptSession = {
     receiptId: string;
     localUserIndex: string;
+    deletionStarted?: boolean;
 };
 
 export const CVDR_RECEIPT_STORAGE_PREFIX = "oc_cvdr_receipt_";
@@ -38,6 +43,7 @@ export function serializeCvdrReceiptSession(session: CvdrReceiptSession): string
     return JSON.stringify({
         receiptId: session.receiptId.toLowerCase(),
         localUserIndex: session.localUserIndex,
+        deletionStarted: session.deletionStarted === true,
     });
 }
 
@@ -47,16 +53,19 @@ export function parseCvdrReceiptSession(raw: string | null | undefined): CvdrRec
     const trimmed = raw.trim();
     if (trimmed.startsWith("{")) {
         try {
-            const v = JSON.parse(trimmed) as Partial<CvdrReceiptSession>;
+            const v = JSON.parse(trimmed) as Partial<CvdrReceiptSession> & {
+                deletionStarted?: unknown;
+            };
             if (
                 typeof v.receiptId === "string" &&
-                v.receiptId.length === 64 &&
+                /^[0-9a-fA-F]{64}$/.test(v.receiptId) &&
                 typeof v.localUserIndex === "string" &&
                 v.localUserIndex.length > 0
             ) {
                 return {
                     receiptId: v.receiptId.toLowerCase(),
                     localUserIndex: v.localUserIndex,
+                    deletionStarted: v.deletionStarted === true,
                 };
             }
         } catch {
@@ -69,6 +78,55 @@ export function parseCvdrReceiptSession(raw: string | null | undefined): CvdrRec
         return undefined;
     }
     return undefined;
+}
+
+/** True only after irreversible delete — safe to auto-poll / anonymous-recover. */
+export function cvdrSessionAwaitingDelivery(session: CvdrReceiptSession): boolean {
+    return session.deletionStarted === true;
+}
+
+/**
+ * Poll until Available or attempts exhausted. Does not clear storage or logout.
+ * Extracted for unit tests; OpenChat.pollCvdrDelivery delegates here.
+ */
+export async function pollCvdrUntilSettled(
+    pollOnce: () => Promise<CvdrPollStatus>,
+    options?: {
+        maxAttempts?: number;
+        softWaitUnknownAttempts?: number;
+        onStatus?: (status: string) => void;
+        sleep?: (ms: number) => Promise<void>;
+    },
+): Promise<
+    | { kind: "available"; body: Uint8Array; contentType: string }
+    | { kind: "delayed" }
+> {
+    const maxAttempts = options?.maxAttempts ?? 60;
+    const softWaitUnknown = options?.softWaitUnknownAttempts ?? 5;
+    const sleep = options?.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+    for (let i = 0; i < maxAttempts; i++) {
+        const status = await pollOnce();
+        if (status.kind === "available") {
+            return {
+                kind: "available",
+                body: status.body,
+                contentType: status.contentType,
+            };
+        }
+        if (status.kind === "pending") {
+            options?.onStatus?.(`Receipt pending… retry in ${status.retryAfterSecs}s`);
+            await sleep(Math.max(1, status.retryAfterSecs) * 1000);
+            continue;
+        }
+        if (status.kind === "unknown" && i < softWaitUnknown) {
+            options?.onStatus?.("Not found yet — waiting for draft…");
+            await sleep(2000);
+            continue;
+        }
+        options?.onStatus?.(status.kind === "error" ? status.detail : status.kind);
+        await sleep(3000);
+    }
+    return { kind: "delayed" };
 }
 
 export function cvdrDownloadUrl(canisterUrlPath: string, localUserIndex: string, receiptIdHex: string): string {
