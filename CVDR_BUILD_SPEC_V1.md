@@ -150,19 +150,22 @@ pub struct FrozenCvdrPackage {
 | `receipt_committed_at` | same message as tree insert + `certified_data_set` | **window anchor** |
 | `certificate_time` | from captured certificate `/time` | yes |
 
-**Verifier timing rules (G4-R3 — two distinct thresholds; IC certified times only):**
+**Verifier timing rules (G4-R3 / G v0.7.0 — two distinct thresholds; IC certified times only):**
 
-1. **Commitment ordering (hard fail):** commitment certificate `/time` must not predate
-   `receipt_committed_at`.
-2. **Attestation delay (1 hour):** INDEX Module Hash certificate `/time` minus commitment
-   certificate `/time` must be ≥ 0. If the delta is ≤ 1 hour → routine. If the delta is >
-   1 hour but still within the completion window → `DELAY_EXCEEDED` / late downgrade
-   (never a silent pass). Frontend wall clocks are never used.
+1. **Commitment ordering (hard fail on store-gate):** commitment certificate `/time` must not
+   predate `receipt_committed_at`.
+2. **Attestation delay (1 hour) — certificate-pair separation (S12):** delay is
+   `t(INDEX certificate) − t(commitment certificate)`. It bounds **certificate separation**,
+   not how long a receipt sat pending. If INDEX `/time` < commitment `/time` → timing
+   `PREDATES_COMMITMENT` (orthogonal to evidence outcome). If the delta is ≤ 1 hour →
+   `ROUTINE`. If the delta is > 1 hour but still within the completion window →
+   `DELAY_EXCEEDED` (never a silent pass). Frontend wall clocks are never used.
 3. **Completion expiry (24 hours):** all required finalisation evidence (commitment cert +
    INDEX Module Hash cert) must be captured within 24 hours of `receipt_committed_at`.
    Beyond 24 hours the package is expired and not finalisable under that commitment;
    public HTTP/Candid still reports Pending until a valid late/backstop path stores a
-   package, and serving never emits verifier verdicts.
+   package, and serving never emits verifier verdicts. Verifier timing label:
+   `OUTSIDE_COMPLETION_WINDOW`.
 
 Commitment-certificate window for store-gate (self-finalise / backstop):
 `certificate_time ≥ receipt_committed_at` AND
@@ -551,10 +554,15 @@ FrozenWire commitment validity remains **independent** of INDEX code-identity ou
 
 ### 14.5 FrozenWire-only / legacy behaviour
 
-A FrozenWire receipt (or a PortablePackageV2 whose INDEX evidence is missing) can retain its
-commitment verdict but **cannot** receive the new subnet-attested INDEX result without the
-additional evidence. Verifier output must make that absence explicit
-(`INDEX_ATTESTATION_UNAVAILABLE`), not imply an INDEX match.
+A **FrozenWire** receipt (commitment-only Available) retains its commitment verdict when INDEX
+evidence was never obtained. Offline evaluation reports `INDEX_ATTESTATION_UNAVAILABLE` with
+timing `NOT_APPLICABLE`, not an INDEX match.
+
+A **PortablePackageV2** that is incomplete (missing/`null`/empty `index_code_identity_evidence`,
+or `version != 2`) is **structurally malformed** and must be rejected at parse time. It must
+**never** be evaluated as `INDEX_ATTESTATION_UNAVAILABLE`. That outcome is reserved for
+FrozenWire-only (or explicit absence of INDEX evidence on a non-V2 path), not for a broken V2
+envelope.
 
 ### 14.6 Migration inventory (FrozenWire packages)
 
@@ -628,17 +636,38 @@ FrozenWire commitment validity remains independent of these outcomes. The certif
 never replace captured `h_index`. Mismatch is not absence and must not be reported as
 deployer-declared identity.
 
-### 17.2 Timing qualifier (orthogonal)
+### 17.2 Timing qualifier (orthogonal — five-value axis, G v0.7.0)
 
 The four outcomes above describe evidence validity and hash relationship. Each result also
-carries the applicable timing qualifier:
+carries exactly one timing qualifier from this closed set (countersigned labels; not
+implementation nicknames):
 
-- **routine** — within the one-hour attestation-delay threshold (§5);
-- **`DELAY_EXCEEDED`** — valid evidence after one hour but within the 24-hour completion window;
-- **outside / late-path** — under existing expiry / late-finalization rules beyond the permitted
-  completion window.
+| Label | Meaning |
+|---|---|
+| `ROUTINE` | INDEX−commitment certificate delta ≤ 1 hour, and INDEX cert within the 24h completion window from `receipt_committed_at` |
+| `DELAY_EXCEEDED` | Certificate-pair delay > 1 hour, still within the 24h completion window |
+| `PREDATES_COMMITMENT` | INDEX certificate `/time` < commitment certificate `/time` |
+| `OUTSIDE_COMPLETION_WINDOW` | INDEX certificate `/time` is more than 24 hours after `receipt_committed_at` |
+| `NOT_APPLICABLE` | Timing not assessed (e.g. FrozenWire-only → `UNAVAILABLE`, or evidence `INVALID`) |
 
-A late matching certificate is therefore **not** silently reported as an unqualified match.
+**S12:** delay is `t(INDEX certificate) − t(commitment certificate)` — it bounds **certificate
+separation**, not how long a receipt sat pending.
+
+A late matching certificate is therefore **not** silently reported as an unqualified match:
+outcome may be `INDEX_HASH_MATCH_AT_CERT_TIME` with timing `OUTSIDE_COMPLETION_WINDOW`.
+
+### 17.3 Dual-layout `canister_ranges` (S11)
+
+IC certificates may carry canister-range authorization under either:
+
+- **legacy** `/subnet/<id>/canister_ranges`, or
+- **sharded** `/canister_ranges/<id>/<shard>`.
+
+Every range check — INDEX-evidence **store-gate** and offline **verifier** — must handle both
+layouts and fail closed. A legacy-only gate would discard valid mainnet evidence and present as
+permanent attestation unavailability. Implementation: store-gate via
+`ic-certificate-verification` (new-then-legacy lookup); verifier via
+`CVDR-Verify` `authorize_canister_ranges` (dual-layout fixtures + wrong-range negatives).
 
 ## 18. Upgrade continuity interlock — not assumed
 
