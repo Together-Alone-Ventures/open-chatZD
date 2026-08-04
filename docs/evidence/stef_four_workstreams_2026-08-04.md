@@ -2,16 +2,17 @@
 
 **Date:** 2026-08-04  
 **Disposition:** all four workstreams ACCEPT / implemented  
-**Repos:** `open-chatZD` branch `antek` (this commit) · `CVDR-Verify` (sibling commit after `v0.7.0`)
+**Repos:** `open-chatZD` branch `antek` · `CVDR-Verify` sibling (from `v0.7.0`)
 
 ## Pinned commits
 
 | Repo | Branch / note | SHA |
 |------|---------------|-----|
-| open-chatZD | `antek` | _(fill after commit)_ |
-| CVDR-Verify | branch from `v0.7.0` | _(fill after commit)_ |
+| open-chatZD | `antek` implementation (B1/timing/A + RTS) | `f59bcadbf36a14c106b6d4ecb434614f6f256315` |
+| open-chatZD | `antek` evidence package | parent of tip is impl `f59bcadb`; tip = HEAD of this docs commit |
+| CVDR-Verify | `openchatzd-portable-v2-bytes-receipt-id` | `c760a2e3d8b723312bb00a170d13d3064a3e251b` |
 
-Fill SHAs after `git rev-parse HEAD` on each repo.
+Parent pins: open-chatZD parent `dd65774c54f04cd7335cab95d43f289de60c79c9`; CVDR-Verify base tag `v0.7.0` = `e884ac43b905a5a8ce6e82c0f591b728174b5593`.
 
 ---
 
@@ -51,7 +52,7 @@ cd CVDR-Verify/mktd02/mktd02-verify && cargo test --locked
 #   predate_timing_keeps_match_outcome, match_and_outside_window_coexist_not_unqualified
 ```
 
-OpenChatZD-filtered subset previously: **51** `openchatzd::*` passed.
+OpenChatZD-filtered subset: **51** `openchatzd::*` passed.
 
 ### Frontend shared
 
@@ -106,7 +107,7 @@ cd frontend/openchat-shared && npx vitest run src/domain/cvdr.spec.ts
 5. `offline_verifier_round_trip_from_bytes` — needs stored package  
 6. `captured_executor_hash_survives_mid_flight_upgrade` — needs stored receipt  
 
-(Additional banked ignores exist under `receipts_tests.rs` for P2 LUI→receipts export; not the six CVDR Slice inventory.)
+(Additional banked ignores under `receipts_tests.rs` for P2 LUI→receipts export.)
 
 PocketIC full suite not re-run in this evidence window; prior CD_REGATE baseline: `./scripts/run-integration-tests.sh local 4 cvdr_` → 15 passed / 6 ignored.
 
@@ -126,7 +127,7 @@ Not re-executed in this completion window (long Docker). Re-run before network c
 
 ## Cross-repo guard
 
-With sibling `../CVDR-Verify` checked out (post-`v0.7.0` workstream C/D tip):
+With sibling `../CVDR-Verify` at `c760a2e3d8b723312bb00a170d13d3064a3e251b`:
 
 - `labels_match_sibling_cvdr_verify_when_present` — **PASS**  
 - No live OpenChatZD outcome tokens `V3-A` / `V3A` / `V3_A_` (retirement comments + guard tests only; VAPID base64 substrings in build scripts are unrelated)
@@ -138,7 +139,7 @@ With sibling `../CVDR-Verify` checked out (post-`v0.7.0` workstream C/D tip):
 **Capability persist + block**
 
 1. Open Delete account → Continue → Prepare.  
-2. Simulate storage failure (e.g. DevTools → Application → Local Storage → Block, or quota).  
+2. Simulate storage failure (DevTools → block localStorage / quota).  
 3. Expect: error `danger.cvdr.persistFailed`, **no** reveal step, **no** delete.
 
 **Close-tab mid-pending**
