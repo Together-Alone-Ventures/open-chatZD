@@ -393,12 +393,7 @@ pub mod happy_path {
         env: &mut PocketIc,
         user: &User,
     ) -> local_user_index_canister::prepare_account_deletion::SuccessResult {
-        let response = super::prepare_account_deletion(
-            env,
-            user.principal,
-            user.local_user_index,
-            &Empty {},
-        );
+        let response = super::prepare_account_deletion(env, user.principal, user.local_user_index, &Empty {});
         match response {
             local_user_index_canister::prepare_account_deletion::Response::Success(s) => s,
             other => panic!("'prepare_account_deletion' error: {other:?}"),

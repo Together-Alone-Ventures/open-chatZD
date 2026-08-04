@@ -17,17 +17,17 @@
 //!   — TARGET provenance: WHICH canister was de-referenced and WHAT code it ran pre-uninstall.
 //! - `h_index     = SHA-256(H_INDEX_TAG || index_canister_principal || executor_module_hash)`
 //!   — EXECUTOR provenance: WHICH index performed the de-reference and WHAT code IT ran.
-//!     `executor_module_hash` is the index's OWN deploy-supplied module hash, captured into the
-//!     draft BEFORE uninstall (same capture point as `module_hash_pre`); a mid-flight index
-//!     upgrade does not change it. The de-reference *event* (record_id, deletion_seq, target
-//!     principal) is bound SEPARATELY and explicitly in the commitment — it is NOT this hash.
+//!   `executor_module_hash` is the index's OWN deploy-supplied module hash, captured into the
+//!   draft BEFORE uninstall (same capture point as `module_hash_pre`); a mid-flight index
+//!   upgrade does not change it. The de-reference *event* (record_id, deletion_seq, target
+//!   principal) is bound SEPARATELY and explicitly in the commitment — it is NOT this hash.
 //! - `commitment  = SHA-256(COMMITMENT_TAG || CVDR_ENCODER_VERSION || record_id ||
-//!                          deletion_seq(8,BE) || h_user_pre || h_index || user_canister_principal)`
+//!   deletion_seq(8,BE) || h_user_pre || h_index || user_canister_principal)`
 //!   — the value published to `certified_data` and matched by the certificate. `h_index` (and
-//!     thus the captured executor module hash) is bound into this hash chain.
+//!   thus the captured executor module hash) is bound into this hash chain.
 //! - `receipt_id  = SHA-256(RECEIPT_ID_TAG || record_id || deletion_seq(8,BE) || nonce)`
 //!   — the public fetch capability; the 32-byte `nonce` (LUI rng, captured once at draft
-//!     creation and persisted) makes it unguessable from the public UserId/record_id.
+//!   creation and persisted) makes it unguessable from the public UserId/record_id.
 //!
 //! ## V2 — the IC `data_certificate()` bytes are stored verbatim in the [`FrozenCvdrPackage`]
 //!         (`certificate_bytes`), so an external verifier (CVDR-Verify) can re-check the NNS
@@ -108,7 +108,13 @@ pub fn h_index(index_canister_id: CanisterId, executor_module_hash: &[u8]) -> Ha
     tagged(H_INDEX_TAG, &[index_canister_id.as_slice(), executor_module_hash])
 }
 
-pub fn commitment(record_id: &Hash, deletion_seq: u64, h_user_pre: &Hash, h_index: &Hash, user_canister_id: CanisterId) -> Hash {
+pub fn commitment(
+    record_id: &Hash,
+    deletion_seq: u64,
+    h_user_pre: &Hash,
+    h_index: &Hash,
+    user_canister_id: CanisterId,
+) -> Hash {
     tagged(
         COMMITMENT_TAG,
         &[
@@ -317,7 +323,10 @@ pub fn verify_certificate(
         LookupResult::Found(t) => leb128_u64(t),
         _ => return Err(CertRejectReason::TimeMissing),
     };
-    Ok(VerifiedCert { certified_data, cert_time_ns })
+    Ok(VerifiedCert {
+        certified_data,
+        cert_time_ns,
+    })
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -357,19 +366,17 @@ pub fn verify_index_module_hash_evidence(
     use ic_certificate_verification::VerifyCertificate;
     use ic_certification::{Certificate, LookupResult};
 
-    let cert = Certificate::from_cbor(certificate).map_err(|_| {
-        IndexEvidenceRejectReason::Certificate(CertRejectReason::CborDecodeFailed)
-    })?;
+    let cert = Certificate::from_cbor(certificate)
+        .map_err(|_| IndexEvidenceRejectReason::Certificate(CertRejectReason::CborDecodeFailed))?;
     let now_nanos = (now as u128).saturating_mul(NANOS_PER_MILLI);
     let max_offset_nanos = (CERT_MAX_OFFSET_MS as u128).saturating_mul(NANOS_PER_MILLI);
     cert.verify(self_canister_id.as_slice(), ic_root_key, &now_nanos, &max_offset_nanos)
         .map_err(|e| IndexEvidenceRejectReason::Certificate(map_cert_verification_error(&e)))?;
 
-    let module_hash = match cert.tree.lookup_path([
-        b"canister".as_ref(),
-        self_canister_id.as_slice(),
-        b"module_hash".as_ref(),
-    ]) {
+    let module_hash = match cert
+        .tree
+        .lookup_path([b"canister".as_ref(), self_canister_id.as_slice(), b"module_hash".as_ref()])
+    {
         LookupResult::Found(d) => d.to_vec(),
         _ => return Err(IndexEvidenceRejectReason::ModuleHashMissing),
     };
@@ -499,9 +506,15 @@ pub fn verify_finalization_package(
         return FinalizeVerdict::Reject(FinalizeRejectReason::CertTimeBeforeReceiptCommitted);
     }
     if v.cert_time_ns.saturating_sub(receipt_committed_at_ns) > ALLOWED_FINALIZATION_WINDOW_NS {
-        FinalizeVerdict::Late { cert_time_ns: v.cert_time_ns, tree_root }
+        FinalizeVerdict::Late {
+            cert_time_ns: v.cert_time_ns,
+            tree_root,
+        }
     } else {
-        FinalizeVerdict::InWindow { cert_time_ns: v.cert_time_ns, tree_root }
+        FinalizeVerdict::InWindow {
+            cert_time_ns: v.cert_time_ns,
+            tree_root,
+        }
     }
 }
 
@@ -831,7 +844,10 @@ impl Storable for Key32 {
         a.copy_from_slice(&bytes);
         Key32(a)
     }
-    const BOUND: Bound = Bound::Bounded { max_size: 32, is_fixed_size: true };
+    const BOUND: Bound = Bound::Bounded {
+        max_size: 32,
+        is_fixed_size: true,
+    };
 }
 
 impl Storable for Key40 {
@@ -846,7 +862,10 @@ impl Storable for Key40 {
         a.copy_from_slice(&bytes);
         Key40(a)
     }
-    const BOUND: Bound = Bound::Bounded { max_size: 40, is_fixed_size: true };
+    const BOUND: Bound = Bound::Bounded {
+        max_size: 40,
+        is_fixed_size: true,
+    };
 }
 
 fn index_key(record_id: &Hash, deletion_seq: u64) -> Key40 {
@@ -1070,7 +1089,10 @@ impl CvdrStore {
     /// Count of in-flight drafts still awaiting a certificate. Replaces the removed single-slot
     /// guard for metrics/observability (spec §1/§2 — the global single-flight guard is gone).
     pub fn awaiting_certificate_count(&self) -> u64 {
-        self.drafts.iter().filter(|e| e.value().stage == DraftStage::AwaitingCertificate).count() as u64
+        self.drafts
+            .iter()
+            .filter(|e| e.value().stage == DraftStage::AwaitingCertificate)
+            .count() as u64
     }
 
     /// Every draft still `AwaitingCertificate` — the self-finalization sweep's work list (spec §6).
@@ -1202,7 +1224,11 @@ mod tests {
         let base = h_index(p(3), &[1u8; 32]);
         assert_ne!(base, h_index(p(3), &[2u8; 32]), "executor module hash must affect h_index");
         assert_ne!(base, h_index(p(4), &[1u8; 32]), "index principal must affect h_index");
-        assert_ne!(base, h_user_pre(p(3), &[1u8; 32]), "executor and target hashes must not collide");
+        assert_ne!(
+            base,
+            h_user_pre(p(3), &[1u8; 32]),
+            "executor and target hashes must not collide"
+        );
     }
 
     // ---- CVDR finalization rework (spec §2/§4) ----
@@ -1216,7 +1242,11 @@ mod tests {
         // sort ascending by raw principal bytes -> order-independent input
         assert_eq!(base, targets_commitment(&salt, &[c, a, b]), "must be order-independent");
         // salt-dependent
-        assert_ne!(base, targets_commitment(&[8u8; 32], &[a, b, c]), "salt must affect commitment");
+        assert_ne!(
+            base,
+            targets_commitment(&[8u8; 32], &[a, b, c]),
+            "salt must affect commitment"
+        );
         // count 0 is valid; commitment still computed (non-trivial)
         assert_ne!(targets_commitment(&salt, &[]), [0u8; 32]);
         // exact frozen formula: SHA256(TAG || salt || concat(len(u8) || principal_bytes) sorted)
@@ -1250,7 +1280,21 @@ mod tests {
         let index_id = p(3);
         let user_id = p(2);
         let receipt_id = receipt_id_for(&record_id, 5, &nonce);
-        let body = receipt_body_v1(&receipt_id, &nonce, index_id, user_id, &record_id, 5, &hu, &hi, &com, 111, 222, targets.len() as u32, &tc);
+        let body = receipt_body_v1(
+            &receipt_id,
+            &nonce,
+            index_id,
+            user_id,
+            &record_id,
+            5,
+            &hu,
+            &hi,
+            &com,
+            111,
+            222,
+            targets.len() as u32,
+            &tc,
+        );
 
         // leaf formula, computed independently
         let mut pre = Vec::new();
@@ -1280,11 +1324,47 @@ mod tests {
         assert_eq!(body, expected, "RECEIPT_BODY_V1 exact frozen byte layout");
 
         // receipt_committed_at (window anchor) must change the leaf
-        let body_ct = receipt_body_v1(&receipt_id, &nonce, index_id, user_id, &record_id, 5, &hu, &hi, &com, 111, 999, targets.len() as u32, &tc);
-        assert_ne!(receipt_leaf(&body), receipt_leaf(&body_ct), "receipt_committed_at must bind into the leaf");
+        let body_ct = receipt_body_v1(
+            &receipt_id,
+            &nonce,
+            index_id,
+            user_id,
+            &record_id,
+            5,
+            &hu,
+            &hi,
+            &com,
+            111,
+            999,
+            targets.len() as u32,
+            &tc,
+        );
+        assert_ne!(
+            receipt_leaf(&body),
+            receipt_leaf(&body_ct),
+            "receipt_committed_at must bind into the leaf"
+        );
         // uninstall_completed_at must change the leaf
-        let body_un = receipt_body_v1(&receipt_id, &nonce, index_id, user_id, &record_id, 5, &hu, &hi, &com, 333, 222, targets.len() as u32, &tc);
-        assert_ne!(receipt_leaf(&body), receipt_leaf(&body_un), "uninstall_completed_at must bind into the leaf");
+        let body_un = receipt_body_v1(
+            &receipt_id,
+            &nonce,
+            index_id,
+            user_id,
+            &record_id,
+            5,
+            &hu,
+            &hi,
+            &com,
+            333,
+            222,
+            targets.len() as u32,
+            &tc,
+        );
+        assert_ne!(
+            receipt_leaf(&body),
+            receipt_leaf(&body_un),
+            "uninstall_completed_at must bind into the leaf"
+        );
     }
 
     /// spec §2/§9: the witness decodes as an IC HashTree, reconstructs the certified root, and
@@ -1328,8 +1408,7 @@ mod tests {
         const CD_EXPECTED_DIGEST: &str = "eb5c5b2195e62d996b84c9bcc8259d19a83786a2f59e0878cec84c811f669aa0";
 
         let cbor = hex::decode(CD_EXAMPLE_TREE_CBOR).unwrap();
-        let tree: HashTree =
-            serde_cbor::from_slice(&cbor).expect("CD's example tree must decode as an IC HashTree");
+        let tree: HashTree = serde_cbor::from_slice(&cbor).expect("CD's example tree must decode as an IC HashTree");
         assert_eq!(
             hex::encode(tree.digest()),
             CD_EXPECTED_DIGEST,
@@ -1622,31 +1701,17 @@ mod tests {
 
         // Ordering gate: commitment time after cert time → reject.
         assert_eq!(
-            verify_index_module_hash_evidence(
-                CERT,
-                self_id,
-                constants::IC_ROOT_KEY,
-                now_ms,
-                Some(time_ns.saturating_add(1)),
-            ),
+            verify_index_module_hash_evidence(CERT, self_id, constants::IC_ROOT_KEY, now_ms, Some(time_ns.saturating_add(1)),),
             Err(IndexEvidenceRejectReason::CertTimeBeforeCommitment)
         );
         // Equal commitment time is accepted.
-        assert!(verify_index_module_hash_evidence(
-            CERT,
-            self_id,
-            constants::IC_ROOT_KEY,
-            now_ms,
-            Some(time_ns),
-        )
-        .is_ok());
+        assert!(verify_index_module_hash_evidence(CERT, self_id, constants::IC_ROOT_KEY, now_ms, Some(time_ns),).is_ok());
 
         // Wrong canister → not in delegated range (or path miss under that id).
         let other = Principal::from_slice(&[0u8; 10]);
         assert!(matches!(
             verify_index_module_hash_evidence(CERT, other, constants::IC_ROOT_KEY, now_ms, None),
-            Err(IndexEvidenceRejectReason::Certificate(_))
-                | Err(IndexEvidenceRejectReason::ModuleHashMissing)
+            Err(IndexEvidenceRejectReason::Certificate(_)) | Err(IndexEvidenceRejectReason::ModuleHashMissing)
         ));
     }
 
@@ -1674,7 +1739,16 @@ mod tests {
         // `["receipts", receipt_id]` leaf: distinct reason `WitnessLeafNeReceiptHash` (not a
         // blanket failure — the D2 honest-taxonomy fix). (The witness DOES reconstruct the A1 root
         // == the cert's certified_data, so it passes the root check and fails at the leaf.)
-        match verify_finalization_package(CERT, WITNESS, &receipt_id, &receipt_hash, self_id, constants::IC_ROOT_KEY, now_ms, 0) {
+        match verify_finalization_package(
+            CERT,
+            WITNESS,
+            &receipt_id,
+            &receipt_hash,
+            self_id,
+            constants::IC_ROOT_KEY,
+            now_ms,
+            0,
+        ) {
             FinalizeVerdict::Reject(FinalizeRejectReason::WitnessLeafNeReceiptHash) => {}
             FinalizeVerdict::Reject(r) => panic!("expected witness_leaf_ne_receipt_hash, got Reject({})", r.as_str()),
             FinalizeVerdict::InWindow { .. } | FinalizeVerdict::Late { .. } => {
@@ -1737,11 +1811,20 @@ mod tests {
         );
 
         // witness-stage reasons (cert verifies; the witness fails to bind our receipt)
-        assert_eq!(reason(CERT, &[0x00, 0x01, 0x02], self_id, now_ms), FinalizeRejectReason::WitnessDecodeFailed);
+        assert_eq!(
+            reason(CERT, &[0x00, 0x01, 0x02], self_id, now_ms),
+            FinalizeRejectReason::WitnessDecodeFailed
+        );
         let other_witness = hex::decode(OTHER_TREE_CBOR).unwrap();
-        assert_eq!(reason(CERT, &other_witness, self_id, now_ms), FinalizeRejectReason::WitnessRootNeCertifiedData);
+        assert_eq!(
+            reason(CERT, &other_witness, self_id, now_ms),
+            FinalizeRejectReason::WitnessRootNeCertifiedData
+        );
         // A1 witness reconstructs the A1 root but has no ["receipts", rid] leaf -> leaf mismatch.
-        assert_eq!(reason(CERT, WITNESS, self_id, now_ms), FinalizeRejectReason::WitnessLeafNeReceiptHash);
+        assert_eq!(
+            reason(CERT, WITNESS, self_id, now_ms),
+            FinalizeRejectReason::WitnessLeafNeReceiptHash
+        );
     }
 
     /// spec §6 privacy: capture scrubs the salt + raw cleanup-target list from the retained draft,

@@ -80,13 +80,8 @@ fn http_request(request: HttpRequest) -> HttpResponse {
             return cvdr_json_response(400, CVDR_BAD_REQUEST_BODY.as_bytes().to_vec());
         };
 
-        match crate::queries::get_cvdr::get_cvdr_impl(
-            local_user_index_canister::get_cvdr::Args { receipt_id },
-            state,
-        ) {
-            local_user_index_canister::get_cvdr::Response::Available(pkg) => {
-                cvdr_json_response(200, pkg.to_canonical_json())
-            }
+        match crate::queries::get_cvdr::get_cvdr_impl(local_user_index_canister::get_cvdr::Args { receipt_id }, state) {
+            local_user_index_canister::get_cvdr::Response::Available(pkg) => cvdr_json_response(200, pkg.to_canonical_json()),
             local_user_index_canister::get_cvdr::Response::Pending(pending) => {
                 cvdr_json_response(202, serde_json::to_vec(&pending).expect("PendingInfo serialization"))
             }

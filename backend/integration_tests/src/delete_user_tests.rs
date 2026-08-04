@@ -106,7 +106,10 @@ fn deleted_user_removed_from_groups_and_communities() {
     let group_summary = client::group::happy_path::selected_initial(env, user1.principal, group_id);
     let community_summary = client::community::happy_path::selected_initial(env, user1.principal, community_id);
 
-    assert!(group_summary.basic_members.is_empty(), "membership removed with certificate capture absent");
+    assert!(
+        group_summary.basic_members.is_empty(),
+        "membership removed with certificate capture absent"
+    );
     assert!(
         community_summary.basic_members.is_empty(),
         "membership removed with certificate capture absent"

@@ -36,8 +36,8 @@ use tracing::error;
 use types::{
     BotDataEncoding, BotEventPayload, BotEventWrapper, BotNotification, BotNotificationEnvelope, BuildVersion, CanisterId,
     ChannelLatestMessageIndex, ChatId, ChildCanisterWasms, CommunityCanisterChannelSummary, CommunityCanisterCommunitySummary,
-    CommunityId, Cycles, DiamondMembershipDetails, IdempotentEnvelope, MessageContentInitial, Milliseconds, Notification,
-    Hash, NotificationEnvelope, ReferralType, TimestampMillis, Timestamped, UserId, UserNotificationEnvelope,
+    CommunityId, Cycles, DiamondMembershipDetails, Hash, IdempotentEnvelope, MessageContentInitial, Milliseconds, Notification,
+    NotificationEnvelope, ReferralType, TimestampMillis, Timestamped, UserId, UserNotificationEnvelope,
     VerifiedCredentialGateArgs,
 };
 use user_canister::LocalUserIndexEvent as UserEvent;

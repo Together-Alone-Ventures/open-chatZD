@@ -159,7 +159,11 @@ async fn attempt_finalize(draft: CvdrDraft) {
                     certificate_bytes: certificate,
                     certificate_time: cert_time_ns,
                 };
-                match state.data.cvdr.insert_frozen_package(d.receipt_id, d.record_id, d.deletion_seq, package) {
+                match state
+                    .data
+                    .cvdr
+                    .insert_frozen_package(d.receipt_id, d.record_id, d.deletion_seq, package)
+                {
                     Ok(()) | Err(FrozenInsertError::AlreadyExists) => {
                         // Stored (or already stored — idempotent). Terminal success. Scrub the
                         // retained draft of the salt + raw target list (privacy default, spec §6);

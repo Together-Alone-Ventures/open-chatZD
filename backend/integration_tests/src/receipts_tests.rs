@@ -66,7 +66,9 @@ fn finalize_user(env: &mut PocketIc, user: &User) -> (Vec<u8>, Vec<u8>) {
         env,
         user.principal,
         user.canister(),
-        &user_canister::mktd_get_receipt::Args { receipt_id: receipt_id.clone() },
+        &user_canister::mktd_get_receipt::Args {
+            receipt_id: receipt_id.clone(),
+        },
     ) {
         user_canister::mktd_get_receipt::Response::Success(r) => r,
         other => panic!("finalized receipt export expected Success, got {other:?}"),
@@ -87,7 +89,10 @@ fn store(
         env,
         sender,
         canister_ids.receipts,
-        &receipts_canister::store::Args { receipt_id, receipt_json },
+        &receipts_canister::store::Args {
+            receipt_id,
+            receipt_json,
+        },
     )
 }
 
@@ -96,7 +101,12 @@ fn http_get(env: &PocketIc, canister_ids: &CanisterIds, url: String) -> types::H
         env,
         Principal::anonymous(),
         canister_ids.receipts,
-        &HttpRequest { method: "GET".to_string(), url, headers: Vec::new(), body: Vec::new() },
+        &HttpRequest {
+            method: "GET".to_string(),
+            url,
+            headers: Vec::new(),
+            body: Vec::new(),
+        },
     )
 }
 
@@ -109,7 +119,12 @@ fn http_get(env: &PocketIc, canister_ids: &CanisterIds, url: String) -> types::H
 #[test]
 fn store_then_read_is_byte_identical() {
     let mut wrapper = ENV.deref().get();
-    let TestEnv { env, canister_ids, controller, .. } = wrapper.env();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
 
     let (_user, receipt_id, canonical) = finalized_receipt(env, canister_ids);
     let receipt_id_hex = hex::encode(&receipt_id);
@@ -143,7 +158,12 @@ fn store_then_read_is_byte_identical() {
 #[test]
 fn store_is_idempotent_and_rejects_divergent_bytes() {
     let mut wrapper = ENV.deref().get();
-    let TestEnv { env, canister_ids, controller, .. } = wrapper.env();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
 
     let (user, receipt_id, canonical) = finalized_receipt(env, canister_ids);
     let receipt_id_hex = hex::encode(&receipt_id);
@@ -166,7 +186,9 @@ fn store_is_idempotent_and_rejects_divergent_bytes() {
         env,
         user.principal,
         user.canister(),
-        &user_canister::mktd_get_receipt::Args { receipt_id: receipt_id.clone() },
+        &user_canister::mktd_get_receipt::Args {
+            receipt_id: receipt_id.clone(),
+        },
     ) {
         user_canister::mktd_get_receipt::Response::Success(r) => r,
         other => panic!("expected Success, got {other:?}"),
@@ -190,7 +212,12 @@ fn store_is_idempotent_and_rejects_divergent_bytes() {
 #[test]
 fn store_rejects_bad_id_and_unfinalized_payload() {
     let mut wrapper = ENV.deref().get();
-    let TestEnv { env, canister_ids, controller, .. } = wrapper.env();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
 
     let (_user, receipt_id, canonical) = finalized_receipt(env, canister_ids);
 
@@ -203,7 +230,13 @@ fn store_rejects_bad_id_and_unfinalized_payload() {
 
     // Valid 32-byte id, but the payload is not a finalized receipt → NotFinalized.
     assert_eq!(
-        store(env, *controller, canister_ids, receipt_id, b"{\"not\":\"a receipt\"}".to_vec()),
+        store(
+            env,
+            *controller,
+            canister_ids,
+            receipt_id,
+            b"{\"not\":\"a receipt\"}".to_vec()
+        ),
         receipts_canister::store::Response::NotFinalized,
         "non-finalized / unparseable payload must be rejected"
     );
@@ -224,7 +257,10 @@ fn unauthorized_store_is_rejected() {
         outsider,
         canister_ids.receipts,
         "store_msgpack",
-        &receipts_canister::store::Args { receipt_id, receipt_json: canonical },
+        &receipts_canister::store::Args {
+            receipt_id,
+            receipt_json: canonical,
+        },
     );
     assert!(result.is_err(), "unauthorized store must be rejected, got {result:?}");
 }
@@ -256,7 +292,10 @@ fn auth_management_is_controller_gated() {
         "remove_authorized_principal_msgpack",
         &receipts_canister::remove_authorized_principal::Args { principal: target },
     );
-    assert!(remove.is_err(), "remove_authorized_principal must be controller-gated, got {remove:?}");
+    assert!(
+        remove.is_err(),
+        "remove_authorized_principal must be controller-gated, got {remove:?}"
+    );
 }
 
 /// Public-read negative routes all return 404, no panic: bad length, non-hex,
@@ -264,7 +303,12 @@ fn auth_management_is_controller_gated() {
 #[test]
 fn read_route_negatives_all_return_404() {
     let mut wrapper = ENV.deref().get();
-    let TestEnv { env, canister_ids, controller, .. } = wrapper.env();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
 
     let (_user, receipt_id, canonical) = finalized_receipt(env, canister_ids);
     let receipt_id_hex = hex::encode(&receipt_id);
@@ -294,7 +338,11 @@ fn read_route_negatives_all_return_404() {
     );
     assert_eq!(post.status_code, 404, "non-GET method must 404");
 
-    assert_eq!(http_get(env, canister_ids, "/receipt?id=deadbeef".to_string()).status_code, 404, "short id");
+    assert_eq!(
+        http_get(env, canister_ids, "/receipt?id=deadbeef".to_string()).status_code,
+        404,
+        "short id"
+    );
     assert_eq!(
         http_get(env, canister_ids, format!("/receipt?id={}", "z".repeat(64))).status_code,
         404,
@@ -326,7 +374,12 @@ fn served_bytes_have_no_plaintext_pii() {
     const SENTINEL_EMAIL: &str = "sentinel@zz.invalid";
 
     let mut wrapper = ENV.deref().get();
-    let TestEnv { env, canister_ids, controller, .. } = wrapper.env();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
 
     // Register the subject and set the distinctive handle + display-name sentinels
     // as real profile PII, then let them propagate to the user canister BEFORE the
@@ -374,7 +427,12 @@ fn served_bytes_have_no_plaintext_pii() {
     // and must NOT equal the raw subject (user-canister) principal bytes.
     let json: serde_json::Value = serde_json::from_str(&body).expect("served body is json");
     let record_id = json["record_id"].as_str().expect("record_id is a hex string");
-    assert_eq!(record_id.len(), 64, "record_id must be a 32-byte hash, got {} hex chars", record_id.len());
+    assert_eq!(
+        record_id.len(),
+        64,
+        "record_id must be a 32-byte hash, got {} hex chars",
+        record_id.len()
+    );
     let subject_principal_hex = hex::encode(Principal::from(user.user_id).as_slice());
     assert_ne!(
         record_id, subject_principal_hex,
@@ -400,7 +458,10 @@ fn is_uninstalled_ids(env: &PocketIc, user_canister: CanisterId, lui: CanisterId
 /// deliberately remove the LUI from a user canister's controllers must query
 /// status via the controller they substituted in.
 fn is_uninstalled_by(env: &PocketIc, user_canister: CanisterId, status_sender: Principal) -> bool {
-    env.canister_status(user_canister, Some(status_sender)).unwrap().module_hash.is_none()
+    env.canister_status(user_canister, Some(status_sender))
+        .unwrap()
+        .module_hash
+        .is_none()
 }
 
 /// Wait for the asynchronous LUI-upgrade job to FULLY drain.
@@ -420,7 +481,12 @@ fn await_lui_upgrades_complete(env: &mut PocketIc, canister_ids: &CanisterIds) -
             env,
             Principal::anonymous(),
             canister_ids.user_index,
-            &HttpRequest { method: "GET".to_string(), url: "/metrics".to_string(), headers: Vec::new(), body: Vec::new() },
+            &HttpRequest {
+                method: "GET".to_string(),
+                url: "/metrics".to_string(),
+                headers: Vec::new(),
+                body: Vec::new(),
+            },
         );
         if resp.status_code == 200 {
             if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&resp.body) {
@@ -453,11 +519,18 @@ fn export_pending_count(env: &PocketIc, lui: CanisterId) -> u64 {
         env,
         Principal::anonymous(),
         lui,
-        &HttpRequest { method: "GET".to_string(), url: "/metrics".to_string(), headers: Vec::new(), body: Vec::new() },
+        &HttpRequest {
+            method: "GET".to_string(),
+            url: "/metrics".to_string(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        },
     );
     assert_eq!(resp.status_code, 200, "metrics route must be 200");
     let json: serde_json::Value = serde_json::from_slice(&resp.body).expect("metrics json");
-    json["receipt_export_pending_count"].as_u64().expect("receipt_export_pending_count")
+    json["receipt_export_pending_count"]
+        .as_u64()
+        .expect("receipt_export_pending_count")
 }
 
 /// Aggregate count of records in the `ExportedUninstallPending` state (export
@@ -467,11 +540,18 @@ fn eup_count(env: &PocketIc, lui: CanisterId) -> u64 {
         env,
         Principal::anonymous(),
         lui,
-        &HttpRequest { method: "GET".to_string(), url: "/metrics".to_string(), headers: Vec::new(), body: Vec::new() },
+        &HttpRequest {
+            method: "GET".to_string(),
+            url: "/metrics".to_string(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        },
     );
     assert_eq!(resp.status_code, 200, "metrics route must be 200");
     let json: serde_json::Value = serde_json::from_slice(&resp.body).expect("metrics json");
-    json["receipt_export_uninstall_pending_count"].as_u64().expect("receipt_export_uninstall_pending_count")
+    json["receipt_export_uninstall_pending_count"]
+        .as_u64()
+        .expect("receipt_export_uninstall_pending_count")
 }
 
 /// Self-isolate: authorize the LUI and drain the slow retry until THIS LUI has no
@@ -595,7 +675,11 @@ fn drive_to_parked(env: &mut PocketIc, lui: CanisterId, baseline: u64) -> bool {
 #[ignore = "Superseded by CVDR-on-Index v5; P2 LUI→receipts export path banked."]
 fn finalized_receipt_survives_uninstall_and_is_fetchable() {
     let mut wrapper = ENV.deref().get();
-    let TestEnv { env, canister_ids, controller } = wrapper.env();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+    } = wrapper.env();
 
     let (user, user_auth) = client::register_user_and_include_auth(env, canister_ids);
     let (receipt_id, canonical) = finalize_user(env, &user);
@@ -607,9 +691,14 @@ fn finalized_receipt_survives_uninstall_and_is_fetchable() {
         env,
         *controller,
         canister_ids.receipts,
-        &receipts_canister::add_authorized_principal::Args { principal: user.local_user_index },
+        &receipts_canister::add_authorized_principal::Args {
+            principal: user.local_user_index,
+        },
     );
-    assert!(matches!(auth_response, types::SuccessOnly::Success), "authorize LUI: {auth_response:?}");
+    assert!(
+        matches!(auth_response, types::SuccessOnly::Success),
+        "authorize LUI: {auth_response:?}"
+    );
 
     // Drive the real deletion pipeline (identity → user_index → local_user_index),
     // waiting for the actual uninstall rather than assuming a fixed tick count.
@@ -624,7 +713,10 @@ fn finalized_receipt_survives_uninstall_and_is_fetchable() {
     // … but the receipt survives in the durable store, byte-identical to the export.
     let resp = http_get(env, canister_ids, format!("/receipt?id={receipt_id_hex}"));
     assert_eq!(resp.status_code, 200, "receipt must remain fetchable post-uninstall");
-    assert_eq!(resp.body, canonical, "post-uninstall served bytes must be byte-identical to the export");
+    assert_eq!(
+        resp.body, canonical,
+        "post-uninstall served bytes must be byte-identical to the export"
+    );
 
     // CVDR-Verify V1 (structural acceptance): the served bytes parse as a
     // FINALIZED receipt (BLS certificate present) whose embedded receipt_id
@@ -651,7 +743,11 @@ fn finalized_receipt_survives_uninstall_and_is_fetchable() {
 #[ignore = "Superseded by CVDR-on-Index v5; P2 LUI→receipts export path banked."]
 fn export_failure_reaches_durable_parked_state() {
     let mut wrapper = ENV.deref().get();
-    let TestEnv { env, canister_ids, controller } = wrapper.env();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+    } = wrapper.env();
 
     let (user, user_auth) = client::register_user_and_include_auth(env, canister_ids);
     let (receipt_id, _canonical) = finalize_user(env, &user);
@@ -668,7 +764,10 @@ fn export_failure_reaches_durable_parked_state() {
     // (Per-canister status/attempt/error_class are in the error!/warn! logs;
     // here we assert the durable aggregate the metric exposes.)
     let parked = drive_to_parked(env, lui, baseline);
-    assert!(parked, "export failure must reach the durable parked set, not vanish from the queue");
+    assert!(
+        parked,
+        "export failure must reach the durable parked set, not vanish from the queue"
+    );
     assert_eq!(
         export_pending_count(env, lui),
         baseline + 1,
@@ -676,7 +775,10 @@ fn export_failure_reaches_durable_parked_state() {
     );
 
     // Retained-copy-first: uninstall must NOT have fired.
-    assert!(!is_uninstalled(env, &user), "uninstall must be unreachable while export is parked");
+    assert!(
+        !is_uninstalled(env, &user),
+        "uninstall must be unreachable while export is parked"
+    );
 
     // Tombstone/finalization did not roll back — Phase A again is D8-rejected.
     let phase_a_again = client::user::mktd_execute_deletion(env, user.principal, user.canister(), &Empty {});
@@ -699,7 +801,11 @@ fn export_failure_reaches_durable_parked_state() {
 #[ignore = "Superseded by CVDR-on-Index v5; P2 LUI→receipts export path banked."]
 fn parked_export_survives_local_user_index_upgrade() {
     let mut wrapper = ENV.deref().get();
-    let TestEnv { env, canister_ids, controller } = wrapper.env();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+    } = wrapper.env();
 
     let (user, user_auth) = client::register_user_and_include_auth(env, canister_ids);
     finalize_user(env, &user);
@@ -729,7 +835,10 @@ fn parked_export_survives_local_user_index_upgrade() {
     );
     // Wait for the async upgrade to RESTART the LUI rather than assuming a fixed
     // tick count — a still-stopped LUI here would cascade through the suite (#15).
-    assert!(await_lui_upgrades_complete(env, canister_ids), "LUI upgrade job must fully drain (all LUIs restarted)");
+    assert!(
+        await_lui_upgrades_complete(env, canister_ids),
+        "LUI upgrade job must fully drain (all LUIs restarted)"
+    );
 
     // The durable count is sourced solely from the stable `ExportPending` map, so
     // its survival across the upgrade proves the stable structure survived (a
@@ -750,7 +859,11 @@ fn parked_export_survives_local_user_index_upgrade() {
 #[ignore = "Superseded by CVDR-on-Index v5; P2 LUI→receipts export path banked."]
 fn parked_export_resumes_after_authorization() {
     let mut wrapper = ENV.deref().get();
-    let TestEnv { env, canister_ids, controller } = wrapper.env();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+    } = wrapper.env();
 
     // Isolate FIRST (advances virtual time) BEFORE minting the auth delegation, so
     // a residue-laden suite env can't expire the delegation before `delete_user`
@@ -774,7 +887,11 @@ fn parked_export_resumes_after_authorization() {
     client::identity::happy_path::delete_user(env, &user_auth, canister_ids.identity);
     let parked = drive_to_parked(env, lui, 0);
     assert!(parked, "must be parked before resume");
-    assert_eq!(export_pending_count(env, lui), 1, "exactly this user's record is parked (isolated)");
+    assert_eq!(
+        export_pending_count(env, lui),
+        1,
+        "exactly this user's record is parked (isolated)"
+    );
     assert!(!is_uninstalled(env, &user), "not uninstalled while parked");
 
     // Operator grants the LUI export rights — the receipts canister now recovers.
@@ -784,7 +901,10 @@ fn parked_export_resumes_after_authorization() {
         canister_ids.receipts,
         &receipts_canister::add_authorized_principal::Args { principal: lui },
     );
-    assert!(matches!(auth_response, types::SuccessOnly::Success), "authorize LUI: {auth_response:?}");
+    assert!(
+        matches!(auth_response, types::SuccessOnly::Success),
+        "authorize LUI: {auth_response:?}"
+    );
 
     // The slow drain must self-heal: export → ExportedUninstallPending → uninstall →
     // record removed.
@@ -795,8 +915,15 @@ fn parked_export_resumes_after_authorization() {
 
     // DIRECT per-user assertion (not uninstall-as-proxy): `export_pending` no longer
     // holds this user's record — the only record, since we isolated above.
-    assert_eq!(export_pending_count(env, lui), 0, "this user's record must be gone from export_pending");
-    assert!(is_uninstalled_ids(env, user_canister, lui), "and its canister must be uninstalled");
+    assert_eq!(
+        export_pending_count(env, lui),
+        0,
+        "this user's record must be gone from export_pending"
+    );
+    assert!(
+        is_uninstalled_ids(env, user_canister, lui),
+        "and its canister must be uninstalled"
+    );
 
     // THIS user's receipt is stored exactly once, byte-identical (idempotency → no
     // duplicate divergent record) — the proof its specific export succeeded.
@@ -821,7 +948,11 @@ fn parked_export_resumes_after_authorization() {
 #[ignore = "Superseded by CVDR-on-Index v5; P2 LUI→receipts export path banked."]
 fn exported_uninstall_pending_lifecycle() {
     let mut wrapper = ENV.deref().get();
-    let TestEnv { env, canister_ids, controller } = wrapper.env();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+    } = wrapper.env();
 
     // Isolate FIRST, BEFORE minting the auth delegation. `drain_lui_to_empty`
     // advances virtual time to clear residue; on a residue-laden suite env that can
@@ -844,78 +975,103 @@ fn exported_uninstall_pending_lifecycle() {
     // authorization, drain) and the failure can't cascade through the rest of the
     // suite via a stranded EUP record / removed controller.
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-    assert_eq!(eup_count(env, lui), 0, "clean EUP baseline");
+        assert_eq!(eup_count(env, lui), 0, "clean EUP baseline");
 
-    // Authorize the LUI so EXPORT succeeds…
-    let auth = client::receipts::add_authorized_principal(
-        env,
-        *controller,
-        canister_ids.receipts,
-        &receipts_canister::add_authorized_principal::Args { principal: lui },
-    );
-    assert!(matches!(auth, types::SuccessOnly::Success));
+        // Authorize the LUI so EXPORT succeeds…
+        let auth = client::receipts::add_authorized_principal(
+            env,
+            *controller,
+            canister_ids.receipts,
+            &receipts_canister::add_authorized_principal::Args { principal: lui },
+        );
+        assert!(matches!(auth, types::SuccessOnly::Success));
 
-    // …but break UNINSTALL: remove the LUI from the user canister's controllers
-    // (uninstall_code is controller-gated; the export c2c is caller-gated, so it
-    // still works). `controller` becomes the sole controller (used for status).
-    env.set_controllers(user_canister, Some(lui), vec![*controller])
-        .expect("set_controllers to break uninstall");
+        // …but break UNINSTALL: remove the LUI from the user canister's controllers
+        // (uninstall_code is controller-gated; the export c2c is caller-gated, so it
+        // still works). `controller` becomes the sole controller (used for status).
+        env.set_controllers(user_canister, Some(lui), vec![*controller])
+            .expect("set_controllers to break uninstall");
 
-    client::local_user_index::happy_path::prepare_account_deletion(env, &user);
-    client::identity::happy_path::delete_user(env, &user_auth, canister_ids.identity);
+        client::local_user_index::happy_path::prepare_account_deletion(env, &user);
+        client::identity::happy_path::delete_user(env, &user_auth, canister_ids.identity);
 
-    // Export succeeds → EUP persisted before uninstall → uninstall fails → durable EUP.
-    assert!(
-        step_until(env, FAST_RETRY_STEP_MS, 30, |env| eup_count(env, lui) == 1),
-        "export must succeed and persist ExportedUninstallPending before a failing uninstall"
-    );
-    assert_eq!(export_pending_count(env, lui), 1, "the EUP record is the only pending record");
-    assert!(!is_uninstalled_by(env, user_canister, *controller), "canister still installed while EUP (bookkeeping not run)");
+        // Export succeeds → EUP persisted before uninstall → uninstall fails → durable EUP.
+        assert!(
+            step_until(env, FAST_RETRY_STEP_MS, 30, |env| eup_count(env, lui) == 1),
+            "export must succeed and persist ExportedUninstallPending before a failing uninstall"
+        );
+        assert_eq!(export_pending_count(env, lui), 1, "the EUP record is the only pending record");
+        assert!(
+            !is_uninstalled_by(env, user_canister, *controller),
+            "canister still installed while EUP (bookkeeping not run)"
+        );
 
-    // The receipt IS durably exported already (proves export preceded the EUP state).
-    let resp = http_get(env, canister_ids, format!("/receipt?id={receipt_id_hex}"));
-    assert_eq!(resp.status_code, 200, "receipt durably exported before uninstall");
-    assert_eq!(resp.body, canonical, "exported bytes byte-identical");
+        // The receipt IS durably exported already (proves export preceded the EUP state).
+        let resp = http_get(env, canister_ids, format!("/receipt?id={receipt_id_hex}"));
+        assert_eq!(resp.status_code, 200, "receipt durably exported before uninstall");
+        assert_eq!(resp.body, canonical, "exported bytes byte-identical");
 
-    // No rollback: drive several drain cycles while uninstall keeps failing — the
-    // record must STAY ExportedUninstallPending (never flips back to not-exported).
-    for _ in 0..3 {
-        env.advance_time(Duration::from_millis(PARK_RETRY_STEP_MS));
-        tick_many(env, 8);
-    }
-    assert_eq!(eup_count(env, lui), 1, "still EUP after repeated failing uninstall retries (no rollback)");
-    assert_eq!(export_pending_count(env, lui), 1, "no extra/duplicate record");
-    assert!(!is_uninstalled_by(env, user_canister, *controller), "still not uninstalled");
+        // No rollback: drive several drain cycles while uninstall keeps failing — the
+        // record must STAY ExportedUninstallPending (never flips back to not-exported).
+        for _ in 0..3 {
+            env.advance_time(Duration::from_millis(PARK_RETRY_STEP_MS));
+            tick_many(env, 8);
+        }
+        assert_eq!(
+            eup_count(env, lui),
+            1,
+            "still EUP after repeated failing uninstall retries (no rollback)"
+        );
+        assert_eq!(export_pending_count(env, lui), 1, "no extra/duplicate record");
+        assert!(!is_uninstalled_by(env, user_canister, *controller), "still not uninstalled");
 
-    // EUP survives a real LUI upgrade.
-    let upgraded_wasm = CanisterWasm {
-        version: BuildVersion::new(0, 0, 2),
-        module: wasms::LOCAL_USER_INDEX.module.clone(),
-    };
-    client::user_index::happy_path::upgrade_local_user_index_canister_wasm(env, *controller, canister_ids.user_index, upgraded_wasm);
-    // Wait for the async upgrade to RESTART the LUI rather than assuming a fixed
-    // tick count — a still-stopped LUI here would cascade through the suite (#15).
-    assert!(await_lui_upgrades_complete(env, canister_ids), "LUI upgrade job must fully drain (all LUIs restarted)");
-    assert_eq!(eup_count(env, lui), 1, "ExportedUninstallPending must survive the LUI upgrade");
-    assert!(!is_uninstalled_by(env, user_canister, *controller), "still installed after upgrade");
+        // EUP survives a real LUI upgrade.
+        let upgraded_wasm = CanisterWasm {
+            version: BuildVersion::new(0, 0, 2),
+            module: wasms::LOCAL_USER_INDEX.module.clone(),
+        };
+        client::user_index::happy_path::upgrade_local_user_index_canister_wasm(
+            env,
+            *controller,
+            canister_ids.user_index,
+            upgraded_wasm,
+        );
+        // Wait for the async upgrade to RESTART the LUI rather than assuming a fixed
+        // tick count — a still-stopped LUI here would cascade through the suite (#15).
+        assert!(
+            await_lui_upgrades_complete(env, canister_ids),
+            "LUI upgrade job must fully drain (all LUIs restarted)"
+        );
+        assert_eq!(
+            eup_count(env, lui),
+            1,
+            "ExportedUninstallPending must survive the LUI upgrade"
+        );
+        assert!(
+            !is_uninstalled_by(env, user_canister, *controller),
+            "still installed after upgrade"
+        );
 
-    // Re-enable uninstall (re-add the LUI as a controller) → the drain retries
-    // uninstall (skipping re-export), completes, and removes the record.
-    env.set_controllers(user_canister, Some(*controller), vec![*controller, lui])
-        .expect("restore LUI as controller");
-    assert!(
-        step_until(env, PARK_RETRY_STEP_MS, 10, |env| export_pending_count(env, lui) == 0),
-        "retry from ExportedUninstallPending must complete uninstall and remove the record"
-    );
+        // Re-enable uninstall (re-add the LUI as a controller) → the drain retries
+        // uninstall (skipping re-export), completes, and removes the record.
+        env.set_controllers(user_canister, Some(*controller), vec![*controller, lui])
+            .expect("restore LUI as controller");
+        assert!(
+            step_until(env, PARK_RETRY_STEP_MS, 10, |env| export_pending_count(env, lui) == 0),
+            "retry from ExportedUninstallPending must complete uninstall and remove the record"
+        );
 
-    // DIRECT removal + completion: record gone, canister uninstalled, receipt still
-    // present exactly once (idempotent — re-export was skipped, no divergent record).
-    assert_eq!(eup_count(env, lui), 0, "EUP record removed after completion");
-    assert_eq!(export_pending_count(env, lui), 0, "no pending record remains");
-    assert!(is_uninstalled_by(env, user_canister, *controller), "canister uninstalled after completion");
-    let resp = http_get(env, canister_ids, format!("/receipt?id={receipt_id_hex}"));
-    assert_eq!(resp.status_code, 200, "receipt still fetchable after completion");
-    assert_eq!(resp.body, canonical, "no duplicate divergent receipt");
+        // DIRECT removal + completion: record gone, canister uninstalled, receipt still
+        // present exactly once (idempotent — re-export was skipped, no divergent record).
+        assert_eq!(eup_count(env, lui), 0, "EUP record removed after completion");
+        assert_eq!(export_pending_count(env, lui), 0, "no pending record remains");
+        assert!(
+            is_uninstalled_by(env, user_canister, *controller),
+            "canister uninstalled after completion"
+        );
+        let resp = http_get(env, canister_ids, format!("/receipt?id={receipt_id_hex}"));
+        assert_eq!(resp.status_code, 200, "receipt still fetchable after completion");
+        assert_eq!(resp.body, canonical, "no duplicate divergent receipt");
     })); // end panic guard
 
     // #15 teardown — runs on success AND on panic.

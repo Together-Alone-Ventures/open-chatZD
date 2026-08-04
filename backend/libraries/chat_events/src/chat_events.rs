@@ -1296,12 +1296,10 @@ impl ChatEvents {
 
     pub fn has_reserved_p2p_swap(&self) -> bool {
         self.events_contain_reserved_p2p_swap(self.main_events_reader())
-            || self
-                .thread_keys()
-                .any(|thread_root| {
-                    self.events_reader(EventIndex::default(), Some(thread_root), None)
-                        .is_some_and(|reader| self.events_contain_reserved_p2p_swap(reader))
-                })
+            || self.thread_keys().any(|thread_root| {
+                self.events_reader(EventIndex::default(), Some(thread_root), None)
+                    .is_some_and(|reader| self.events_contain_reserved_p2p_swap(reader))
+            })
     }
 
     fn events_contain_reserved_p2p_swap(&self, reader: impl Reader) -> bool {

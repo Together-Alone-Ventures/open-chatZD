@@ -104,21 +104,14 @@ impl IndexCodeIdentityStore {
         }
     }
 
-    pub fn insert(
-        &mut self,
-        receipt_id: Hash,
-        evidence: IndexCodeIdentityEvidence,
-    ) -> Result<(), IndexEvidenceInsertError> {
+    pub fn insert(&mut self, receipt_id: Hash, evidence: IndexCodeIdentityEvidence) -> Result<(), IndexEvidenceInsertError> {
         if evidence.certificate_bytes.is_empty() {
             return Err(IndexEvidenceInsertError::EmptyCertificate);
         }
         if self.primary.contains_key(&ReceiptKey(receipt_id)) {
             return Err(IndexEvidenceInsertError::AlreadyExists);
         }
-        let offset = self
-            .log
-            .append(&evidence)
-            .map_err(|_| IndexEvidenceInsertError::LogFull)?;
+        let offset = self.log.append(&evidence).map_err(|_| IndexEvidenceInsertError::LogFull)?;
         self.primary.insert(ReceiptKey(receipt_id), offset);
         Ok(())
     }
@@ -161,10 +154,7 @@ mod tests {
         let second = IndexCodeIdentityEvidence {
             certificate_bytes: vec![9, 9, 9],
         };
-        assert_eq!(
-            store.insert(receipt_id, second),
-            Err(IndexEvidenceInsertError::AlreadyExists)
-        );
+        assert_eq!(store.insert(receipt_id, second), Err(IndexEvidenceInsertError::AlreadyExists));
         assert_eq!(store.get(&receipt_id).unwrap().certificate_bytes, vec![1, 2, 3]);
         assert_eq!(store.count(), 1);
     }

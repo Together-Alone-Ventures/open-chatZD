@@ -21,7 +21,10 @@ fn two_users_same_lui(env: &mut PocketIc, canister_ids: &CanisterIds) -> ((User,
     let mut pool: Vec<(User, UserAuth)> = Vec::new();
     for _ in 0..12 {
         let (user, auth) = register_user_and_include_auth(env, canister_ids);
-        if let Some(idx) = pool.iter().position(|(existing, _)| existing.local_user_index == user.local_user_index) {
+        if let Some(idx) = pool
+            .iter()
+            .position(|(existing, _)| existing.local_user_index == user.local_user_index)
+        {
             let first = pool.swap_remove(idx);
             return (first, (user, auth));
         }
@@ -45,12 +48,21 @@ fn cvdr_http(env: &PocketIc, local_user_index: CanisterId, url: &str) -> HttpRes
         env,
         Principal::anonymous(),
         local_user_index,
-        &HttpRequest { method: "GET".to_string(), url: url.to_string(), headers: Vec::new(), body: Vec::new() },
+        &HttpRequest {
+            method: "GET".to_string(),
+            url: url.to_string(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        },
     )
 }
 
 fn response_header<'a>(response: &'a HttpResponse, name: &str) -> Option<&'a str> {
-    response.headers.iter().find(|h| h.0.eq_ignore_ascii_case(name)).map(|h| h.1.as_str())
+    response
+        .headers
+        .iter()
+        .find(|h| h.0.eq_ignore_ascii_case(name))
+        .map(|h| h.1.as_str())
 }
 
 fn delete_and_store_package(
@@ -68,7 +80,11 @@ fn delete_and_store_package(
     env.mock_canister_http_response(MockCanisterHttpResponse {
         subnet_id: req.subnet_id,
         request_id: req.request_id,
-        response: CanisterHttpResponse::CanisterHttpReply(CanisterHttpReply { status: 200, headers: Vec::new(), body: live.body }),
+        response: CanisterHttpResponse::CanisterHttpReply(CanisterHttpReply {
+            status: 200,
+            headers: Vec::new(),
+            body: live.body,
+        }),
         additional_responses: Vec::new(),
     });
     tick_many(env, 5);
@@ -86,7 +102,11 @@ fn finalize(
         env,
         Principal::anonymous(),
         local_user_index,
-        &finalize_cvdr::Args { receipt_id, certificate, witness },
+        &finalize_cvdr::Args {
+            receipt_id,
+            certificate,
+            witness,
+        },
     )
 }
 
@@ -137,7 +157,6 @@ fn fetch_cvdr(env: &PocketIc, local_user_index: CanisterId, receipt_id: [u8; 32]
     client::local_user_index::get_cvdr(env, Principal::anonymous(), local_user_index, &get_cvdr::Args { receipt_id })
 }
 
-
 /// The v5 metrics triple (drafts_in_flight, released_count, awaiting_certificate) read off
 /// the public `/metrics` http route.
 fn cvdr_metrics(env: &PocketIc, local_user_index: CanisterId) -> (u64, u64, bool) {
@@ -145,14 +164,21 @@ fn cvdr_metrics(env: &PocketIc, local_user_index: CanisterId) -> (u64, u64, bool
         env,
         Principal::anonymous(),
         local_user_index,
-        &HttpRequest { method: "GET".to_string(), url: "/metrics".to_string(), headers: Vec::new(), body: Vec::new() },
+        &HttpRequest {
+            method: "GET".to_string(),
+            url: "/metrics".to_string(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        },
     );
     assert_eq!(response.status_code, 200, "metrics http status");
     let json: serde_json::Value = serde_json::from_slice(&response.body).expect("metrics JSON");
     (
         json["cvdr_drafts_in_flight"].as_u64().expect("cvdr_drafts_in_flight"),
         json["cvdr_released_count"].as_u64().expect("cvdr_released_count"),
-        json["cvdr_awaiting_certificate"].as_bool().expect("cvdr_awaiting_certificate"),
+        json["cvdr_awaiting_certificate"]
+            .as_bool()
+            .expect("cvdr_awaiting_certificate"),
     )
 }
 
@@ -167,7 +193,12 @@ fn metrics_json(env: &PocketIc, canister_id: CanisterId) -> serde_json::Value {
         env,
         Principal::anonymous(),
         canister_id,
-        &HttpRequest { method: "GET".to_string(), url: "/metrics".to_string(), headers: Vec::new(), body: Vec::new() },
+        &HttpRequest {
+            method: "GET".to_string(),
+            url: "/metrics".to_string(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        },
     );
     assert_eq!(response.status_code, 200, "metrics http status");
     serde_json::from_slice(&response.body).expect("metrics JSON")
@@ -175,7 +206,9 @@ fn metrics_json(env: &PocketIc, canister_id: CanisterId) -> serde_json::Value {
 
 /// Receipts-canister stored-receipt count — proof of whether the index ever called `store`.
 fn receipts_stored(env: &PocketIc, receipts: CanisterId) -> u64 {
-    metrics_json(env, receipts)["receipts_stored"].as_u64().expect("receipts_stored")
+    metrics_json(env, receipts)["receipts_stored"]
+        .as_u64()
+        .expect("receipts_stored")
 }
 
 /// The LUI's P2 durable parked/export-pending counts (`export_pending.len()` and its
@@ -183,8 +216,12 @@ fn receipts_stored(env: &PocketIc, receipts: CanisterId) -> u64 {
 fn lui_export_pending(env: &PocketIc, lui: CanisterId) -> (u64, u64) {
     let m = metrics_json(env, lui);
     (
-        m["receipt_export_pending_count"].as_u64().expect("receipt_export_pending_count"),
-        m["receipt_export_uninstall_pending_count"].as_u64().expect("receipt_export_uninstall_pending_count"),
+        m["receipt_export_pending_count"]
+            .as_u64()
+            .expect("receipt_export_pending_count"),
+        m["receipt_export_uninstall_pending_count"]
+            .as_u64()
+            .expect("receipt_export_uninstall_pending_count"),
     )
 }
 
@@ -201,7 +238,12 @@ fn module_hash_is_none(env: &PocketIc, user: &User) -> bool {
 /// Running again — so this never returns mid-stop (no `CanisterStopped` race) and has no pre-stop
 /// false positive. Replaces a fixed `tick_many`, which was non-deterministic under load.
 fn wait_for_lui_version(env: &mut PocketIc, lui: CanisterId, expected: types::BuildVersion) {
-    let req = HttpRequest { method: "GET".to_string(), url: "/metrics".to_string(), headers: Vec::new(), body: Vec::new() };
+    let req = HttpRequest {
+        method: "GET".to_string(),
+        url: "/metrics".to_string(),
+        headers: Vec::new(),
+        body: Vec::new(),
+    };
     let payload = candid::encode_one(&req).unwrap();
     for i in 0..300 {
         tick_many(env, 1);
@@ -213,11 +255,15 @@ fn wait_for_lui_version(env: &mut PocketIc, lui: CanisterId, expected: types::Bu
         let Ok(bytes) = env.query_call(lui, Principal::anonymous(), "http_request", payload.clone()) else {
             continue;
         };
-        let Ok(resp) = candid::decode_one::<types::HttpResponse>(&bytes) else { continue };
+        let Ok(resp) = candid::decode_one::<types::HttpResponse>(&bytes) else {
+            continue;
+        };
         if resp.status_code != 200 {
             continue;
         }
-        let Ok(json) = serde_json::from_slice::<serde_json::Value>(&resp.body) else { continue };
+        let Ok(json) = serde_json::from_slice::<serde_json::Value>(&resp.body) else {
+            continue;
+        };
         let v = &json["wasm_version"];
         if v["major"].as_u64() == Some(expected.major as u64)
             && v["minor"].as_u64() == Some(expected.minor as u64)
@@ -261,13 +307,23 @@ fn delete_completes_cert_absent_and_awaits_certificate() {
     delete_and_reach_awaiting(env, canister_ids, &user, &user_auth);
 
     // Uninstalled by the leg; one draft awaiting the certificate; nothing released (cert-absent).
-    assert!(module_hash_is_none(env, &user), "user canister must be uninstalled by the leg");
+    assert!(
+        module_hash_is_none(env, &user),
+        "user canister must be uninstalled by the leg"
+    );
     let (drafts, released, awaiting) = cvdr_metrics(env, lui);
-    assert_eq!((drafts, released, awaiting), (base_d + 1, base_r, true), "one draft awaiting, none released (cert-absent)");
+    assert_eq!(
+        (drafts, released, awaiting),
+        (base_d + 1, base_r, true),
+        "one draft awaiting, none released (cert-absent)"
+    );
 
     // The §7 backstop rejects an unknown receipt_id at rule 1 (no finalizable draft) → NotPending.
     let response = finalize(env, lui, [0u8; 32], Vec::new(), Vec::new());
-    assert!(matches!(response, finalize_cvdr::Response::NotPending), "unknown receipt must be NotPending, got {response:?}");
+    assert!(
+        matches!(response, finalize_cvdr::Response::NotPending),
+        "unknown receipt must be NotPending, got {response:?}"
+    );
     // Frozen-package serving is Slice 2 — nothing is fetchable yet.
     assert!(matches!(fetch_cvdr(env, lui, [0u8; 32]), get_cvdr::Response::NotFound));
 }
@@ -286,7 +342,6 @@ fn cvdr_store_fetch_round_trip() {
         get_cvdr::Response::Available(get_cvdr::AvailablePackage::FrozenWire(_))
     ));
 }
-
 
 /// Gate A / E-1: candid Available(FrozenWire) and HTTP GET /cvdr/<hex> are byte-identical (§11.3).
 #[test]
@@ -311,13 +366,19 @@ fn cvdr_gate_a_frozen_wire_http_matches_candid() {
     assert_eq!(response_header(&download, "Cache-Control"), Some("no-store"));
     assert_eq!(response_header(&download, "Content-Type"), Some("application/json"));
     assert_eq!(response_header(&download, "X-Content-Type-Options"), Some("nosniff"));
-    assert_eq!(download.body, candid_bytes, "Gate A: HTTP body must equal FrozenWire::to_canonical_json()");
+    assert_eq!(
+        download.body, candid_bytes,
+        "Gate A: HTTP body must equal FrozenWire::to_canonical_json()"
+    );
     let body_text = String::from_utf8_lossy(&download.body);
     assert!(!body_text.contains("VerifiedFinal") && !body_text.contains("LateFinalized"));
     assert!(!body_text.contains("root_key_hex"));
     assert_eq!(cvdr_http(env, lui, "/cvdr/NOT_HEX").status_code, 400);
     assert_eq!(cvdr_http(env, lui, &format!("/cvdr/{}", "0".repeat(64))).status_code, 404);
-    assert_eq!(cvdr_http(env, lui, &format!("/cvdr?receipt_id={receipt_hex}")).status_code, 404);
+    assert_eq!(
+        cvdr_http(env, lui, &format!("/cvdr?receipt_id={receipt_hex}")).status_code,
+        404
+    );
 }
 
 /// E-2 / §11.7-2 — Pending → Available on the same receipt_id with no 404 in the gap.
@@ -343,7 +404,10 @@ fn pending_then_available_no_404_in_the_gap() {
         assert_eq!(json.as_object().unwrap().len(), 4);
         assert!(!String::from_utf8_lossy(&http.body).contains(&receipt_id_hex));
         for leak in ["salt", "canisters_to_notify", "receipt_body", "module_hash"] {
-            assert!(!String::from_utf8_lossy(&http.body).contains(leak), "pending must not leak `{leak}`");
+            assert!(
+                !String::from_utf8_lossy(&http.body).contains(leak),
+                "pending must not leak `{leak}`"
+            );
         }
         assert!(matches!(fetch_cvdr(env, lui, receipt_id), get_cvdr::Response::Pending(_)));
     };
@@ -357,7 +421,11 @@ fn pending_then_available_no_404_in_the_gap() {
     env.mock_canister_http_response(MockCanisterHttpResponse {
         subnet_id: req.subnet_id,
         request_id: req.request_id,
-        response: CanisterHttpResponse::CanisterHttpReply(CanisterHttpReply { status: 200, headers: Vec::new(), body: live.body }),
+        response: CanisterHttpResponse::CanisterHttpReply(CanisterHttpReply {
+            status: 200,
+            headers: Vec::new(),
+            body: live.body,
+        }),
         additional_responses: Vec::new(),
     });
     tick_many(env, 5);
@@ -380,7 +448,10 @@ fn unknown_is_404_and_malformed_is_400_constant_shape() {
     let unknown_hex = "0".repeat(64);
     let unknown = cvdr_http(env, lui, &format!("/cvdr/{unknown_hex}"));
     assert_eq!(unknown.status_code, 404);
-    assert_eq!(unknown.body, br#"{"schema":"openchatzd.cvdr.status","version":1,"status":"not_found"}"#.to_vec());
+    assert_eq!(
+        unknown.body,
+        br#"{"schema":"openchatzd.cvdr.status","version":1,"status":"not_found"}"#.to_vec()
+    );
     assert!(matches!(fetch_cvdr(env, lui, [0u8; 32]), get_cvdr::Response::NotFound));
 
     let malformed = ["abc", &"z".repeat(64), &"A".repeat(64), &"0".repeat(63), &"0".repeat(65)];
@@ -388,14 +459,20 @@ fn unknown_is_404_and_malformed_is_400_constant_shape() {
     for id in malformed {
         let response = cvdr_http(env, lui, &format!("/cvdr/{id}"));
         assert_eq!(response.status_code, 400, "malformed id `{id}` must 400");
-        assert_eq!(response.body, br#"{"schema":"openchatzd.cvdr.status","version":1,"status":"bad_request"}"#.to_vec());
+        assert_eq!(
+            response.body,
+            br#"{"schema":"openchatzd.cvdr.status","version":1,"status":"bad_request"}"#.to_vec()
+        );
         assert!(!String::from_utf8_lossy(&response.body).contains(id));
         bodies.push(response.body);
     }
     assert!(bodies.windows(2).all(|w| w[0] == w[1]));
     assert_ne!(unknown.body, bodies[0]);
     assert_eq!(response_header(&unknown, "Cache-Control"), Some("no-store"));
-    assert_eq!(cvdr_http(env, lui, &format!("/cvdr?receipt_id={unknown_hex}")).status_code, 404);
+    assert_eq!(
+        cvdr_http(env, lui, &format!("/cvdr?receipt_id={unknown_hex}")).status_code,
+        404
+    );
 }
 
 /// Absent/stuck finalizer: with no finalizer, the leg reaches AwaitingCertificate and STAYS
@@ -421,15 +498,29 @@ fn absent_finalizer_withholds_completion_and_resumes() {
 
     // Still awaiting, still nothing newly released — completion is withheld.
     let (drafts, released, awaiting) = cvdr_metrics(env, lui);
-    assert_eq!((drafts, released, awaiting), (base_d + 1, base_r, true), "draft must persist AwaitingCertificate; nothing released");
-    assert!(matches!(fetch_cvdr(env, lui, receipt_id), get_cvdr::Response::Pending(_)), "draft without package is Pending");
+    assert_eq!(
+        (drafts, released, awaiting),
+        (base_d + 1, base_r, true),
+        "draft must persist AwaitingCertificate; nothing released"
+    );
+    assert!(
+        matches!(fetch_cvdr(env, lui, receipt_id), get_cvdr::Response::Pending(_)),
+        "draft without package is Pending"
+    );
     assert!(module_hash_is_none(env, &user), "canister stays uninstalled while awaiting");
 
     // A late finalizer resumes it to completion.
     let (receipt_id, certificate, witness) = pending_live_package(env, lui);
-    assert!(matches!(finalize(env, lui, receipt_id, certificate, witness), finalize_cvdr::Response::Captured));
+    assert!(matches!(
+        finalize(env, lui, receipt_id, certificate, witness),
+        finalize_cvdr::Response::Captured
+    ));
     let (drafts, released, awaiting) = cvdr_metrics(env, lui);
-    assert_eq!((drafts, released, awaiting), (base_d, base_r + 1, false), "late finalize completes it");
+    assert_eq!(
+        (drafts, released, awaiting),
+        (base_d, base_r + 1, false),
+        "late finalize completes it"
+    );
 }
 
 /// Concurrency (reborn from the old single-slot serialization test): spec §2 removes the single
@@ -441,7 +532,10 @@ fn concurrent_deletes_both_reach_awaiting_certificate() {
     let mut wrapper = ENV.deref().get();
     let TestEnv { env, canister_ids, .. } = wrapper.env();
     let ((user_a, auth_a), (user_b, auth_b)) = two_users_same_lui(env, canister_ids);
-    assert_eq!(user_a.local_user_index, user_b.local_user_index, "test requires a shared local_user_index");
+    assert_eq!(
+        user_a.local_user_index, user_b.local_user_index,
+        "test requires a shared local_user_index"
+    );
     let lui = user_b.local_user_index;
     let (base_d, _, _) = cvdr_metrics(env, lui);
 
@@ -457,7 +551,11 @@ fn concurrent_deletes_both_reach_awaiting_certificate() {
         "both user canisters uninstalled by the leg"
     );
     let (drafts, _, awaiting) = cvdr_metrics(env, lui);
-    assert_eq!(drafts, base_d + 2, "both deletions are in flight at once (no single-slot serialization)");
+    assert_eq!(
+        drafts,
+        base_d + 2,
+        "both deletions are in flight at once (no single-slot serialization)"
+    );
     assert!(awaiting, "receipts awaiting certificate capture");
 }
 
@@ -489,7 +587,12 @@ fn self_finalization_captures_and_stores_via_mocked_outcall() {
         env,
         Principal::anonymous(),
         lui,
-        &HttpRequest { method: "GET".to_string(), url: format!("/cvdr_live/{receipt_hex}"), headers: Vec::new(), body: Vec::new() },
+        &HttpRequest {
+            method: "GET".to_string(),
+            url: format!("/cvdr_live/{receipt_hex}"),
+            headers: Vec::new(),
+            body: Vec::new(),
+        },
     );
     assert_eq!(live.status_code, 200, "/cvdr_live must serve the live certification payload");
     let live_body = live.body;
@@ -511,7 +614,11 @@ fn self_finalization_captures_and_stores_via_mocked_outcall() {
     // delta, not the awaiting flag, is this test's capture evidence.)
     tick_many(env, 5);
     let (_, frozen, _) = cvdr_metrics(env, lui);
-    assert_eq!(frozen, base_frozen + 1, "self-finalization verified the certificate + stored exactly one frozen package");
+    assert_eq!(
+        frozen,
+        base_frozen + 1,
+        "self-finalization verified the certificate + stored exactly one frozen package"
+    );
 
     // Export the PocketIC-produced FrozenCvdrPackage + PocketIC NNS root key as the CVDR-Verify
     // END-TO-END fixture: a REAL certificate binding a REAL receipts-tree root (closes CVDR-Verify's
@@ -763,7 +870,10 @@ fn export_cvdr_verify_e2e_fixture(env: &PocketIc, lui: CanisterId, receipt_id_he
         sha256::sha256(&pre)
     };
     let cert = Certificate::from_cbor(&certificate).unwrap();
-    let tree_root = match cert.tree.lookup_path([b"canister".as_ref(), lui.as_slice(), b"certified_data".as_ref()]) {
+    let tree_root = match cert
+        .tree
+        .lookup_path([b"canister".as_ref(), lui.as_slice(), b"certified_data".as_ref()])
+    {
         LookupResult::Found(d) => d.to_vec(),
         _ => panic!("no certified_data in fixture cert"),
     };
@@ -836,7 +946,10 @@ fn p2_export_path_is_banked_not_half_alive() {
     // Drive a complete v5 deletion.
     delete_and_reach_awaiting(env, canister_ids, &user, &user_auth);
     let (receipt_id, certificate, witness) = pending_live_package(env, lui);
-    assert!(matches!(finalize(env, lui, receipt_id, certificate, witness), finalize_cvdr::Response::Captured));
+    assert!(matches!(
+        finalize(env, lui, receipt_id, certificate, witness),
+        finalize_cvdr::Response::Captured
+    ));
 
     // The deletion went entirely through v5 (released CVDR), and the user was uninstalled.
     let (_, released, _) = cvdr_metrics(env, lui);
@@ -845,14 +958,30 @@ fn p2_export_path_is_banked_not_half_alive() {
 
     // P2 path provably untouched: no store c2c reached the dedicated receipts canister, and the
     // durable parked/export-pending set was never populated.
-    assert_eq!(receipts_stored(env, canister_ids.receipts), receipts_before, "v5 leg must attempt NO receipts-canister store c2c");
-    assert_eq!(lui_export_pending(env, lui), export_pending_before, "v5 leg must never populate the P2 parked/export-pending set");
+    assert_eq!(
+        receipts_stored(env, canister_ids.receipts),
+        receipts_before,
+        "v5 leg must attempt NO receipts-canister store c2c"
+    );
+    assert_eq!(
+        lui_export_pending(env, lui),
+        export_pending_before,
+        "v5 leg must never populate the P2 parked/export-pending set"
+    );
 
     // Let multiple parked-retry intervals worth of time elapse: nothing deferred ever fires.
     env.advance_time(Duration::from_secs(60));
     tick_many(env, 15);
-    assert_eq!(receipts_stored(env, canister_ids.receipts), receipts_before, "no deferred/retried export ever fires (parked-retry job absent)");
-    assert_eq!(lui_export_pending(env, lui), export_pending_before, "parked/export-pending set stays empty over time");
+    assert_eq!(
+        receipts_stored(env, canister_ids.receipts),
+        receipts_before,
+        "no deferred/retried export ever fires (parked-retry job absent)"
+    );
+    assert_eq!(
+        lui_export_pending(env, lui),
+        export_pending_before,
+        "parked/export-pending set stays empty over time"
+    );
 }
 
 /// Upgrade-survivability: a deletion mid-flight at AwaitingCertificate survives a
@@ -890,11 +1019,18 @@ fn draft_survives_upgrade_then_finalizes() {
 
     // The draft survived; the commitment is re-published so the certificate is available.
     let (drafts, released, awaiting) = cvdr_metrics(env, lui);
-    assert_eq!((drafts, released, awaiting), (1, 0, true), "draft survives the upgrade, still awaiting");
+    assert_eq!(
+        (drafts, released, awaiting),
+        (1, 0, true),
+        "draft survives the upgrade, still awaiting"
+    );
 
     let (_, after_id, certificate, witness) = find_servable_cvdr_live(env, lui);
     assert_eq!(after_id, before_id, "same receipt across the upgrade");
-    assert!(matches!(finalize(env, lui, after_id, certificate, witness), finalize_cvdr::Response::Captured));
+    assert!(matches!(
+        finalize(env, lui, after_id, certificate, witness),
+        finalize_cvdr::Response::Captured
+    ));
 
     let (drafts, released, _) = cvdr_metrics(env, lui);
     assert_eq!((drafts, released), (0, 1), "finalizes cleanly after the upgrade");
@@ -936,7 +1072,10 @@ fn forged_or_stale_certificate_is_rejected() {
     // No store, no completion: nothing frozen, and the user canister stays uninstalled.
     let (_, released, _) = cvdr_metrics(env, lui);
     assert_eq!(released, base_r, "rejected submissions must not store a frozen package");
-    assert!(module_hash_is_none(env, &user), "deletion long completed; rejects change no state");
+    assert!(
+        module_hash_is_none(env, &user),
+        "deletion long completed; rejects change no state"
+    );
 
     // (c) Stale valid certificate — advance past the freshness offset; the captured cert is now
     // too old. The receipt is still AwaitingCertificate (well within the 24h give-up cap).
@@ -957,7 +1096,11 @@ fn forged_or_stale_certificate_is_rejected() {
         finalize_cvdr::Response::Captured
     ));
     let (_, released, _) = cvdr_metrics(env, lui);
-    assert_eq!(released, base_r + 1, "a fresh valid backstop submission stores exactly one package");
+    assert_eq!(
+        released,
+        base_r + 1,
+        "a fresh valid backstop submission stores exactly one package"
+    );
 
     // Idempotent: a second submission for the finalized receipt is a no-op (rules 6–7).
     let (again_cert, again_witness) = fetch_cvdr_live(env, lui, &receipt_hex).unwrap_or((Vec::new(), Vec::new()));
@@ -1002,19 +1145,32 @@ fn backstop_and_self_loop_store_exactly_one_package() {
         env,
         Principal::anonymous(),
         lui,
-        &HttpRequest { method: "GET".to_string(), url: format!("/cvdr_live/{receipt_hex}"), headers: Vec::new(), body: Vec::new() },
+        &HttpRequest {
+            method: "GET".to_string(),
+            url: format!("/cvdr_live/{receipt_hex}"),
+            headers: Vec::new(),
+            body: Vec::new(),
+        },
     );
     env.mock_canister_http_response(MockCanisterHttpResponse {
         subnet_id: req.subnet_id,
         request_id: req.request_id,
-        response: CanisterHttpResponse::CanisterHttpReply(CanisterHttpReply { status: 200, headers: Vec::new(), body: live.body }),
+        response: CanisterHttpResponse::CanisterHttpReply(CanisterHttpReply {
+            status: 200,
+            headers: Vec::new(),
+            body: live.body,
+        }),
         additional_responses: Vec::new(),
     });
     tick_many(env, 5);
 
     // Exactly one package — the self-loop did NOT store a second (idempotent against the backstop).
     let (_, released_final, _) = cvdr_metrics(env, lui);
-    assert_eq!(released_final, base_r + 1, "self-loop is a no-op once the backstop captured; exactly one stored");
+    assert_eq!(
+        released_final,
+        base_r + 1,
+        "self-loop is a no-op once the backstop captured; exactly one stored"
+    );
 }
 
 /// LATE-but-valid (spec §5/§7 rule 8): a cryptographically valid certificate captured OUTSIDE the
@@ -1055,7 +1211,11 @@ fn late_valid_certificate_is_stored_as_late_finalized() {
 
     // A frozen package WAS stored (late is stored, not rejected) — exactly one.
     let (_, released, _) = cvdr_metrics(env, lui);
-    assert_eq!(released, base_r + 1, "a late-but-valid package is stored (as LateFinalized), not rejected");
+    assert_eq!(
+        released,
+        base_r + 1,
+        "a late-but-valid package is stored (as LateFinalized), not rejected"
+    );
 }
 
 /// M7: `FailedStuck` leaf must survive LUI upgrade so `/cvdr_live` + backstop still work.
@@ -1092,8 +1252,8 @@ fn failed_stuck_survives_upgrade_then_backstop() {
     wait_for_lui_version(env, lui, types::BuildVersion::new(0, 0, 3));
 
     // Post-upgrade: tree rebuilt including FailedStuck → live witness still available.
-    let (certificate, witness) = fetch_cvdr_live(env, lui, &receipt_hex)
-        .expect("M7: FailedStuck must remain /cvdr_live-servable after LUI upgrade");
+    let (certificate, witness) =
+        fetch_cvdr_live(env, lui, &receipt_hex).expect("M7: FailedStuck must remain /cvdr_live-servable after LUI upgrade");
     assert!(matches!(
         finalize(env, lui, receipt_id, certificate, witness),
         finalize_cvdr::Response::LateFinalized
@@ -1101,10 +1261,7 @@ fn failed_stuck_survives_upgrade_then_backstop() {
 
     let (_, released, _) = cvdr_metrics(env, lui);
     assert_eq!(released, base_r + 1);
-    assert!(matches!(
-        fetch_cvdr(env, lui, receipt_id),
-        get_cvdr::Response::Available(_)
-    ));
+    assert!(matches!(fetch_cvdr(env, lui, receipt_id), get_cvdr::Response::Available(_)));
 }
 
 /// Offline verifier round-trip: take a stored CVDR's bytes and verify V1–V3 with NO live
@@ -1141,10 +1298,15 @@ fn offline_verifier_round_trip_from_bytes() {
 #[ignore = "Slice 2/3: reads the captured executor hash back from a finalized/stored receipt. Captured-wins semantics has unit coverage (h_index_binds_executor_module_hash)."]
 fn captured_executor_hash_survives_mid_flight_upgrade() {
     let mut owned_env = crate::setup::setup_new_env(None);
-    let TestEnv { env, canister_ids, controller } = &mut owned_env;
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+    } = &mut owned_env;
     let (user, user_auth) = register_user_and_include_auth(env, canister_ids);
     let lui = user.local_user_index;
-    let _captured_executor = sha256::sha256(&std::fs::read(crate::utils::local_bin().join("local_user_index.wasm.gz")).unwrap());
+    let _captured_executor =
+        sha256::sha256(&std::fs::read(crate::utils::local_bin().join("local_user_index.wasm.gz")).unwrap());
 
     delete_and_reach_awaiting(env, canister_ids, &user, &user_auth);
     let (_, before_id, _, _) = find_servable_cvdr_live(env, lui);
@@ -1156,7 +1318,10 @@ fn captured_executor_hash_survives_mid_flight_upgrade() {
 
     let (_, after_id, certificate, witness) = find_servable_cvdr_live(env, lui);
     assert_eq!(after_id, before_id, "same in-flight deletion across the upgrade");
-    assert!(matches!(finalize(env, lui, after_id, certificate, witness), finalize_cvdr::Response::Captured));
+    assert!(matches!(
+        finalize(env, lui, after_id, certificate, witness),
+        finalize_cvdr::Response::Captured
+    ));
     assert!(matches!(
         fetch_cvdr(env, lui, after_id),
         get_cvdr::Response::Available(get_cvdr::AvailablePackage::FrozenWire(_))

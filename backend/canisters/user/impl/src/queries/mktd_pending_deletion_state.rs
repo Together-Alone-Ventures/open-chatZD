@@ -11,7 +11,11 @@ fn mktd_pending_deletion_state(_args: Args) -> Response {
     let tombstoned = read_state(|state| state.data.pii_tombstoned);
 
     if !mktd02::is_initialised() {
-        return Response { pending: false, tombstoned, receipt_id: None };
+        return Response {
+            pending: false,
+            tombstoned,
+            receipt_id: None,
+        };
     }
 
     let pending = mktd02::is_pending_finalization();
@@ -23,5 +27,9 @@ fn mktd_pending_deletion_state(_args: Args) -> Response {
         None
     };
 
-    Response { pending, tombstoned, receipt_id }
+    Response {
+        pending,
+        tombstoned,
+        receipt_id,
+    }
 }

@@ -140,13 +140,7 @@ async fn attempt_capture(receipt_id: Hash, commitment_certificate_time_ns: u64) 
         let now = state.env.now();
         let ic_root_key = state.env.ic_root_key();
 
-        match cvdr::verify_index_module_hash_evidence(
-            &certificate,
-            self_id,
-            &ic_root_key,
-            now,
-            Some(commitment_time),
-        ) {
+        match cvdr::verify_index_module_hash_evidence(&certificate, self_id, &ic_root_key, now, Some(commitment_time)) {
             Ok(_verified) => {
                 let evidence = IndexCodeIdentityEvidence {
                     certificate_bytes: certificate,
@@ -221,10 +215,7 @@ struct ReadStateResponse {
     certificate: Vec<u8>,
 }
 
-pub(crate) fn encode_anonymous_module_hash_read_state(
-    canister_id: Principal,
-    ingress_expiry: u64,
-) -> Option<Vec<u8>> {
+pub(crate) fn encode_anonymous_module_hash_read_state(canister_id: Principal, ingress_expiry: u64) -> Option<Vec<u8>> {
     let path_module = vec![
         serde_bytes::ByteBuf::from(b"canister".as_slice()),
         serde_bytes::ByteBuf::from(canister_id.as_slice()),
@@ -246,17 +237,13 @@ pub(crate) fn encode_anonymous_module_hash_read_state(
 
 fn parse_read_state_certificate(body: &[u8]) -> Option<Vec<u8>> {
     let parsed: ReadStateResponse = serde_cbor::from_slice(body).ok()?;
-    if parsed.certificate.is_empty() {
-        None
-    } else {
-        Some(parsed.certificate)
-    }
+    if parsed.certificate.is_empty() { None } else { Some(parsed.certificate) }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::cvdr::{check_index_cert_not_before_commitment, IndexEvidenceRejectReason};
+    use crate::model::cvdr::{IndexEvidenceRejectReason, check_index_cert_not_before_commitment};
 
     #[test]
     fn anonymous_read_state_request_encodes_module_hash_path() {
@@ -316,8 +303,8 @@ mod tests {
 
     #[test]
     fn concurrent_inserts_keep_first_evidence() {
+        use crate::model::cvdr::{CvdrStore, FrozenCvdrPackage, receipt_id_for, record_id_for};
         use crate::model::cvdr_index_evidence::{IndexCodeIdentityEvidence, IndexEvidenceInsertError};
-        use crate::model::cvdr::{FrozenCvdrPackage, record_id_for, receipt_id_for, CvdrStore};
         use candid::Principal;
 
         let mut s = CvdrStore::default();

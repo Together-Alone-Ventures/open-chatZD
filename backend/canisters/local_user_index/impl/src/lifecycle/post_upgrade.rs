@@ -28,8 +28,7 @@ fn post_upgrade(args: Args) {
             .wasm
             .module;
         if !user_wasm.is_empty() {
-            data.user_canister_module_hash =
-                deployed_module_hash(user_wasm).expect("user canister wasm hash");
+            data.user_canister_module_hash = deployed_module_hash(user_wasm).expect("user canister wasm hash");
         }
     }
 

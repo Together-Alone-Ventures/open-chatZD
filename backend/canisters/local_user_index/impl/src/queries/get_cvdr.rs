@@ -1,9 +1,7 @@
 use crate::model::cvdr::CvdrStore;
 use crate::{RuntimeState, read_state};
 use ic_cdk::query;
-use local_user_index_canister::get_cvdr::{
-    AvailablePackage, FrozenWire, PendingInfo, PortablePackageV2Wire, Response::*, *,
-};
+use local_user_index_canister::get_cvdr::{AvailablePackage, FrozenWire, PendingInfo, PortablePackageV2Wire, Response::*, *};
 
 /// Public fetch by the unguessable bearer `receipt_id` (spec §11.1/§11.2).
 ///
@@ -41,7 +39,7 @@ pub(crate) fn get_cvdr_from_store(receipt_id: &[u8; 32], cvdr: &CvdrStore) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::cvdr::{FrozenCvdrPackage, record_id_for, receipt_id_for};
+    use crate::model::cvdr::{FrozenCvdrPackage, receipt_id_for, record_id_for};
     use crate::model::cvdr_index_evidence::IndexCodeIdentityEvidence;
     use candid::Principal;
 
@@ -77,14 +75,15 @@ mod tests {
         let record_id = record_id_for(Principal::from_slice(&[2]).into());
         let receipt_id = receipt_id_for(&record_id, 2, &[9u8; 32]);
         assert!(cvdr.insert_frozen_package(receipt_id, record_id, 2, sample_pkg()).is_ok());
-        assert!(cvdr
-            .insert_index_evidence(
+        assert!(
+            cvdr.insert_index_evidence(
                 receipt_id,
                 IndexCodeIdentityEvidence {
                     certificate_bytes: vec![0xde, 0xad],
                 }
             )
-            .is_ok());
+            .is_ok()
+        );
 
         match get_cvdr_from_store(&receipt_id, &cvdr) {
             Response::Available(AvailablePackage::PortablePackageV2(v2)) => {
@@ -188,10 +187,7 @@ mod tests {
         };
         assert!(!draft.is_finalizable(), "Prepared must not be /cvdr_live-servable");
         cvdr.upsert_draft(draft);
-        assert!(matches!(
-            get_cvdr_from_store(&receipt_id, &cvdr),
-            Response::Pending(_)
-        ));
+        assert!(matches!(get_cvdr_from_store(&receipt_id, &cvdr), Response::Pending(_)));
         assert!(cvdr.find_draft_by_receipt_id(&receipt_id).is_none());
     }
 }

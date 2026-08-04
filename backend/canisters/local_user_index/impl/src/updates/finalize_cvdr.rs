@@ -130,7 +130,11 @@ fn store_verified_package(
         certificate_bytes: certificate,
         certificate_time: cert_time_ns,
     };
-    match state.data.cvdr.insert_frozen_package(draft.receipt_id, draft.record_id, draft.deletion_seq, package) {
+    match state
+        .data
+        .cvdr
+        .insert_frozen_package(draft.receipt_id, draft.record_id, draft.deletion_seq, package)
+    {
         Ok(()) => {
             draft.stage = stage;
             draft.scrub_sensitive();

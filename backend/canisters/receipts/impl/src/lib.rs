@@ -64,11 +64,7 @@ struct Data {
 }
 
 impl Data {
-    pub fn new(
-        authorized_principals: Vec<CanisterId>,
-        cycles_dispenser_canister_id: CanisterId,
-        test_mode: bool,
-    ) -> Data {
+    pub fn new(authorized_principals: Vec<CanisterId>, cycles_dispenser_canister_id: CanisterId, test_mode: bool) -> Data {
         Data {
             receipts: ReceiptStore::default(),
             authorized_principals: authorized_principals.into_iter().collect(),

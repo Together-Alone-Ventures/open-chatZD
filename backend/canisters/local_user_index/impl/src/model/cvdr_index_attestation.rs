@@ -36,13 +36,11 @@ interlock on local_user_index, matching endpoint hashes do not prove uninterrupt
 that module throughout the sealing window.";
 
 /// Forbidden overclaim fragment (spec §12) — must never appear in verifier/docs output.
-pub const OCZD_FORBIDDEN_OVERCLAIM_FRAGMENT: &str =
-    "proves which INDEX code ran when the receipt was sealed";
+pub const OCZD_FORBIDDEN_OVERCLAIM_FRAGMENT: &str = "proves which INDEX code ran when the receipt was sealed";
 
 /// Relative path from the Together-alone `CVDR-Verify` root to the OpenChatZD attestation module.
 #[cfg(test)]
-const SIBLING_OPENCHATZD_ATTESTATION_REL: &str =
-    "mktd02/mktd02-verify/src/openchatzd/index_attestation.rs";
+const SIBLING_OPENCHATZD_ATTESTATION_REL: &str = "mktd02/mktd02-verify/src/openchatzd/index_attestation.rs";
 
 /// Labels that must appear verbatim in the sibling offline verifier when that module exists.
 #[cfg(test)]
@@ -71,9 +69,7 @@ fn retired_v3a_outcome_tokens() -> &'static [&'static str] {
 #[cfg(test)]
 fn source_has_retired_timing_wire(src: &str) -> bool {
     // Match live assignments / consts only — not mentions inside drift-guard tests.
-    src.contains("TIMING_LATE_PATH")
-        || src.contains("= \"late_path\"")
-        || src.contains("= \"routine\"")
+    src.contains("TIMING_LATE_PATH") || src.contains("= \"late_path\"") || src.contains("= \"routine\"")
 }
 
 /// Decision for the cross-repo label drift guard (pure; unit-tested).
@@ -89,10 +85,7 @@ enum SiblingLabelGuard {
 }
 
 #[cfg(test)]
-fn sibling_label_guard(
-    verify_root: &std::path::Path,
-    module_path: &std::path::Path,
-) -> SiblingLabelGuard {
+fn sibling_label_guard(verify_root: &std::path::Path, module_path: &std::path::Path) -> SiblingLabelGuard {
     if !verify_root.exists() {
         SiblingLabelGuard::SkipAbsent
     } else if !module_path.exists() {
@@ -233,8 +226,7 @@ mod tests {
         // Commitment Available (FrozenWire) vs INDEX Available (PortablePackageV2) are distinct.
         assert_ne!(PORTABLE_PACKAGE_V2_NAME, "FrozenWire");
         assert_eq!(
-            INDEX_ATTESTATION_UNAVAILABLE,
-            "INDEX_ATTESTATION_UNAVAILABLE",
+            INDEX_ATTESTATION_UNAVAILABLE, "INDEX_ATTESTATION_UNAVAILABLE",
             "FrozenWire-only Available must map to UNAVAILABLE, not MATCH"
         );
     }
@@ -244,52 +236,34 @@ mod tests {
         let missing = Path::new("/tmp/openchatzd-cvdr-verify-definitely-absent-xyz");
         assert!(!missing.exists());
         let module = missing.join(SIBLING_OPENCHATZD_ATTESTATION_REL);
-        assert_eq!(
-            sibling_label_guard(missing, &module),
-            SiblingLabelGuard::SkipAbsent
-        );
+        assert_eq!(sibling_label_guard(missing, &module), SiblingLabelGuard::SkipAbsent);
     }
 
     #[test]
     fn sibling_label_guard_fails_when_repo_present_but_module_missing() {
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos();
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).expect("clock").as_nanos();
         let root: PathBuf = std::env::temp_dir().join(format!("oczd-cvdr-verify-gap-{stamp}"));
         fs::create_dir_all(&root).expect("mkdir verify root");
         let module = root.join(SIBLING_OPENCHATZD_ATTESTATION_REL);
         assert!(!module.exists());
-        assert_eq!(
-            sibling_label_guard(&root, &module),
-            SiblingLabelGuard::FailMissingModule
-        );
+        assert_eq!(sibling_label_guard(&root, &module), SiblingLabelGuard::FailMissingModule);
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
     fn sibling_label_guard_requires_match_when_module_present() {
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos();
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).expect("clock").as_nanos();
         let root: PathBuf = std::env::temp_dir().join(format!("oczd-cvdr-verify-ok-{stamp}"));
         let module = root.join(SIBLING_OPENCHATZD_ATTESTATION_REL);
         fs::create_dir_all(module.parent().expect("parent")).expect("mkdir parents");
         fs::write(&module, "// stub\n").expect("write stub");
-        assert_eq!(
-            sibling_label_guard(&root, &module),
-            SiblingLabelGuard::RequireLabelMatch
-        );
+        assert_eq!(sibling_label_guard(&root, &module), SiblingLabelGuard::RequireLabelMatch);
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
     fn resolve_cvdr_verify_root_prefers_checkout_with_module() {
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos();
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).expect("clock").as_nanos();
         let base = std::env::temp_dir().join(format!("oczd-resolve-{stamp}"));
         let empty = base.join("empty");
         let full = base.join("full");
@@ -301,11 +275,7 @@ mod tests {
         // Simulate preference: when both exist, module-bearing root wins.
         assert!(empty.exists());
         assert!(module.exists());
-        let preferred = if module.exists() {
-            full.clone()
-        } else {
-            empty.clone()
-        };
+        let preferred = if module.exists() { full.clone() } else { empty.clone() };
         assert_eq!(preferred, full);
         assert!(preferred.join(SIBLING_OPENCHATZD_ATTESTATION_REL).exists());
         let _ = fs::remove_dir_all(&base);
@@ -355,10 +325,7 @@ mod tests {
         src.push_str("do not prove uninterrupted execution\n");
         // Build without embedding the retired wire literally in this file's source
         // (keeps cross-repo scanners clean).
-        let retired = format!(
-            "pub const TIMING_{}: &str = \"{}{}\";\n",
-            "LATE_PATH", "late", "_path"
-        );
+        let retired = format!("pub const TIMING_{}: &str = \"{}{}\";\n", "LATE_PATH", "late", "_path");
         src.push_str(&retired);
         let err = sibling_source_matches_openchatzd_labels(&src).unwrap_err();
         assert!(err.contains("retired timing"));

@@ -16,10 +16,10 @@
 //! deletion half-open. Its store is gated on FULL on-chain verification BEFORE store.
 //!
 //! Leg order, per in-flight [`CvdrDraft`] `stage`:
-//! 1. `Prepared`            (from `prepare_account_deletion`) salt+targets+receipt_id; RevealWire
-//!                          already handed to the user. Not finalizable; not `/cvdr_live`.
-//! 2. (`Prepared` -> )      `uninstall_code`, confirm no-module, record `uninstall_completed_at`.
-//! 3. `Uninstalled`         ATOMIC publish (spec §3) + cleanup (spec §8) → `AwaitingCertificate`.
+//! 1. `Prepared` (from `prepare_account_deletion`) salt+targets+receipt_id; RevealWire
+//!    already handed to the user. Not finalizable; not `/cvdr_live`.
+//! 2. (`Prepared` -> ) `uninstall_code`, confirm no-module, record `uninstall_completed_at`.
+//! 3. `Uninstalled` ATOMIC publish (spec §3) + cleanup (spec §8) → `AwaitingCertificate`.
 //! 4. `AwaitingCertificate` user deletion DONE; CVDR certificate pending.
 //!
 //! Forward-recovery only: every stage is idempotent and resumable from the persisted
@@ -166,7 +166,11 @@ async fn process_user_inner(user: &UserToDelete) -> ProcessOutcome {
     // Spec §11.4: prepare must have created the draft. No cold capture in the delete job.
     let draft = match read_state(|state| state.data.cvdr.get_draft(&canister_id)) {
         Some(draft) => draft,
-        None => return ProcessOutcome::Retry { error_class: "prepare_required" },
+        None => {
+            return ProcessOutcome::Retry {
+                error_class: "prepare_required",
+            };
+        }
     };
 
     advance_draft(draft).await
@@ -191,12 +195,16 @@ async fn advance_draft(draft: CvdrDraft) -> ProcessOutcome {
                     Some(())
                 });
                 if flipped.is_none() {
-                    return ProcessOutcome::Retry { error_class: "draft_lost" };
+                    return ProcessOutcome::Retry {
+                        error_class: "draft_lost",
+                    };
                 }
             }
             // `uninstall_code` (idempotent) then confirm no-module before advancing.
             if utils::canister::uninstall(canister_id).await.is_err() {
-                return ProcessOutcome::Retry { error_class: "uninstall_failed" };
+                return ProcessOutcome::Retry {
+                    error_class: "uninstall_failed",
+                };
             }
             match ic_cdk::management_canister::canister_status(&CanisterStatusArgs { canister_id }).await {
                 Ok(status) if status.module_hash.is_none() => {
@@ -213,11 +221,17 @@ async fn advance_draft(draft: CvdrDraft) -> ProcessOutcome {
                     });
                     match advanced {
                         Some(()) => advance_publish(canister_id),
-                        None => ProcessOutcome::Retry { error_class: "draft_lost" },
+                        None => ProcessOutcome::Retry {
+                            error_class: "draft_lost",
+                        },
                     }
                 }
-                Ok(_) => ProcessOutcome::Retry { error_class: "module_still_present" },
-                Err(_) => ProcessOutcome::Retry { error_class: "status_unavailable" },
+                Ok(_) => ProcessOutcome::Retry {
+                    error_class: "module_still_present",
+                },
+                Err(_) => ProcessOutcome::Retry {
+                    error_class: "status_unavailable",
+                },
             }
         }
         DraftStage::Uninstalled => advance_publish(canister_id),
@@ -243,7 +257,9 @@ fn advance_publish(canister_id: CanisterId) -> ProcessOutcome {
     let now_ns = ic_cdk::api::time();
     mutate_state(|state| {
         let Some(mut draft) = state.data.cvdr.get_draft(&canister_id) else {
-            return ProcessOutcome::Retry { error_class: "draft_lost" };
+            return ProcessOutcome::Retry {
+                error_class: "draft_lost",
+            };
         };
         let first_publish = draft.stage != DraftStage::AwaitingCertificate;
         if draft.receipt_committed_at == 0 {
@@ -317,8 +333,7 @@ pub(crate) fn resume_in_flight_drafts(state: &mut RuntimeState) {
     rebuild_receipt_tree_from_durable(&state.data.cvdr, &mut state.data.cvdr_receipt_tree);
 
     let drafts = state.data.cvdr.all_drafts();
-    let queued: std::collections::HashSet<UserId> =
-        state.data.users_to_delete_queue.iter().map(|u| u.user_id).collect();
+    let queued: std::collections::HashSet<UserId> = state.data.users_to_delete_queue.iter().map(|u| u.user_id).collect();
 
     for draft in &drafts {
         // Re-enqueue mid-flight irreversible deletions the queue lost on upgrade.
@@ -442,16 +457,14 @@ mod scheduler_tests {
         rebuild_receipt_tree_from_durable(&store, &mut tree);
         assert!(!tree.is_empty());
 
-        let witness: HashTree =
-            serde_cbor::from_slice(&tree.witness_cbor(&stuck_id)).expect("witness decodes");
+        let witness: HashTree = serde_cbor::from_slice(&tree.witness_cbor(&stuck_id)).expect("witness decodes");
         assert_eq!(witness.digest(), tree.root());
         match witness.lookup_path([b"receipts".as_slice(), stuck_id.as_slice()]) {
             LookupResult::Found(v) => assert_eq!(v, expected_hash.as_slice()),
             other => panic!("FailedStuck leaf missing after rebuild: {other:?}"),
         }
-        match witness.lookup_path([b"receipts".as_slice(), prepared_id.as_slice()]) {
-            LookupResult::Found(_) => panic!("Prepared must not appear as a receipt leaf"),
-            _ => {}
+        if let LookupResult::Found(_) = witness.lookup_path([b"receipts".as_slice(), prepared_id.as_slice()]) {
+            panic!("Prepared must not appear as a receipt leaf")
         }
 
         // Cleanup shared stable draft memory for other unit tests in this process.
@@ -467,10 +480,7 @@ mod scheduler_tests {
 
     #[test]
     fn retry_backs_off_only_when_same_user_is_next() {
-        assert_eq!(
-            successor_delay_ms(ScheduleKind::Retry, true),
-            Some(FAST_RETRY_INTERVAL_MS)
-        );
+        assert_eq!(successor_delay_ms(ScheduleKind::Retry, true), Some(FAST_RETRY_INTERVAL_MS));
         assert_eq!(successor_delay_ms(ScheduleKind::Retry, false), None);
     }
 
@@ -491,10 +501,7 @@ mod scheduler_tests {
 
     #[test]
     fn retry_alone_backs_off_after_requeue() {
-        assert_eq!(
-            delay_after(ScheduleKind::Retry, &[], 1),
-            Some(Some(FAST_RETRY_INTERVAL_MS))
-        );
+        assert_eq!(delay_after(ScheduleKind::Retry, &[], 1), Some(Some(FAST_RETRY_INTERVAL_MS)));
     }
 
     #[test]

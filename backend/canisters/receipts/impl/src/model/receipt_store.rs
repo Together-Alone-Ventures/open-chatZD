@@ -73,7 +73,10 @@ impl Storable for ReceiptId {
         id.copy_from_slice(&bytes);
         ReceiptId(id)
     }
-    const BOUND: Bound = Bound::Bounded { max_size: 32, is_fixed_size: true };
+    const BOUND: Bound = Bound::Bounded {
+        max_size: 32,
+        is_fixed_size: true,
+    };
 }
 
 /// Raw finalized-receipt JSON bytes. The current canonical receipt JSON is well
@@ -92,5 +95,8 @@ impl Storable for ReceiptBytes {
     fn from_bytes(bytes: Cow<'_, [u8]>) -> Self {
         ReceiptBytes(bytes.to_vec())
     }
-    const BOUND: Bound = Bound::Bounded { max_size: 16_384, is_fixed_size: false };
+    const BOUND: Bound = Bound::Bounded {
+        max_size: 16_384,
+        is_fixed_size: false,
+    };
 }

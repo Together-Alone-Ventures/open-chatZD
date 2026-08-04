@@ -62,7 +62,9 @@ pub const PII_ENCODER_VERSION: &str = "OPENCHATZD_USER_PII_V2";
 
 /// Engine configuration for this canister.
 pub fn config() -> MktdConfig {
-    MktdConfig { base_memory_id: BASE_MEMORY_ID }
+    MktdConfig {
+        base_memory_id: BASE_MEMORY_ID,
+    }
 }
 
 /// Derive the host-supplied, domain-tagged `record_id` (D7 / S5).
@@ -157,12 +159,7 @@ impl PiiState {
         let mut contacts: Vec<(Vec<u8>, Option<String>)> = d
             .contacts
             .iter()
-            .map(|(user_id, contact)| {
-                (
-                    Principal::from(*user_id).as_slice().to_vec(),
-                    contact.nickname.clone(),
-                )
-            })
+            .map(|(user_id, contact)| (Principal::from(*user_id).as_slice().to_vec(), contact.nickname.clone()))
             .collect();
         contacts.sort();
 
@@ -509,10 +506,7 @@ mod tests {
         let mut different = PiiState::tombstoned();
         different.encoder_version = "OPENCHATZD_USER_PII_DIFFERENT".to_string();
 
-        assert_ne!(
-            encode_pii_state(&current).unwrap(),
-            encode_pii_state(&different).unwrap()
-        );
+        assert_ne!(encode_pii_state(&current).unwrap(), encode_pii_state(&different).unwrap());
     }
 
     #[test]
@@ -525,8 +519,12 @@ mod tests {
 
         println!("FIXTURE=encoder_version_binding_fixture_v2");
         println!("CANISTER_ID={canister_id}");
-        println!("BEFORE_FIELD_ORDER=bio,username,display_name,avatar,profile_background,unique_person_proof,contacts,blocked_users,achievements,external_achievements,message_activity_events,phone_is_verified,referred_by");
-        println!("AFTER_FIELD_ORDER=encoder_version,bio,username,display_name,avatar,profile_background,unique_person_proof,contacts,blocked_users,achievements,external_achievements,message_activity_events,phone_is_verified,referred_by");
+        println!(
+            "BEFORE_FIELD_ORDER=bio,username,display_name,avatar,profile_background,unique_person_proof,contacts,blocked_users,achievements,external_achievements,message_activity_events,phone_is_verified,referred_by"
+        );
+        println!(
+            "AFTER_FIELD_ORDER=encoder_version,bio,username,display_name,avatar,profile_background,unique_person_proof,contacts,blocked_users,achievements,external_achievements,message_activity_events,phone_is_verified,referred_by"
+        );
         println!("ENCODER_VERSION={PII_ENCODER_VERSION}");
         println!("BEFORE_PRE_STATE_HASH={}", hex::encode(before_pre));
         println!("AFTER_PRE_STATE_HASH={}", hex::encode(after_pre));
