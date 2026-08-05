@@ -12,11 +12,11 @@
 | open-chatZD | `antek` HEAD (docs pins after A) | pull `origin/antek` |
 | open-chatZD | post-review tip before delta | `8df74b35dd89f49314ad562000401a0b7946bd3d` |
 | open-chatZD | initial Stef four-workstream impl (B1/timing/A + RTS) | `f59bcadbf36a14c106b6d4ecb434614f6f256315` |
-| CVDR-Verify | `openchatzd-portable-v2-bytes-receipt-id` tip (B empty-range + C retain bytes) | `b8ad9ceb490c2f8cb7c0b0e0c5198f6769b1a106` |
+| CVDR-Verify | `openchatzd-portable-v2-bytes-receipt-id` tip (B empty-range + C retain bytes) | `ac64c1b881b46cda8ef909c4a23ae008f863536d` |
 | CVDR-Verify | Stef independent cross-repo guard pass | `27e620667a94cf739b745be27a902c4846b26b09` |
 | CVDR-Verify | PortablePackageV2 bytes-only + receipt_id recompute | `c760a2e3d8b723312bb00a170d13d3064a3e251b` |
 
-CI sibling checkout: `backend.yaml` → `ref: b8ad9ceb…` (immutable). Former annotated tag `v0.7.0` at `e884ac43…` is **deleted** — it predated the bytes-only fix and must not be reused until the final gated mint.
+CI sibling checkout: `backend.yaml` → `ref: ac64c1b…` (immutable). Former annotated tag `v0.7.0` at `e884ac43…` is **deleted** — it predated the bytes-only fix and must not be reused until the final gated mint.
 
 ---
 
