@@ -6,6 +6,7 @@
         downloadBytesAsFile,
         i18nKey,
         OpenChat,
+        runDeletionWithPreflightRecoveryFlag,
     } from "openchat-client";
     import ModalContent from "../../ModalContent.svelte";
     import Overlay from "../../Overlay.svelte";
@@ -127,23 +128,22 @@
     }) {
         deleting = true;
         step = "deleting";
-        // Stef A: persist recovery flag *before* irreversible delete (with readback).
-        // No post-delete write may be load-bearing for anonymous recovery.
-        if (!client.markCvdrDeletionStarted(currentUserIdStore.value)) {
-            step = "error";
-            errorMessage = interpolate($_, i18nKey("danger.cvdr.persistFailed"));
-            deleting = false;
-            return;
-        }
+        const userId = currentUserIdStore.value;
         try {
-            const success = await client.deleteCurrentUser(
-                detail.key.getKeyPair(),
-                detail.delegation.toJSON(),
-                { deferLogout: true },
-            );
-            if (!success) {
-                // Delete did not commit — roll flag back so prepare-only recovery stays off.
-                client.clearCvdrDeletionStarted(currentUserIdStore.value);
+            const outcome = await runDeletionWithPreflightRecoveryFlag({
+                markStarted: () => client.markCvdrDeletionStarted(userId),
+                clearStarted: () => client.clearCvdrDeletionStarted(userId),
+                deleteAccount: () =>
+                    client.deleteCurrentUser(detail.key.getKeyPair(), detail.delegation.toJSON(), {
+                        deferLogout: true,
+                    }),
+            });
+            if (outcome === "persist_failed") {
+                step = "error";
+                errorMessage = interpolate($_, i18nKey("danger.cvdr.persistFailed"));
+                return;
+            }
+            if (outcome === "delete_failed") {
                 toastStore.showFailureToast(i18nKey("danger.deleteAccountFailed"));
                 step = "error";
                 errorMessage = "Delete failed";
@@ -151,6 +151,10 @@
             }
             step = "polling";
             await pollUntilAvailable(true);
+        } catch {
+            toastStore.showFailureToast(i18nKey("danger.deleteAccountFailed"));
+            step = "error";
+            errorMessage = "Delete failed";
         } finally {
             deleting = false;
         }

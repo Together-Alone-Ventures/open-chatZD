@@ -90,6 +90,32 @@ export function cvdrSessionAwaitingDelivery(session: CvdrReceiptSession): boolea
 }
 
 /**
+ * Stef A recovery ordering: persist `deletionStarted` (with caller-provided
+ * readback) *before* the irreversible delete. No post-delete write may be
+ * load-bearing for recovery. On delete failure or throw, clear the flag.
+ */
+export async function runDeletionWithPreflightRecoveryFlag(gate: {
+    markStarted: () => boolean;
+    clearStarted: () => boolean;
+    deleteAccount: () => Promise<boolean>;
+}): Promise<"persist_failed" | "delete_failed" | "deleted"> {
+    if (!gate.markStarted()) {
+        return "persist_failed";
+    }
+    try {
+        const success = await gate.deleteAccount();
+        if (!success) {
+            gate.clearStarted();
+            return "delete_failed";
+        }
+        return "deleted";
+    } catch (err) {
+        gate.clearStarted();
+        throw err;
+    }
+}
+
+/**
  * Poll until Available or attempts exhausted. Does not clear storage or logout.
  * Extracted for unit tests; OpenChat.pollCvdrDelivery delegates here.
  */

@@ -6,6 +6,7 @@ import {
     parseCvdrReceiptSession,
     pollCvdrHttp,
     pollCvdrUntilSettled,
+    runDeletionWithPreflightRecoveryFlag,
     serializeCvdrReceiptSession,
 } from "./cvdr";
 
@@ -83,7 +84,86 @@ describe("cvdr helpers", () => {
         });
         expect(cvdrSessionAwaitingDelivery(parseCvdrReceiptSession(cleared)!)).toBe(false);
     });
+});
 
+describe("runDeletionWithPreflightRecoveryFlag (Stef A ordering)", () => {
+    it("refuses delete when markStarted fails — never calls delete", async () => {
+        let deleted = false;
+        const result = await runDeletionWithPreflightRecoveryFlag({
+            markStarted: () => false,
+            clearStarted: () => true,
+            deleteAccount: async () => {
+                deleted = true;
+                return true;
+            },
+        });
+        expect(result).toBe("persist_failed");
+        expect(deleted).toBe(false);
+    });
+
+    it("marks before delete and leaves flag set on success", async () => {
+        const order: string[] = [];
+        const result = await runDeletionWithPreflightRecoveryFlag({
+            markStarted: () => {
+                order.push("mark");
+                return true;
+            },
+            clearStarted: () => {
+                order.push("clear");
+                return true;
+            },
+            deleteAccount: async () => {
+                order.push("delete");
+                return true;
+            },
+        });
+        expect(result).toBe("deleted");
+        expect(order).toEqual(["mark", "delete"]);
+    });
+
+    it("clears flag when delete returns false", async () => {
+        const order: string[] = [];
+        const result = await runDeletionWithPreflightRecoveryFlag({
+            markStarted: () => {
+                order.push("mark");
+                return true;
+            },
+            clearStarted: () => {
+                order.push("clear");
+                return true;
+            },
+            deleteAccount: async () => {
+                order.push("delete");
+                return false;
+            },
+        });
+        expect(result).toBe("delete_failed");
+        expect(order).toEqual(["mark", "delete", "clear"]);
+    });
+
+    it("clears flag when delete throws (no post-delete write load-bearing)", async () => {
+        const order: string[] = [];
+        await expect(
+            runDeletionWithPreflightRecoveryFlag({
+                markStarted: () => {
+                    order.push("mark");
+                    return true;
+                },
+                clearStarted: () => {
+                    order.push("clear");
+                    return true;
+                },
+                deleteAccount: async () => {
+                    order.push("delete");
+                    throw new Error("worker boom");
+                },
+            }),
+        ).rejects.toThrow("worker boom");
+        expect(order).toEqual(["mark", "delete", "clear"]);
+    });
+});
+
+describe("cvdr helpers (parse rejects)", () => {
     it("rejects legacy bare receipt hex (missing LUI — cannot resume poll)", () => {
         expect(parseCvdrReceiptSession("ab".repeat(32))).toBeUndefined();
     });
