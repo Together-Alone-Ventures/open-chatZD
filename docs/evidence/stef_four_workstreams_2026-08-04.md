@@ -89,8 +89,8 @@ cd frontend/openchat-shared && npx vitest run src/domain/cvdr.spec.ts
 
 ## Remaining for release words (not claimed closed here)
 
-1. Re-run **M2 dual-build** at the post-A tip (prior `78b9091` build predates `8df74b3` + this delta).
-2. Frontend walkthrough: **unauthenticated recovery through successful CVDR delivery** (not only post-delete close-tab).
+1. ~~Re-run **M2 dual-build** at the post-A tip~~ → **PASS** 2026-08-06 @ `5b2077c7e…`, SHA-256 `4d4a4128b0e4719dbcfcb4d635c0cd30e6468fc85a6be8b8bb5907d3dc6cce4b` (see `docs/evidence/OpenChatZD_M2_Evidence_2026-08-06.md`).
+2. Frontend walkthrough: **unauthenticated recovery through successful CVDR delivery** — checklist ready at `docs/evidence/anon_cvdr_recovery_walkthrough_2026-08-06.md` (**recording still needed from operator**).
 3. Stef delta-only re-check on A/B/C + tag/CI pin.
 4. Mint annotated `v0.7.0` **once** at the final gated CVDR-Verify commit (`tag == crate version`).
 
