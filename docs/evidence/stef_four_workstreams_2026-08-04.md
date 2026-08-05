@@ -8,7 +8,7 @@
 
 | Repo | Branch / note | SHA |
 |------|---------------|-----|
-| open-chatZD | `antek` tip after Stef delta (A ordering) | *(this commit)* |
+| open-chatZD | `antek` tip after Stef delta (A ordering) | `10f51710d063623d3fa9107e4d5c5e2d43217397` |
 | open-chatZD | post-review tip before delta | `8df74b35dd89f49314ad562000401a0b7946bd3d` |
 | open-chatZD | initial Stef four-workstream impl (B1/timing/A + RTS) | `f59bcadbf36a14c106b6d4ecb434614f6f256315` |
 | CVDR-Verify | `openchatzd-portable-v2-bytes-receipt-id` tip (B empty-range + C retain bytes) | `b8ad9ceb490c2f8cb7c0b0e0c5198f6769b1a106` |
