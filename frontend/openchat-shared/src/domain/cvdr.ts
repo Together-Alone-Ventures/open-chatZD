@@ -92,25 +92,35 @@ export function cvdrSessionAwaitingDelivery(session: CvdrReceiptSession): boolea
 /**
  * Stef A recovery ordering: persist `deletionStarted` (with caller-provided
  * readback) *before* the irreversible delete. No post-delete write may be
- * load-bearing for recovery. On delete failure or throw, clear the flag.
+ * load-bearing for recovery. On delete failure or throw, clear the flag
+ * (with retries). If clear still fails after a failed delete, return
+ * `delete_failed_flag_stuck` so the UI can refuse to pretend prepare-only.
  */
 export async function runDeletionWithPreflightRecoveryFlag(gate: {
     markStarted: () => boolean;
     clearStarted: () => boolean;
     deleteAccount: () => Promise<boolean>;
-}): Promise<"persist_failed" | "delete_failed" | "deleted"> {
+    clearAttempts?: number;
+}): Promise<"persist_failed" | "delete_failed" | "delete_failed_flag_stuck" | "deleted"> {
+    const clearAttempts = gate.clearAttempts ?? 3;
+    const clearHard = (): boolean => {
+        for (let i = 0; i < clearAttempts; i++) {
+            if (gate.clearStarted()) return true;
+        }
+        return false;
+    };
+
     if (!gate.markStarted()) {
         return "persist_failed";
     }
     try {
         const success = await gate.deleteAccount();
         if (!success) {
-            gate.clearStarted();
-            return "delete_failed";
+            return clearHard() ? "delete_failed" : "delete_failed_flag_stuck";
         }
         return "deleted";
     } catch (err) {
-        gate.clearStarted();
+        clearHard();
         throw err;
     }
 }

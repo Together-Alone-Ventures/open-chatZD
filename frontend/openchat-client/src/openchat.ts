@@ -9911,16 +9911,37 @@ export class OpenChat {
 
     /**
      * Roll back the pre-delete flag when delete fails or the flow is cancelled after
-     * the flag was set. Best-effort: returns false if persist/readback fails.
+     * the flag was set. Retries persist/readback, then force-rewrites both keys.
+     * Returns true when the session is prepare-only (or absent) after the call.
      */
     clearCvdrDeletionStarted(userId: string | undefined): boolean {
         const existing = this.loadPersistedCvdrReceiptSession(userId);
-        if (!existing) return false;
+        if (!existing) return true;
         if (existing.deletionStarted !== true) return true;
-        return this.persistCvdrReceiptSession(userId, {
-            ...existing,
-            deletionStarted: false,
-        });
+
+        const prepareOnly = {
+            receiptId: existing.receiptId,
+            localUserIndex: existing.localUserIndex,
+            deletionStarted: false as const,
+        };
+
+        for (let i = 0; i < 3; i++) {
+            if (this.persistCvdrReceiptSession(userId, prepareOnly)) {
+                return true;
+            }
+        }
+
+        // Last resort: drop both keys then rewrite prepare-only (avoids a stuck true flag
+        // when a partial write left user-key and pending out of sync).
+        try {
+            if (userId !== undefined) {
+                localStorage.removeItem(cvdrReceiptStorageKey(userId));
+            }
+            localStorage.removeItem(CVDR_RECEIPT_PENDING_KEY);
+        } catch {
+            /* continue to persist attempt */
+        }
+        return this.persistCvdrReceiptSession(userId, prepareOnly);
     }
 
     /**

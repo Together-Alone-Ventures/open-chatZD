@@ -149,6 +149,12 @@
                 errorMessage = "Delete failed";
                 return;
             }
+            if (outcome === "delete_failed_flag_stuck") {
+                toastStore.showFailureToast(i18nKey("danger.deleteAccountFailed"));
+                step = "error";
+                errorMessage = interpolate($_, i18nKey("danger.cvdr.persistFailed"));
+                return;
+            }
             step = "polling";
             await pollUntilAvailable(true);
         } catch {
@@ -199,9 +205,23 @@
         await client.finishDeleteAccountLogout();
         onClose();
     }
+
+    function requestClose() {
+        // Mid-delete / in-flight delivery: keep modal (flag may already be true; delete may
+        // have succeeded). Closing the tab is fine — anonymous recovery will resume.
+        if (
+            deleting ||
+            step === "deleting" ||
+            step === "preparing" ||
+            step === "polling"
+        ) {
+            return;
+        }
+        onClose();
+    }
 </script>
 
-<Overlay>
+<Overlay dismissible={false} onClose={requestClose}>
     <ModalContent>
         {#snippet header()}
             <Translatable resourceKey={i18nKey("danger.deleteAccount")} />
@@ -259,7 +279,7 @@
         {#snippet footer()}
             <ButtonGroup>
                 {#if step !== "done" && step !== "deleting" && step !== "preparing" && step !== "polling" && step !== "delayed"}
-                    <Button small onClick={onClose} secondary>
+                    <Button small onClick={requestClose} secondary>
                         <Translatable resourceKey={i18nKey("cancel")} />
                     </Button>
                 {/if}

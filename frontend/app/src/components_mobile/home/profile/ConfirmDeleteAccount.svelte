@@ -145,6 +145,12 @@
                 errorMessage = "Delete failed";
                 return;
             }
+            if (outcome === "delete_failed_flag_stuck") {
+                toastStore.showFailureToast(i18nKey("danger.deleteAccountFailed"));
+                step = "error";
+                errorMessage = interpolate($_, i18nKey("danger.cvdr.persistFailed"));
+                return;
+            }
             step = "polling";
             await pollUntilAvailable(true);
         } catch {
@@ -191,6 +197,19 @@
 
     async function handoffToAnonymousRecovery() {
         await client.finishDeleteAccountLogout();
+        onClose();
+    }
+
+    function requestClose() {
+        if (
+            deleting ||
+            authenticating ||
+            step === "deleting" ||
+            step === "preparing" ||
+            step === "polling"
+        ) {
+            return;
+        }
         onClose();
     }
 </script>
@@ -247,7 +266,7 @@
 
         <Container gap={"md"} mainAxisAlignment={"end"} crossAxisAlignment={"end"}>
             {#if step !== "done" && step !== "deleting" && step !== "preparing" && step !== "polling" && step !== "delayed" && !authenticating}
-                <CommonButton mode={"default"} onClick={onClose} size={"small_text"}>
+                <CommonButton mode={"default"} onClick={requestClose} size={"small_text"}>
                     <Translatable resourceKey={i18nKey("cancel")}></Translatable>
                 </CommonButton>
             {/if}

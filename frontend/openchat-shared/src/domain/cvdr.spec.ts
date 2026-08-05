@@ -141,6 +141,21 @@ describe("runDeletionWithPreflightRecoveryFlag (Stef A ordering)", () => {
         expect(order).toEqual(["mark", "delete", "clear"]);
     });
 
+    it("retries clearStarted and reports flag_stuck if all clears fail", async () => {
+        let clears = 0;
+        const result = await runDeletionWithPreflightRecoveryFlag({
+            markStarted: () => true,
+            clearStarted: () => {
+                clears += 1;
+                return false;
+            },
+            deleteAccount: async () => false,
+            clearAttempts: 3,
+        });
+        expect(result).toBe("delete_failed_flag_stuck");
+        expect(clears).toBe(3);
+    });
+
     it("clears flag when delete throws (no post-delete write load-bearing)", async () => {
         const order: string[] = [];
         await expect(
