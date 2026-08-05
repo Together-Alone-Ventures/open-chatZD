@@ -22,8 +22,9 @@ export type CvdrPollStatus =
 
 /**
  * Persisted so refresh recovery can poll `/cvdr` after logout without LUI in session.
- * `deletionStarted` is set only after delete succeeds — auto-poll / anonymous recovery
- * must not run for prepare-only sessions (would trap in delayed without a CVDR).
+ * `deletionStarted` must be written (with readback) *before* the irreversible delete —
+ * no post-delete write may be load-bearing for recovery. Prepare-only sessions keep
+ * the flag false so auto-poll / anonymous recovery do not run.
  */
 export type CvdrReceiptSession = {
     receiptId: string;
@@ -80,7 +81,10 @@ export function parseCvdrReceiptSession(raw: string | null | undefined): CvdrRec
     return undefined;
 }
 
-/** True only after irreversible delete — safe to auto-poll / anonymous-recover. */
+/**
+ * True once the client has committed to delete (flag set before the irreversible
+ * call). Safe to auto-poll / anonymous-recover. Prepare-only stays false.
+ */
 export function cvdrSessionAwaitingDelivery(session: CvdrReceiptSession): boolean {
     return session.deletionStarted === true;
 }

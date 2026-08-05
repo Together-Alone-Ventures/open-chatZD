@@ -58,11 +58,13 @@ jobs:
           fi
       - name: Clear any PR-supplied CVDR-Verify stub
         run: rm -rf CVDR-Verify
-      - name: Checkout CVDR-Verify sibling @ v0.7.0 (label drift guard)
+      - name: Checkout CVDR-Verify sibling @ immutable SHA (pre-release pin)
         uses: actions/checkout@v4
         with:
           repository: Together-Alone-Ventures/CVDR-Verify
-          ref: v0.7.0
+          # Do not use the future release tag for CI. Pin the gated sibling tip until
+          # v0.7.0 is minted once at the final release commit (Stef standing rule).
+          ref: b8ad9ceb490c2f8cb7c0b0e0c5198f6769b1a106
           path: CVDR-Verify
           token: ${{ secrets.CVDR_VERIFY_READ_TOKEN }}
       - name: Require sibling OpenChatZD attestation module

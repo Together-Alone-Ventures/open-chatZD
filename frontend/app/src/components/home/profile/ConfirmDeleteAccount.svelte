@@ -120,34 +120,40 @@
         }
     }
 
-    function deleteAccount(detail: {
+    async function deleteAccount(detail: {
         key: ECDSAKeyIdentity;
         delegation: DelegationChain;
         provider: AuthProvider;
     }) {
         deleting = true;
         step = "deleting";
-        return client
-            .deleteCurrentUser(detail.key.getKeyPair(), detail.delegation.toJSON(), {
-                deferLogout: true,
-            })
-            .then(async (success) => {
-                if (!success) {
-                    toastStore.showFailureToast(i18nKey("danger.deleteAccountFailed"));
-                    step = "error";
-                    errorMessage = "Delete failed";
-                    return;
-                }
-                if (!client.markCvdrDeletionStarted(currentUserIdStore.value)) {
-                    // Capability must remain pollable after logout — block success path.
-                    step = "error";
-                    errorMessage = interpolate($_, i18nKey("danger.cvdr.persistFailed"));
-                    return;
-                }
-                step = "polling";
-                await pollUntilAvailable(true);
-            })
-            .finally(() => (deleting = false));
+        // Stef A: persist recovery flag *before* irreversible delete (with readback).
+        // No post-delete write may be load-bearing for anonymous recovery.
+        if (!client.markCvdrDeletionStarted(currentUserIdStore.value)) {
+            step = "error";
+            errorMessage = interpolate($_, i18nKey("danger.cvdr.persistFailed"));
+            deleting = false;
+            return;
+        }
+        try {
+            const success = await client.deleteCurrentUser(
+                detail.key.getKeyPair(),
+                detail.delegation.toJSON(),
+                { deferLogout: true },
+            );
+            if (!success) {
+                // Delete did not commit — roll flag back so prepare-only recovery stays off.
+                client.clearCvdrDeletionStarted(currentUserIdStore.value);
+                toastStore.showFailureToast(i18nKey("danger.deleteAccountFailed"));
+                step = "error";
+                errorMessage = "Delete failed";
+                return;
+            }
+            step = "polling";
+            await pollUntilAvailable(true);
+        } finally {
+            deleting = false;
+        }
     }
 
     async function pollUntilAvailable(logoutWhenDone: boolean) {

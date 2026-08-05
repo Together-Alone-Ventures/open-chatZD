@@ -242,6 +242,7 @@ import {
     type PayForStreakInsuranceResponse,
     type PrepareAccountDeletionResponse,
     type CvdrPollStatus,
+    type CvdrReceiptSession,
     type PaymentGateApproval,
     type PaymentGateApprovals,
     type PendingCryptocurrencyTransfer,
@@ -9895,13 +9896,30 @@ export class OpenChat {
         }
     }
 
-    /** Flip session to post-delete so remount / anonymous recovery may auto-poll. */
+    /**
+     * Mark recovery as committed *before* irreversible delete (Stef recovery ordering).
+     * Returns false if write/readback fails — caller must not call delete.
+     */
     markCvdrDeletionStarted(userId: string | undefined): boolean {
         const existing = this.loadPersistedCvdrReceiptSession(userId);
         if (!existing) return false;
         return this.persistCvdrReceiptSession(userId, {
             ...existing,
             deletionStarted: true,
+        });
+    }
+
+    /**
+     * Roll back the pre-delete flag when delete fails or the flow is cancelled after
+     * the flag was set. Best-effort: returns false if persist/readback fails.
+     */
+    clearCvdrDeletionStarted(userId: string | undefined): boolean {
+        const existing = this.loadPersistedCvdrReceiptSession(userId);
+        if (!existing) return false;
+        if (existing.deletionStarted !== true) return true;
+        return this.persistCvdrReceiptSession(userId, {
+            ...existing,
+            deletionStarted: false,
         });
     }
 
@@ -9926,7 +9944,7 @@ export class OpenChat {
 
     loadPersistedCvdrReceiptSession(
         userId: string | undefined,
-    ): { receiptId: string; localUserIndex: string } | undefined {
+    ): CvdrReceiptSession | undefined {
         try {
             if (userId !== undefined) {
                 const fromUser = parseCvdrReceiptSession(

@@ -50,8 +50,8 @@ git fetch && git checkout antek && git rev-parse HEAD   # c8da2da89…
 unset CARGO_TARGET_DIR
 
 cargo test -p local_user_index_canister_impl --lib cvdr
-# expect all green with CVDR-Verify sibling at pin v0.7.0 (openchatzd labels match).
-# CI requires secret CVDR_VERIFY_READ_TOKEN and checks out tag v0.7.0.
+# expect all green with CVDR-Verify sibling at immutable SHA pin (openchatzd labels match).
+# CI requires secret CVDR_VERIFY_READ_TOKEN and checks out SHA b8ad9ceb… (not a release tag).
 
 ./scripts/run-integration-tests.sh local 4 cvdr_
 # Antoine: 15 passed, 6 ignored (legacy #[ignore])
@@ -60,12 +60,12 @@ cargo test -p local_user_index_canister_impl --lib cvdr
 ./scripts/run-integration-tests.sh local 6 prepare_
 ./scripts/run-integration-tests.sh local 2 failed_stuck_survives_upgrade
 
-# Verifier pin (G v0.7.0)
-git -C ../CVDR-Verify fetch --tags
-git -C ../CVDR-Verify rev-list -n 1 v0.7.0
-# expect e884ac43b905a5a8ce6e82c0f591b728174b5593
-cd ../CVDR-Verify/mktd02/mktd02-verify && cargo test
-# Pin v0.7.0: expect 81 passed / 0 failed / 0 ignored
+# Verifier pin (immutable SHA until real v0.7.0 mint)
+git -C ../CVDR-Verify fetch origin
+git -C ../CVDR-Verify rev-parse b8ad9ceb490c2f8cb7c0b0e0c5198f6769b1a106
+cd ../CVDR-Verify && git checkout b8ad9ceb490c2f8cb7c0b0e0c5198f6769b1a106
+cd mktd02/mktd02-verify && cargo test --locked
+# expect openchatzd + empty_resolved_sharded_set green
 ```
 
 If `wasms/` stale: `unset CARGO_TARGET_DIR && ./scripts/generate-all-canister-wasms.sh`  
@@ -78,10 +78,11 @@ If `wasms/` stale: `unset CARGO_TARGET_DIR && ./scripts/generate-all-canister-wa
 1. **M2 claim restated:** same-window Docker dual-build identity only; not network-hermetic
    (mutable `ubuntu:24.04`, apt, rustup, `cargo install`, git deps). See local evidence
    `OpenChatZD_M2_Evidence.md`.
-2. **Verify count:** pin `v0.7.0` = **81** passed (supersedes historical `v0.6.1` = 58).
+2. **Verify count:** sibling tip `b8ad9ceb…` supersedes premature tag `v0.7.0`@`e884ac43` (deleted);
+   re-count at gated tip before minting real `v0.7.0`.
 3. **Migration inventory:** **No** known mainnet OpenChatZD FrozenWire packages (§14.6).
 4. **`labels_match_sibling_cvdr_verify_when_present`:** fails loud if sibling root exists but
-   `openchatzd/index_attestation.rs` is missing. CI pins `v0.7.0` via `CVDR_VERIFY_READ_TOKEN`.
+   `openchatzd/index_attestation.rs` is missing. CI pins immutable SHA `b8ad9ceb…` via `CVDR_VERIFY_READ_TOKEN`.
 5. **Naming:** OpenChatZD = ICP Tree corridor. Leaf demo / Zombie Sandbox / DaffyDefs is a
    separate track from this re-gate.
 

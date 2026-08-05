@@ -1,20 +1,45 @@
 # OpenChatZD — Stef four-workstream completion evidence
 
-**Date:** 2026-08-04  
-**Disposition:** all four workstreams ACCEPT / implemented  
-**Repos:** `open-chatZD` branch `antek` · `CVDR-Verify` sibling (from `v0.7.0`)
+**Date:** 2026-08-04 (initial) · **Delta refresh:** 2026-08-06  
+**Disposition:** completion gate close, not closed — delta A/B/C + tag correction in flight  
+**Repos:** `open-chatZD` branch `antek` · `CVDR-Verify` sibling pinned by **immutable commit SHA** (not release tag)
 
 ## Pinned commits
 
 | Repo | Branch / note | SHA |
 |------|---------------|-----|
-| open-chatZD | `antek` post-review tip | `8df74b35dd89f49314ad562000401a0b7946bd3d` |
+| open-chatZD | `antek` tip after Stef delta (A ordering) | *(this commit)* |
+| open-chatZD | post-review tip before delta | `8df74b35dd89f49314ad562000401a0b7946bd3d` |
 | open-chatZD | initial Stef four-workstream impl (B1/timing/A + RTS) | `f59bcadbf36a14c106b6d4ecb434614f6f256315` |
-| open-chatZD | evidence package | tip of antek after this docs commit |
-| CVDR-Verify | `openchatzd-portable-v2-bytes-receipt-id` tip | `27e620667a94cf739b745be27a902c4846b26b09` |
+| CVDR-Verify | `openchatzd-portable-v2-bytes-receipt-id` tip (B empty-range + C retain bytes) | `b8ad9ceb490c2f8cb7c0b0e0c5198f6769b1a106` |
+| CVDR-Verify | Stef independent cross-repo guard pass | `27e620667a94cf739b745be27a902c4846b26b09` |
 | CVDR-Verify | PortablePackageV2 bytes-only + receipt_id recompute | `c760a2e3d8b723312bb00a170d13d3064a3e251b` |
 
-Parent pins: open-chatZD parent `dd65774c54f04cd7335cab95d43f289de60c79c9`; CVDR-Verify base tag `v0.7.0` = `e884ac43b905a5a8ce6e82c0f591b728174b5593`.
+CI sibling checkout: `backend.yaml` → `ref: b8ad9ceb…` (immutable). Former annotated tag `v0.7.0` at `e884ac43…` is **deleted** — it predated the bytes-only fix and must not be reused until the final gated mint.
+
+---
+
+## 2026-08-06 delta (Stef feedback)
+
+| ID | Change |
+|----|--------|
+| **A** | `deletionStarted` written with readback **before** `deleteCurrentUser` (desktop + mobile); rollback via `clearCvdrDeletionStarted` if delete fails. No post-delete write is load-bearing for recovery. |
+| **B** | Verifier twin: `empty_resolved_sharded_set_is_authorization_failure` in `v2_certificate.rs`. |
+| **C** | `PortablePackage.frozen_exact_bytes` retained after parse + `frozen_exact_sha256()` audit; identity tests. |
+| **Tag/CI** | Delete premature `v0.7.0`; CI pins SHA above until real release tag. |
+
+### Export-completeness pointer (producer obligation)
+
+Nested / Available byte identity is covered on the OpenChatZD side by:
+
+| Surface | Test / location |
+|---------|-----------------|
+| Gate A HTTP body == candid FrozenWire | `backend/integration_tests/src/cvdr_tests.rs` → `cvdr_gate_a_frozen_wire_http_matches_candid` |
+| Gate B nested `frozen` == Gate A bytes (store) | `local_user_index/.../cvdr_index_evidence.rs` (nested raw Gate A) |
+| Gate B candid/HTTP PortablePackageV2 nested == Gate A | `local_user_index/.../queries/get_cvdr.rs` unit (`assert_eq!(v2.frozen, gate_a)` + canonical JSON) |
+| Spec equality chain | `CVDR_BUILD_SPEC_V1.md` §11 Gate A/B SHA equality |
+
+Verifier side retains exact nested bytes post-parse (`frozen_exact_bytes`) so audit can compare against the served artefact without a second input file.
 
 ---
 
@@ -24,9 +49,9 @@ Parent pins: open-chatZD parent `dd65774c54f04cd7335cab95d43f289de60c79c9`; CVDR
 |----|----------|------|
 | **B1** | BLOCKER | Independent `authorize_canister_ranges` after `cert.verify`; empty/malformed ≠ vacuous pass; distinct `NotInRange` / `RangesMissing` / `Malformed` |
 | **B timing** | MAJOR | INDEX give-up anchors only on `receipt_committed_at > 0`; sticky given-up set stops timer spam |
-| **C** | BLOCKER | PortablePackageV2 `frozen` = exact bytes only; `receipt_id` recompute before witness |
-| **D** | MAJOR | Timing ⊥ outcome (incl. PREDATES + HASH_MISMATCH); no live V3-A labels; cross-repo guard green |
-| **A** | BLOCKER | Persist readback blocks reveal; delayed ≠ done; no logout on exhaustion; anonymous recovery gated on `deletionStarted`; RT-OCZD-5 |
+| **C** | BLOCKER | PortablePackageV2 `frozen` = exact bytes only; `receipt_id` recompute before witness; **+ retain `frozen_exact_bytes`** |
+| **D** | MAJOR | Timing ⊥ outcome (incl. PREDATES + HASH_MISMATCH); no live V3-A labels; cross-repo guard green (Stef independent @ `27e620667`) |
+| **A** | BLOCKER | Persist readback blocks reveal; delayed ≠ done; no logout on exhaustion; **`deletionStarted` before irreversible delete**; anonymous recovery gated on flag; RT-OCZD-5 |
 
 ---
 
@@ -49,81 +74,23 @@ cargo test -p local_user_index_canister_impl --lib -- labels_match_sibling
 
 ```
 cd CVDR-Verify/mktd02/mktd02-verify && cargo test --locked openchatzd
-# 54+ passed including receipt_id_mismatch_rejects_before_witness,
-# predate_timing_keeps_mismatch_outcome, portable_v2_rejects_non_string_frozen
+# plus: empty_resolved_sharded_set_is_authorization_failure; portable_v2_nested_frozen_*
 ```
 
 ### Frontend shared
 
 ```
 cd frontend/openchat-shared && npx vitest run src/domain/cvdr.spec.ts
-# 15 passed
+# 16 passed
 ```
 
 ---
 
-## Negative matrices
+## Remaining for release words (not claimed closed here)
 
-### Store-gate ranges (B1)
+1. Re-run **M2 dual-build** at the post-A tip (prior `78b9091` build predates `8df74b3` + this delta).
+2. Frontend walkthrough: **unauthenticated recovery through successful CVDR delivery** (not only post-delete close-tab).
+3. Stef delta-only re-check on A/B/C + tag/CI pin.
+4. Mint annotated `v0.7.0` **once** at the final gated CVDR-Verify commit (`tag == crate version`).
 
-| Case | Result |
-|------|--------|
-| Out of range | `NotInRange` → `CanisterNotInRange` |
-| Empty / absent layouts | `RangesMissing` → `CanisterRangesMissing` |
-| Malformed CBOR / depth / nested | `Malformed` → `CanisterRangesMalformed` |
-
-### PortablePackageV2 (C)
-
-| Case | Result |
-|------|--------|
-| Object-form / non-string `frozen` | structural reject |
-| `receipt_id` mismatch | Reject before witness/§9 |
-
----
-
-## PocketIC / FailedStuck + `#[ignore]` inventory
-
-Six ignored in `cvdr_tests.rs` (Slice 2/3 / superseded). Active FailedStuck path covered.
-
-**Re-run 2026-08-04:** `./scripts/run-integration-tests.sh local 4 cvdr_`
-
-```
-test result: ok. 15 passed; 0 failed; 6 ignored; finished in 162.23s
-```
-
----
-
-## Dual-build hashes
-
-**Re-run 2026-08-04** at `78b9091a43e844878c8f0ac69389c1947a4dbba6`:
-
-```
-build1=7a646d2e20ccacc63e6a962755ee8d34bc0693db6a05b860adaf237323d7b780
-build2=7a646d2e20ccacc63e6a962755ee8d34bc0693db6a05b860adaf237323d7b780
-PASS: byte-identical local_user_index.wasm.gz
-```
-
-Tip `8df74b35` changes canister sources — re-run M2 on tip if claiming identity for the final SHA.
-
----
-
-## Cross-repo guard
-
-Sibling CVDR-Verify at `27e620667a94cf739b745be27a902c4846b26b09`: labels match; no live V3-A tokens.
-
----
-
-## Frontend recovery walkthrough (manual repro)
-
-1. Persist failure blocks reveal/delete.  
-2. Prepare-only remount → re-auth (not auto-poll).  
-3. Post-delete close-tab → anonymous recovery when `deletionStarted`.  
-4. Poll exhaustion → delayed, never done; RT-OCZD-5 for abandoned capability.
-
----
-
-## Key paths
-
-**open-chatZD:** `cvdr_canister_ranges.rs`, `cvdr.rs`, `self_capture_index_evidence.rs`, `cvdr.ts`, ConfirmDeleteAccount (desktop/mobile), `CvdrAnonymousRecovery.svelte`, RTS RT-OCZD-5  
-
-**CVDR-Verify:** `openchatzd/{package,body,mod,fixtures,index_attestation}.rs`
+Parent pins: open-chatZD parent `dd65774c54f04cd7335cab95d43f289de60c79c9`; historical incomplete tag tip `e884ac43b905a5a8ce6e82c0f591b728174b5593` (superseded — do not pin CI there).

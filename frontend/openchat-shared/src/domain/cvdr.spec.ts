@@ -44,7 +44,7 @@ describe("cvdr helpers", () => {
         });
     });
 
-    it("round-trips deletionStarted flag for post-delete recovery", () => {
+    it("round-trips deletionStarted flag for recovery (set before irreversible delete)", () => {
         const raw = serializeCvdrReceiptSession({
             receiptId: "ab".repeat(32),
             localUserIndex: "aaaaa-aa",
@@ -69,6 +69,19 @@ describe("cvdr helpers", () => {
                 localUserIndex: "aaaaa-aa",
             }),
         ).toBe(false);
+    });
+
+    it("clearing deletionStarted returns prepare-only (cancelled / failed delete)", () => {
+        const started = serializeCvdrReceiptSession({
+            receiptId: "ab".repeat(32),
+            localUserIndex: "aaaaa-aa",
+            deletionStarted: true,
+        });
+        const cleared = serializeCvdrReceiptSession({
+            ...parseCvdrReceiptSession(started)!,
+            deletionStarted: false,
+        });
+        expect(cvdrSessionAwaitingDelivery(parseCvdrReceiptSession(cleared)!)).toBe(false);
     });
 
     it("rejects legacy bare receipt hex (missing LUI — cannot resume poll)", () => {
