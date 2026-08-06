@@ -1,7 +1,7 @@
 # OpenChatZD — Anonymous CVDR recovery walkthrough (Stef delta evidence)
 
 **Date:** 2026-08-06  
-**Product tip:** `antek` @ `(this commit — antek tip)` (A ordering: `deletionStarted` before delete)  
+**Product tip:** `antek` @ `1facc7018cefe82a84a11401190115e8d2b29a9e` (A ordering: `deletionStarted` before delete)  
 **Local stack:** LUI `ucwa4-rx777-77774-qaada-cai` · raw gateway `http://…raw.localhost:8080`  
 **Purpose:** Capture one recording of **unauthenticated recovery continuing through successful CVDR delivery** (Stef completion-gate ask). Prior evidence only showed post-delete close-tab resume.
 
@@ -39,7 +39,8 @@
 - Downloaded artefacts:
   - `/Users/antoine/Downloads/openchatzd-cvdr-80af8b9c.json` (3678 B — schema/certificate/receipt/witness)
   - `/Users/antoine/Downloads/openchatzd-reveal-80af8b9c.json` (159 B — reveal package)
-- Product commit: `(this commit — antek tip)`
+- Feature commit: `1facc7018cefe82a84a11401190115e8d2b29a9e`
+- Evidence tip: `antek` HEAD (this docs pin commit)
 
 ## Related code
 
