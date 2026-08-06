@@ -293,7 +293,12 @@
 </script>
 
 {#if confirmDelete}
-    <ConfirmDeleteAccount bind:deleting onClose={() => (confirmDelete = false)} />
+    <ConfirmDeleteAccount
+        bind:deleting
+        onClose={() => {
+            confirmDelete = false;
+            deleting = false;
+        }} />
 {/if}
 
 <SectionHeader border={false} flush shadow>

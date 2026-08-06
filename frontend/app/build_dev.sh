@@ -11,7 +11,8 @@ source "$ENV_FILE"
 set +a
 
 # OC specific env variables
-export OC_CANISTER_URL_PATH=http://{canisterId}.localhost:8080
+# Use .raw. to bypass HTTP response verification (CVDR /cvdr poll, metrics, etc.).
+export OC_CANISTER_URL_PATH=http://{canisterId}.raw.localhost:8080
 export OC_BITCOIN_MAINNET_ENABLED=false
 export OC_ACCOUNT_LINKING_CODES_ENABLED=true
 export OC_BLOB_URL_PATTERN=http://{canisterId}.raw.localhost:8080/{blobType}

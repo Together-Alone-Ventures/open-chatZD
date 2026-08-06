@@ -20,6 +20,10 @@ process.env.OC_WEBSITE_VERSION = version;
 
 initEnv();
 
+function ocEnv(key: string): string {
+    return JSON.stringify(process.env[key] ?? "");
+}
+
 const isNativeIos = process.env.OC_APP_TYPE === "ios";
 const isNativeAndroid = process.env.OC_APP_TYPE === "android";
 const isNativeApp = isNativeIos || isNativeAndroid;
@@ -32,11 +36,33 @@ const port = isNativeApp ? 5003 : 5001;
 // https://vite.dev/config/
 export default defineConfig({
     envPrefix: "OC_",
+    // Vite does not reliably expose process.env set in initEnv() via import.meta.env
+    // (only .env files + shell exports). Mirror rollup.config.mjs defines so local
+    // canister IDs from .dfx/local/canister_ids.json reach the client.
     define: {
-        "import.meta.env.OC_AIRDROP_BOT_CANISTER": JSON.stringify(
-            "this-is-not-the-value-youre-looking-for",
-        ),
         "import.meta.env.OC_WEBSITE_VERSION": JSON.stringify(version),
+        "import.meta.env.OC_USER_INDEX_CANISTER": ocEnv("OC_USER_INDEX_CANISTER"),
+        "import.meta.env.OC_TRANSLATIONS_CANISTER": ocEnv("OC_TRANSLATIONS_CANISTER"),
+        "import.meta.env.OC_GROUP_INDEX_CANISTER": ocEnv("OC_GROUP_INDEX_CANISTER"),
+        "import.meta.env.OC_NOTIFICATIONS_CANISTER": ocEnv("OC_NOTIFICATIONS_CANISTER"),
+        "import.meta.env.OC_IDENTITY_CANISTER": ocEnv("OC_IDENTITY_CANISTER"),
+        "import.meta.env.OC_ONLINE_CANISTER": ocEnv("OC_ONLINE_CANISTER"),
+        "import.meta.env.OC_PROPOSALS_BOT_CANISTER": ocEnv("OC_PROPOSALS_BOT_CANISTER"),
+        "import.meta.env.OC_AIRDROP_BOT_CANISTER": ocEnv("OC_AIRDROP_BOT_CANISTER"),
+        "import.meta.env.OC_STORAGE_INDEX_CANISTER": ocEnv("OC_STORAGE_INDEX_CANISTER"),
+        "import.meta.env.OC_REGISTRY_CANISTER": ocEnv("OC_REGISTRY_CANISTER"),
+        "import.meta.env.OC_MARKET_MAKER_CANISTER": ocEnv("OC_MARKET_MAKER_CANISTER"),
+        "import.meta.env.OC_SIGN_IN_WITH_EMAIL_CANISTER": ocEnv("OC_SIGN_IN_WITH_EMAIL_CANISTER"),
+        "import.meta.env.OC_SIGN_IN_WITH_ETHEREUM_CANISTER": ocEnv(
+            "OC_SIGN_IN_WITH_ETHEREUM_CANISTER",
+        ),
+        "import.meta.env.OC_SIGN_IN_WITH_SOLANA_CANISTER": ocEnv("OC_SIGN_IN_WITH_SOLANA_CANISTER"),
+        "import.meta.env.OC_ONESEC_FORWARDER_CANISTER": ocEnv("OC_ONESEC_FORWARDER_CANISTER"),
+        "import.meta.env.OC_ONESEC_MINTER_CANISTER": ocEnv("OC_ONESEC_MINTER_CANISTER"),
+        "import.meta.env.OC_IC_URL":
+            process.env.OC_IC_URL === undefined
+                ? "undefined"
+                : JSON.stringify(process.env.OC_IC_URL),
     },
     server: {
         allowedHosts: ["host.docker.internal"],

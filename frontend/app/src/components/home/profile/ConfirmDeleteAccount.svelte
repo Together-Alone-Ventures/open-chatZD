@@ -76,33 +76,50 @@
     async function runPrepare() {
         step = "preparing";
         errorMessage = "";
-        const resp = await client.prepareAccountDeletion();
-        if (resp.kind !== "success") {
+        try {
+            const resp = await client.prepareAccountDeletion();
+            if (resp.kind !== "success") {
+                errorMessage =
+                    resp.kind === "already_committed"
+                        ? "Deletion already started for this account."
+                        : resp.kind === "user_canister_unavailable"
+                          ? resp.detail
+                          : resp.message;
+                step = "error";
+                return;
+            }
+            receiptId = resp.receiptId;
+            revealWireJson = resp.revealWireJson;
+            localUserIndex = resp.localUserIndex;
+            bearerUrl = client.cvdrDownloadUrl(localUserIndex, receiptId);
+            const persisted = client.persistCvdrReceiptSession(currentUserIdStore.value, {
+                receiptId,
+                localUserIndex,
+                deletionStarted: false,
+            });
+            if (!persisted) {
+                errorMessage = interpolate($_, i18nKey("danger.cvdr.persistFailed"));
+                step = "error";
+                return;
+            }
+            revealAck = false;
+            step = "reveal";
+        } catch (err) {
+            console.error("prepareAccountDeletion failed", err);
+            // Worker errors are JSON-revived plain objects (not Error instances).
             errorMessage =
-                resp.kind === "already_committed"
-                    ? "Deletion already started for this account."
-                    : resp.kind === "user_canister_unavailable"
-                      ? resp.detail
-                      : resp.message;
+                err instanceof Error
+                    ? err.message
+                    : err &&
+                        typeof err === "object" &&
+                        "message" in err &&
+                        typeof (err as { message: unknown }).message === "string"
+                      ? (err as { message: string }).message
+                      : typeof err === "string"
+                        ? err
+                        : "prepareAccountDeletion failed — see console";
             step = "error";
-            return;
         }
-        receiptId = resp.receiptId;
-        revealWireJson = resp.revealWireJson;
-        localUserIndex = resp.localUserIndex;
-        bearerUrl = client.cvdrDownloadUrl(localUserIndex, receiptId);
-        const persisted = client.persistCvdrReceiptSession(currentUserIdStore.value, {
-            receiptId,
-            localUserIndex,
-            deletionStarted: false,
-        });
-        if (!persisted) {
-            errorMessage = interpolate($_, i18nKey("danger.cvdr.persistFailed"));
-            step = "error";
-            return;
-        }
-        revealAck = false;
-        step = "reveal";
     }
 
     function downloadReveal() {
@@ -190,9 +207,11 @@
                 result.contentType,
             );
             client.clearPersistedCvdrReceiptSession(currentUserIdStore.value);
+            // Release the parent profile spinner immediately.
+            deleting = false;
             step = "done";
             if (logoutWhenDone) {
-                await client.finishDeleteAccountLogout();
+                await forceLogoutAfterDelete();
             }
             return;
         }
@@ -202,13 +221,41 @@
 
     /** Explicit handoff to anonymous App recovery while keeping the pending capability. */
     async function handoffToAnonymousRecovery() {
-        await client.finishDeleteAccountLogout();
+        deleting = false;
+        await forceLogoutAfterDelete();
         onClose();
+    }
+
+    /**
+     * Post-delete: clear caches + logout. AuthClient.logout can hang locally — always fall
+     * back to a hard redirect so the UI does not keep showing the deleted account.
+     */
+    async function forceLogoutAfterDelete() {
+        const hardRedirect = () => {
+            window.location.replace("/");
+        };
+        const watchdog = window.setTimeout(hardRedirect, 2500);
+        try {
+            await client.finishDeleteAccountLogout();
+            // logout() already navigates on success; if we are still here, force it.
+            hardRedirect();
+        } catch (err) {
+            console.error("finishDeleteAccountLogout failed", err);
+            hardRedirect();
+        } finally {
+            window.clearTimeout(watchdog);
+        }
     }
 
     function requestClose() {
         // Mid-delete / in-flight delivery: keep modal (flag may already be true; delete may
         // have succeeded). Closing the tab is fine — anonymous recovery will resume.
+        // Once done/error/delayed, always allow dismiss even if `deleting` briefly lags.
+        if (step === "done" || step === "error" || step === "delayed") {
+            deleting = false;
+            onClose();
+            return;
+        }
         if (
             deleting ||
             step === "deleting" ||
@@ -314,7 +361,12 @@
                         <Translatable resourceKey={i18nKey("danger.cvdr.handoffAnonymous")} />
                     </Button>
                 {:else if step === "done"}
-                    <Button small onClick={onClose}>
+                    <Button
+                        small
+                        onClick={() => {
+                            deleting = false;
+                            void forceLogoutAfterDelete();
+                        }}>
                         <Translatable resourceKey={i18nKey("close")} />
                     </Button>
                 {/if}

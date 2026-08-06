@@ -29,6 +29,17 @@ describe("cvdr helpers", () => {
         expect(url).toBe(`https://bbbbb-bb.raw.icp0.io/cvdr/${"cd".repeat(32)}`);
     });
 
+    it("rewrites local non-raw hosts to .raw.localhost", () => {
+        const url = cvdrDownloadUrl(
+            "http://{canisterId}.localhost:8080",
+            "ucwa4-rx777-77774-qaada-cai",
+            "ef".repeat(32),
+        );
+        expect(url).toBe(
+            `http://ucwa4-rx777-77774-qaada-cai.raw.localhost:8080/cvdr/${"ef".repeat(32)}`,
+        );
+    });
+
     it("storage key is per-user", () => {
         expect(cvdrReceiptStorageKey("user-1")).toBe("oc_cvdr_receipt_user-1");
     });

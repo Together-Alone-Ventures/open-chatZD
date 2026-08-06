@@ -163,7 +163,18 @@ export async function pollCvdrUntilSettled(
             await sleep(2000);
             continue;
         }
-        options?.onStatus?.(status.kind === "error" ? status.detail : status.kind);
+        if (status.kind === "error") {
+            const detail = status.detail;
+            const short =
+                detail.includes("Response Verification Error") || detail.includes("<!DOCTYPE html>")
+                    ? `HTTP ${status.status}: response verification failed (use .raw. canister URL)`
+                    : detail.length > 200
+                      ? `${detail.slice(0, 200)}…`
+                      : detail;
+            options?.onStatus?.(short);
+        } else {
+            options?.onStatus?.(status.kind);
+        }
         await sleep(3000);
     }
     return { kind: "delayed" };
@@ -171,10 +182,16 @@ export async function pollCvdrUntilSettled(
 
 export function cvdrDownloadUrl(canisterUrlPath: string, localUserIndex: string, receiptIdHex: string): string {
     const base = canisterUrlPath.replace("{canisterId}", localUserIndex);
-    // Prefer raw domain for bearer fetch (spec §11.1).
+    // Prefer raw domain for bearer fetch (spec §11.1). Certified gateway returns
+    // Response Verification Error 503 for uncertified http_request bodies locally
+    // (and prod raw bypasses the same check).
     const rawBase = base.includes(".raw.")
         ? base.replace(/\/$/, "")
-        : base.replace(".icp0.io", ".raw.icp0.io").replace(/\/$/, "");
+        : base
+              .replace(".icp0.io", ".raw.icp0.io")
+              .replace(".ic0.app", ".raw.ic0.app")
+              .replace(".localhost:", ".raw.localhost:")
+              .replace(/\/$/, "");
     return `${rawBase}/cvdr/${receiptIdHex.toLowerCase()}`;
 }
 

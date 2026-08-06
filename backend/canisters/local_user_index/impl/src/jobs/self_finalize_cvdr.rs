@@ -214,7 +214,22 @@ async fn attempt_finalize(draft: CvdrDraft) {
 /// Non-replicated self-fetch of `GET /cvdr_live/<receipt_id>`, returning `(certificate, witness)`
 /// bytes on success. `None` on outcall failure, non-JSON body, missing certificate, or bad hex.
 async fn fetch_live(self_id: CanisterId, receipt_id: &[u8; 32], max_response_bytes: u64) -> Option<(Vec<u8>, Vec<u8>)> {
-    let url = format!("https://{}.raw.icp0.io/cvdr_live/{}", self_id, hex::encode(receipt_id));
+    // Local/test replica cannot reach mainnet `*.raw.icp0.io`. DFX PocketIC fulfills outcalls to
+    // `*.raw.localhost:<webserver>` (same host the browser uses for bearer `/cvdr` polls).
+    let test_mode = read_state(|state| state.data.test_mode);
+    let url = if test_mode {
+        format!(
+            "http://{}.raw.localhost:8080/cvdr_live/{}",
+            self_id,
+            hex::encode(receipt_id)
+        )
+    } else {
+        format!(
+            "https://{}.raw.icp0.io/cvdr_live/{}",
+            self_id,
+            hex::encode(receipt_id)
+        )
+    };
     let result = http_outcall::non_replicated_get(url, max_response_bytes).await.ok()?;
 
     #[derive(serde::Deserialize)]

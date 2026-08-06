@@ -1194,10 +1194,18 @@ export class OpenChat {
     }
 
     async logout(): Promise<void> {
-        await Promise.all([
-            this.#worker.send({ kind: "logout" }),
-            this.#authClient.then((c) => c.logout()),
-        ]).then(() => window.location.replace("/"));
+        // AuthClient.logout can hang (especially local). Cap wait so callers always progress.
+        const authLogout = this.#authClient
+            .then((c) => c.logout())
+            .catch((err) => console.error("AuthClient.logout failed", err));
+        const workerLogout = this.#worker
+            .send({ kind: "logout" })
+            .catch((err) => console.error("worker logout failed", err));
+        await Promise.race([
+            Promise.all([workerLogout, authLogout]),
+            new Promise<void>((resolve) => window.setTimeout(resolve, 2000)),
+        ]);
+        window.location.replace("/");
     }
 
     unreadThreadMessageCount(
