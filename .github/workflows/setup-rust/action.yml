@@ -3,10 +3,33 @@ inputs:
   cache:
     description: 'Cache behaviour (use "read", "write", or leave empty)'
     type: string
+  private_git_token:
+    description: >-
+      PAT with Contents:Read on private Together-Alone-Ventures git crates:
+      ICP-Delete-Leaf, zombie-core, and CVDR-Verify. Pass
+      secrets.CVDR_VERIFY_READ_TOKEN from calling workflows.
+    required: false
+    type: string
+    default: ''
 
 runs:
   using: 'composite'
   steps:
+    - name: Auth private GitHub cargo deps
+      if: ${{ inputs.private_git_token != '' }}
+      shell: bash
+      env:
+        TOKEN: ${{ inputs.private_git_token }}
+      run: |
+        # actions/checkout injects GITHUB_TOKEN via http.extraheader for all
+        # github.com HTTPS; that token cannot read other private repos and
+        # overrides URL credentials → 403 "Write access not granted".
+        git config --local --unset-all http.https://github.com/.extraheader || true
+        git config --global --unset-all http.https://github.com/.extraheader || true
+        # Cargo's libgit2 often ignores url.insteadOf; force the git CLI.
+        echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
+        git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
+
     - name: Install Rust toolchain
       uses: actions-rust-lang/setup-rust-toolchain@v1
       with:

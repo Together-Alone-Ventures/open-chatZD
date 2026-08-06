@@ -6311,6 +6311,35 @@ export const LocalUserIndexPayForPremiumItemResponse = Type.Union([
     }),
 ]);
 
+export type LocalUserIndexPrepareAccountDeletionArgs = Static<
+    typeof LocalUserIndexPrepareAccountDeletionArgs
+>;
+export const LocalUserIndexPrepareAccountDeletionArgs = Type.Object({});
+
+export type LocalUserIndexPrepareAccountDeletionSuccessResult = Static<
+    typeof LocalUserIndexPrepareAccountDeletionSuccessResult
+>;
+export const LocalUserIndexPrepareAccountDeletionSuccessResult = Type.Object({
+    receipt_id: Type.String(),
+    reveal_wire_json: Type.String(),
+});
+
+export type LocalUserIndexPrepareAccountDeletionResponse = Static<
+    typeof LocalUserIndexPrepareAccountDeletionResponse
+>;
+export const LocalUserIndexPrepareAccountDeletionResponse = Type.Union([
+    Type.Object({
+        Success: LocalUserIndexPrepareAccountDeletionSuccessResult,
+    }),
+    Type.Literal("AlreadyCommitted"),
+    Type.Object({
+        UserCanisterUnavailable: Type.String(),
+    }),
+    Type.Object({
+        Error: OCError,
+    }),
+]);
+
 export type CommunitySelectedChannelUpdatesResponse = Static<
     typeof CommunitySelectedChannelUpdatesResponse
 >;

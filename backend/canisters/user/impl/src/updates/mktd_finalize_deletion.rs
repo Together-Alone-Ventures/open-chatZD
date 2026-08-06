@@ -82,7 +82,11 @@ mod tests {
     fn different_value_is_rejected_and_does_not_overwrite() {
         let mut slot = Some(ID_A);
         assert_eq!(record_finalized_receipt_id(&mut slot, ID_B), Err(()));
-        assert_eq!(slot, Some(ID_A), "a different-id set must be rejected and leave the original intact");
+        assert_eq!(
+            slot,
+            Some(ID_A),
+            "a different-id set must be rejected and leave the original intact"
+        );
     }
 
     #[test]

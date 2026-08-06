@@ -6,6 +6,7 @@ export * from "./chat";
 export * from "./chit";
 export * from "./community";
 export * from "./crypto";
+export * from "./cvdr";
 export * from "./data";
 export * from "./dexes";
 export * from "./email";

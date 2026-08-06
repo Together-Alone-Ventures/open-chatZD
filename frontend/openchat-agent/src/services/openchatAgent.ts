@@ -117,6 +117,7 @@ import type {
     OptionalChatPermissions,
     PayForDiamondMembershipResponse,
     PayForPremiumItemResponse,
+    PrepareAccountDeletionResponse,
     PayForStreakInsuranceResponse,
     PendingCryptocurrencyWithdrawal,
     PinChatResponse,
@@ -4318,6 +4319,15 @@ export class OpenChatAgent extends EventTarget {
     async payForPremiumItem(userId: string, item: PremiumItem): Promise<PayForPremiumItemResponse> {
         const localUserIndex = await this.getLocalUserIndexForUser(userId);
         return this._localUserIndexClient.payForPremiumItem(localUserIndex, item);
+    }
+
+    async prepareAccountDeletion(userId: string): Promise<PrepareAccountDeletionResponse> {
+        const localUserIndex = await this.getLocalUserIndexForUser(userId);
+        const resp = await this._localUserIndexClient.prepareAccountDeletion(localUserIndex);
+        if (resp.kind === "success") {
+            return { ...resp, localUserIndex };
+        }
+        return resp;
     }
 
     setPremiumItemCost(item: PremiumItem, chitCost: number): Promise<void> {

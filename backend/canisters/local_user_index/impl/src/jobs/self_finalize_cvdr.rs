@@ -121,7 +121,7 @@ async fn attempt_finalize(draft: CvdrDraft) {
         None => fetch_live(self_id, &draft.receipt_id, RETRY_RESPONSE_BYTES).await,
     };
     let Some((certificate, witness)) = parsed else {
-        trace!(receipt = %hex::encode(draft.receipt_id), "cvdr self-fetch miss; will retry");
+        trace!(receipt_prefix = %cvdr::receipt_id_prefix(&draft.receipt_id), "cvdr self-fetch miss; will retry");
         return;
     };
 
@@ -159,7 +159,11 @@ async fn attempt_finalize(draft: CvdrDraft) {
                     certificate_bytes: certificate,
                     certificate_time: cert_time_ns,
                 };
-                match state.data.cvdr.insert_frozen_package(d.receipt_id, d.record_id, d.deletion_seq, package) {
+                match state
+                    .data
+                    .cvdr
+                    .insert_frozen_package(d.receipt_id, d.record_id, d.deletion_seq, package)
+                {
                     Ok(()) | Err(FrozenInsertError::AlreadyExists) => {
                         // Stored (or already stored — idempotent). Terminal success. Scrub the
                         // retained draft of the salt + raw target list (privacy default, spec §6);
@@ -168,10 +172,11 @@ async fn attempt_finalize(draft: CvdrDraft) {
                         captured.stage = DraftStage::CertificateCaptured;
                         captured.scrub_sensitive();
                         state.data.cvdr.upsert_draft(captured);
-                        trace!(receipt = %hex::encode(d.receipt_id), "cvdr certificate captured + stored");
+                        trace!(receipt_prefix = %cvdr::receipt_id_prefix(&d.receipt_id), "cvdr certificate captured + stored");
+                        crate::jobs::self_capture_index_evidence::start_if_required(state);
                     }
                     Err(FrozenInsertError::LogFull) => {
-                        warn!(event = "cvdr_frozen_log_full", receipt = %hex::encode(d.receipt_id), "frozen-package log full");
+                        warn!(event = "cvdr_frozen_log_full", receipt_prefix = %cvdr::receipt_id_prefix(&d.receipt_id), "frozen-package log full");
                     }
                 }
             }
@@ -182,7 +187,7 @@ async fn attempt_finalize(draft: CvdrDraft) {
                 // backstop can still land it. In practice this is rare: the give-up cap == the
                 // window, so a self-loop attempt is normally in-window or already stuck.
                 trace!(
-                    receipt = %hex::encode(d.receipt_id),
+                    receipt_prefix = %cvdr::receipt_id_prefix(&d.receipt_id),
                     cert_time_ns,
                     committed_at = d.receipt_committed_at,
                     "self-finalization certificate is late (outside the window); not stored by the self-loop (backstop handles as LateFinalized)"
@@ -196,7 +201,7 @@ async fn attempt_finalize(draft: CvdrDraft) {
                 // change on failure"; it is the retry mechanism. The next sweep retries with backoff.
                 warn!(
                     event = "cvdr_finalize_rejected",
-                    receipt = %hex::encode(d.receipt_id),
+                    receipt_prefix = %cvdr::receipt_id_prefix(&d.receipt_id),
                     reason = reason.as_str(),
                     attempt = d.finalize_attempt,
                     "self-finalization package failed the store-gate; discarded (not stored)"
@@ -209,7 +214,22 @@ async fn attempt_finalize(draft: CvdrDraft) {
 /// Non-replicated self-fetch of `GET /cvdr_live/<receipt_id>`, returning `(certificate, witness)`
 /// bytes on success. `None` on outcall failure, non-JSON body, missing certificate, or bad hex.
 async fn fetch_live(self_id: CanisterId, receipt_id: &[u8; 32], max_response_bytes: u64) -> Option<(Vec<u8>, Vec<u8>)> {
-    let url = format!("https://{}.raw.icp0.io/cvdr_live/{}", self_id, hex::encode(receipt_id));
+    // Local/test replica cannot reach mainnet `*.raw.icp0.io`. DFX PocketIC fulfills outcalls to
+    // `*.raw.localhost:<webserver>` (same host the browser uses for bearer `/cvdr` polls).
+    let test_mode = read_state(|state| state.data.test_mode);
+    let url = if test_mode {
+        format!(
+            "http://{}.raw.localhost:8080/cvdr_live/{}",
+            self_id,
+            hex::encode(receipt_id)
+        )
+    } else {
+        format!(
+            "https://{}.raw.icp0.io/cvdr_live/{}",
+            self_id,
+            hex::encode(receipt_id)
+        )
+    };
     let result = http_outcall::non_replicated_get(url, max_response_bytes).await.ok()?;
 
     #[derive(serde::Deserialize)]

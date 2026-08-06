@@ -71,7 +71,7 @@ fn finalize_cvdr_impl(args: Args, state: &mut RuntimeState) -> Response {
         // submission must not poison the first-wins slot). The reason is diagnostic only.
         FinalizeVerdict::Reject(reason) => {
             trace!(
-                receipt = %hex::encode(draft.receipt_id),
+                receipt_prefix = %cvdr::receipt_id_prefix(&draft.receipt_id),
                 reason = reason.as_str(),
                 "backstop submission rejected by the store-gate; nothing stored"
             );
@@ -130,17 +130,22 @@ fn store_verified_package(
         certificate_bytes: certificate,
         certificate_time: cert_time_ns,
     };
-    match state.data.cvdr.insert_frozen_package(draft.receipt_id, draft.record_id, draft.deletion_seq, package) {
+    match state
+        .data
+        .cvdr
+        .insert_frozen_package(draft.receipt_id, draft.record_id, draft.deletion_seq, package)
+    {
         Ok(()) => {
             draft.stage = stage;
             draft.scrub_sensitive();
             state.data.cvdr.upsert_draft(draft);
+            crate::jobs::self_capture_index_evidence::start_if_required(state);
             success
         }
         // First-wins (rule 6/7): a concurrent path already stored it. No-op, not an error.
         Err(FrozenInsertError::AlreadyExists) => AlreadyFinalized,
         Err(FrozenInsertError::LogFull) => {
-            warn!(event = "cvdr_frozen_log_full", receipt = %hex::encode(draft.receipt_id), "frozen-package log full");
+            warn!(event = "cvdr_frozen_log_full", receipt_prefix = %cvdr::receipt_id_prefix(&draft.receipt_id), "frozen-package log full");
             Rejected("frozen_log_full".to_string())
         }
     }

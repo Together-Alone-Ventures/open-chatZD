@@ -36,8 +36,8 @@ use tracing::error;
 use types::{
     BotDataEncoding, BotEventPayload, BotEventWrapper, BotNotification, BotNotificationEnvelope, BuildVersion, CanisterId,
     ChannelLatestMessageIndex, ChatId, ChildCanisterWasms, CommunityCanisterChannelSummary, CommunityCanisterCommunitySummary,
-    CommunityId, Cycles, DiamondMembershipDetails, IdempotentEnvelope, MessageContentInitial, Milliseconds, Notification,
-    Hash, NotificationEnvelope, ReferralType, TimestampMillis, Timestamped, UserId, UserNotificationEnvelope,
+    CommunityId, Cycles, DiamondMembershipDetails, Hash, IdempotentEnvelope, MessageContentInitial, Milliseconds, Notification,
+    NotificationEnvelope, ReferralType, TimestampMillis, Timestamped, UserId, UserNotificationEnvelope,
     VerifiedCredentialGateArgs,
 };
 use user_canister::LocalUserIndexEvent as UserEvent;
@@ -506,7 +506,10 @@ impl RuntimeState {
             receipt_export_uninstall_pending_count: self.data.export_pending.uninstall_pending_count(),
             cvdr_drafts_in_flight: self.data.cvdr.draft_count(),
             cvdr_released_count: self.data.cvdr.frozen_package_count(),
+            cvdr_index_evidence_count: self.data.cvdr.index_evidence_count(),
+            cvdr_awaiting_certificate_count: self.data.cvdr.awaiting_certificate_count(),
             cvdr_awaiting_certificate: self.data.cvdr.awaiting_certificate_count() > 0,
+            cvdr_failed_stuck_count: self.data.cvdr.finalization_terminal_counts().1,
             referral_codes: self.data.referral_codes.metrics(now),
             event_store_client_info,
             notification_pushers: self.data.notification_pushers.iter().copied().collect(),
@@ -779,7 +782,10 @@ pub struct Metrics {
     pub receipt_export_uninstall_pending_count: u64,
     pub cvdr_drafts_in_flight: u64,
     pub cvdr_released_count: u64,
+    pub cvdr_index_evidence_count: u64,
+    pub cvdr_awaiting_certificate_count: u64,
     pub cvdr_awaiting_certificate: bool,
+    pub cvdr_failed_stuck_count: u64,
     pub referral_codes: HashMap<ReferralType, ReferralTypeMetrics>,
     pub event_store_client_info: EventStoreClientInfo,
     pub user_versions: BTreeMap<String, u32>,

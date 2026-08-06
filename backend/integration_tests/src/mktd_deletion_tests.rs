@@ -612,7 +612,9 @@ fn receipt_download_path_matches_test_hook_export() {
         env,
         user.principal,
         user.canister(),
-        &user_canister::mktd_get_receipt::Args { receipt_id: receipt_id.clone() },
+        &user_canister::mktd_get_receipt::Args {
+            receipt_id: receipt_id.clone(),
+        },
     );
     let receipt = match exported {
         user_canister::mktd_get_receipt::Response::Success(receipt) => receipt,
@@ -687,7 +689,12 @@ fn receipt_route_negatives_all_return_404() {
             env,
             user.principal,
             user.canister(),
-            &HttpRequest { method: method.to_string(), url, headers: Vec::new(), body: Vec::new() },
+            &HttpRequest {
+                method: method.to_string(),
+                url,
+                headers: Vec::new(),
+                body: Vec::new(),
+            },
         )
     };
 
@@ -707,7 +714,11 @@ fn receipt_route_negatives_all_return_404() {
     );
 
     // bad length: too-short hex -> 404.
-    assert_eq!(req("GET", "/mktd_receipt?id=deadbeef".to_string()).status_code, 404, "short id must 404");
+    assert_eq!(
+        req("GET", "/mktd_receipt?id=deadbeef".to_string()).status_code,
+        404,
+        "short id must 404"
+    );
 
     // non-hex: correct length (64 chars) but not hex -> 404.
     assert_eq!(

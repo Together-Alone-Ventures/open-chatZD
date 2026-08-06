@@ -17,17 +17,17 @@
 //!   — TARGET provenance: WHICH canister was de-referenced and WHAT code it ran pre-uninstall.
 //! - `h_index     = SHA-256(H_INDEX_TAG || index_canister_principal || executor_module_hash)`
 //!   — EXECUTOR provenance: WHICH index performed the de-reference and WHAT code IT ran.
-//!     `executor_module_hash` is the index's OWN deploy-supplied module hash, captured into the
-//!     draft BEFORE uninstall (same capture point as `module_hash_pre`); a mid-flight index
-//!     upgrade does not change it. The de-reference *event* (record_id, deletion_seq, target
-//!     principal) is bound SEPARATELY and explicitly in the commitment — it is NOT this hash.
+//!   `executor_module_hash` is the index's OWN deploy-supplied module hash, captured into the
+//!   draft BEFORE uninstall (same capture point as `module_hash_pre`); a mid-flight index
+//!   upgrade does not change it. The de-reference *event* (record_id, deletion_seq, target
+//!   principal) is bound SEPARATELY and explicitly in the commitment — it is NOT this hash.
 //! - `commitment  = SHA-256(COMMITMENT_TAG || CVDR_ENCODER_VERSION || record_id ||
-//!                          deletion_seq(8,BE) || h_user_pre || h_index || user_canister_principal)`
+//!   deletion_seq(8,BE) || h_user_pre || h_index || user_canister_principal)`
 //!   — the value published to `certified_data` and matched by the certificate. `h_index` (and
-//!     thus the captured executor module hash) is bound into this hash chain.
+//!   thus the captured executor module hash) is bound into this hash chain.
 //! - `receipt_id  = SHA-256(RECEIPT_ID_TAG || record_id || deletion_seq(8,BE) || nonce)`
 //!   — the public fetch capability; the 32-byte `nonce` (LUI rng, captured once at draft
-//!     creation and persisted) makes it unguessable from the public UserId/record_id.
+//!   creation and persisted) makes it unguessable from the public UserId/record_id.
 //!
 //! ## V2 — the IC `data_certificate()` bytes are stored verbatim in the [`FrozenCvdrPackage`]
 //!         (`certificate_bytes`), so an external verifier (CVDR-Verify) can re-check the NNS
@@ -44,6 +44,7 @@ use crate::memory::{
     get_cvdr_frozen_primary_memory, get_cvdr_frozen_secondary_memory,
 };
 use candid::{CandidType, Principal};
+use constants::DAY_IN_MS;
 use ic_certification::{AsHashTree, RbTree, labeled, labeled_hash};
 use ic_stable_structures::storable::Bound;
 use ic_stable_structures::{StableBTreeMap, StableLog, Storable};
@@ -107,7 +108,13 @@ pub fn h_index(index_canister_id: CanisterId, executor_module_hash: &[u8]) -> Ha
     tagged(H_INDEX_TAG, &[index_canister_id.as_slice(), executor_module_hash])
 }
 
-pub fn commitment(record_id: &Hash, deletion_seq: u64, h_user_pre: &Hash, h_index: &Hash, user_canister_id: CanisterId) -> Hash {
+pub fn commitment(
+    record_id: &Hash,
+    deletion_seq: u64,
+    h_user_pre: &Hash,
+    h_index: &Hash,
+    user_canister_id: CanisterId,
+) -> Hash {
     tagged(
         COMMITMENT_TAG,
         &[
@@ -235,8 +242,12 @@ pub enum CertRejectReason {
     /// BLS signature verification against the NNS root (via the delegation chain) failed —
     /// forged/tampered signature, or an invalid delegation key.
     SignatureInvalid,
-    /// The certificate does not cover `self_canister_id` (delegation range miss / missing ranges).
+    /// The certificate does not cover `self_canister_id` (delegation range miss).
     CanisterNotInRange,
+    /// Independent store-gate: canister_ranges leaf missing / empty resolved set.
+    CanisterRangesMissing,
+    /// Independent store-gate: ranges/delegation CBOR malformed, nested delegation, bad shard.
+    CanisterRangesMalformed,
     /// The certificate `/time` is outside the freshness offset of `now` (replay / clock skew).
     Stale,
     /// Verified, but no `certified_data` leaf for this canister was present.
@@ -254,11 +265,22 @@ impl CertRejectReason {
             CertRejectReason::CborDecodeFailed => "certificate_cbor_decode_failed",
             CertRejectReason::SignatureInvalid => "certificate_signature_invalid",
             CertRejectReason::CanisterNotInRange => "certificate_canister_not_in_range",
+            CertRejectReason::CanisterRangesMissing => "certificate_canister_ranges_missing",
+            CertRejectReason::CanisterRangesMalformed => "certificate_canister_ranges_malformed",
             CertRejectReason::Stale => "certificate_stale",
             CertRejectReason::CertifiedDataMissing => "certificate_certified_data_missing",
             CertRejectReason::TimeMissing => "certificate_time_missing",
             CertRejectReason::OtherVerificationFailure => "certificate_verification_failed",
         }
+    }
+}
+
+fn map_range_auth_error(err: crate::model::cvdr_canister_ranges::RangeAuthError) -> CertRejectReason {
+    use crate::model::cvdr_canister_ranges::RangeAuthError as E;
+    match err {
+        E::NotInRange => CertRejectReason::CanisterNotInRange,
+        E::RangesMissing => CertRejectReason::CanisterRangesMissing,
+        E::Malformed => CertRejectReason::CanisterRangesMalformed,
     }
 }
 
@@ -303,6 +325,10 @@ pub fn verify_certificate(
     let max_offset_nanos = (CERT_MAX_OFFSET_MS as u128).saturating_mul(NANOS_PER_MILLI);
     cert.verify(self_canister_id.as_slice(), ic_root_key, &now_nanos, &max_offset_nanos)
         .map_err(|e| map_cert_verification_error(&e))?;
+    // Independent fail-closed range check (Stef B1): do not rely on vacuous
+    // upstream sharded-range behaviour after BLS/delegation verify.
+    crate::model::cvdr_canister_ranges::assert_delegation_range_containment(&cert, self_canister_id)
+        .map_err(map_range_auth_error)?;
 
     let certified_data =
         match cert
@@ -316,7 +342,87 @@ pub fn verify_certificate(
         LookupResult::Found(t) => leb128_u64(t),
         _ => return Err(CertRejectReason::TimeMissing),
     };
-    Ok(VerifiedCert { certified_data, cert_time_ns })
+    Ok(VerifiedCert {
+        certified_data,
+        cert_time_ns,
+    })
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct VerifiedIndexModuleHash {
+    pub module_hash: Vec<u8>,
+    pub cert_time_ns: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexEvidenceRejectReason {
+    Certificate(CertRejectReason),
+    ModuleHashMissing,
+    CertTimeBeforeCommitment,
+}
+
+impl IndexEvidenceRejectReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            IndexEvidenceRejectReason::Certificate(r) => r.as_str(),
+            IndexEvidenceRejectReason::ModuleHashMissing => "index_module_hash_path_missing",
+            IndexEvidenceRejectReason::CertTimeBeforeCommitment => "index_cert_time_before_commitment",
+        }
+    }
+}
+
+/// Store-gate for INDEX code-identity evidence (spec §14.3 / §14.8): BLS → NNS → range →
+/// exact path `/canister/<self>/module_hash` → `/time`. Optionally rejects if cert time predates
+/// the commitment certificate time. Does **not** compare to captured `h_index` (offline V3).
+pub fn verify_index_module_hash_evidence(
+    certificate: &[u8],
+    self_canister_id: Principal,
+    ic_root_key: &[u8],
+    now: TimestampMillis,
+    commitment_certificate_time_ns: Option<u64>,
+) -> Result<VerifiedIndexModuleHash, IndexEvidenceRejectReason> {
+    use ic_cbor::CertificateToCbor;
+    use ic_certificate_verification::VerifyCertificate;
+    use ic_certification::{Certificate, LookupResult};
+
+    let cert = Certificate::from_cbor(certificate)
+        .map_err(|_| IndexEvidenceRejectReason::Certificate(CertRejectReason::CborDecodeFailed))?;
+    let now_nanos = (now as u128).saturating_mul(NANOS_PER_MILLI);
+    let max_offset_nanos = (CERT_MAX_OFFSET_MS as u128).saturating_mul(NANOS_PER_MILLI);
+    cert.verify(self_canister_id.as_slice(), ic_root_key, &now_nanos, &max_offset_nanos)
+        .map_err(|e| IndexEvidenceRejectReason::Certificate(map_cert_verification_error(&e)))?;
+    crate::model::cvdr_canister_ranges::assert_delegation_range_containment(&cert, self_canister_id)
+        .map_err(|e| IndexEvidenceRejectReason::Certificate(map_range_auth_error(e)))?;
+
+    let module_hash = match cert
+        .tree
+        .lookup_path([b"canister".as_ref(), self_canister_id.as_slice(), b"module_hash".as_ref()])
+    {
+        LookupResult::Found(d) => d.to_vec(),
+        _ => return Err(IndexEvidenceRejectReason::ModuleHashMissing),
+    };
+    let cert_time_ns = match cert.tree.lookup_path([b"time".as_ref()]) {
+        LookupResult::Found(t) => leb128_u64(t),
+        _ => return Err(IndexEvidenceRejectReason::Certificate(CertRejectReason::TimeMissing)),
+    };
+    if let Some(commitment_time) = commitment_certificate_time_ns {
+        check_index_cert_not_before_commitment(cert_time_ns, commitment_time)?;
+    }
+    Ok(VerifiedIndexModuleHash {
+        module_hash,
+        cert_time_ns,
+    })
+}
+
+pub(crate) fn check_index_cert_not_before_commitment(
+    cert_time_ns: u64,
+    commitment_certificate_time_ns: u64,
+) -> Result<(), IndexEvidenceRejectReason> {
+    if cert_time_ns < commitment_certificate_time_ns {
+        Err(IndexEvidenceRejectReason::CertTimeBeforeCommitment)
+    } else {
+        Ok(())
+    }
 }
 
 /// Distinct reason the store-gate ([`verify_finalization_package`]) REJECTED a submission (spec §7
@@ -421,9 +527,15 @@ pub fn verify_finalization_package(
         return FinalizeVerdict::Reject(FinalizeRejectReason::CertTimeBeforeReceiptCommitted);
     }
     if v.cert_time_ns.saturating_sub(receipt_committed_at_ns) > ALLOWED_FINALIZATION_WINDOW_NS {
-        FinalizeVerdict::Late { cert_time_ns: v.cert_time_ns, tree_root }
+        FinalizeVerdict::Late {
+            cert_time_ns: v.cert_time_ns,
+            tree_root,
+        }
     } else {
-        FinalizeVerdict::InWindow { cert_time_ns: v.cert_time_ns, tree_root }
+        FinalizeVerdict::InWindow {
+            cert_time_ns: v.cert_time_ns,
+            tree_root,
+        }
     }
 }
 
@@ -451,6 +563,7 @@ fn leb128_u64(bytes: &[u8]) -> u64 {
 #[derive(CandidType, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DraftStage {
     /// Pre-uninstall: H_user_pre + targets + record_id captured, draft persisted.
+    /// Legacy mid-flight only — new deletions enter via [`DraftStage::Prepared`].
     Captured,
     /// `uninstall_code` confirmed (no module). The receipt may now be published.
     Uninstalled,
@@ -471,6 +584,10 @@ pub enum DraftStage {
     /// receipt remains in the tree (never removed, §10) and the permissionless backstop (§7) can
     /// still land it — as `CertificateCaptured` (if a fresh cert lands in-window) or `LateFinalized`.
     FailedStuck,
+    /// Spec §11.4 prepare: salt + targets + `receipt_id` captured; RevealWire handed to the user.
+    /// Not finalizable; not served by `/cvdr_live`. Appended last so candid ordinals of older
+    /// variants stay stable across upgrades.
+    Prepared,
 }
 
 /// In-flight durable deletion draft, keyed by `user_canister_id`. Survives a
@@ -499,8 +616,8 @@ pub struct CvdrDraft {
     pub h_index: Hash,
     pub commitment: Hash,
     /// 32 `raw_rand` bytes committed into `targets_commitment` (spec §2 TARGETS_COMMITMENT_V1).
-    /// Captured pre-uninstall; NEVER reused across deletions. The user-held reveal package
-    /// (later slice) = { version, salt, sorted target list }.
+    /// Captured at prepare; NEVER reused across deletions. Handed to the user in RevealWire
+    /// before irreversible delete (spec §11.4).
     pub salt: [u8; 32],
     /// Group/community targets for `NotifyOfUserDeleted`, captured BEFORE uninstall so
     /// recovery never re-reads the destroyed canister. Also the reveal-package target list and
@@ -571,10 +688,48 @@ impl CvdrDraft {
     /// (self-loop in flight) or `FailedStuck` (self-loop gave up, backstop can still land it, §7).
     /// These retain the salt + target list, so `receipt_body`/`receipt_hash` still recompute.
     /// `CertificateCaptured`/`LateFinalized` are terminal (package stored, draft scrubbed) and NOT
-    /// finalizable; the pre-publish `Captured`/`Uninstalled` stages have no receipt in the tree yet.
+    /// finalizable; `Prepared`/`Captured`/`Uninstalled` have no receipt in the tree yet
+    /// (`Prepared` is also explicitly non-finalizable per §11.4).
     pub fn is_finalizable(&self) -> bool {
         matches!(self.stage, DraftStage::AwaitingCertificate | DraftStage::FailedStuck)
     }
+
+    /// Canonical RevealWire JSON bytes (CVDR-Verify `openchatzd.cvdr.reveal_package`).
+    pub fn reveal_wire_json(&self) -> Vec<u8> {
+        reveal_wire_canonical_json(&self.salt, &self.canisters_to_notify)
+    }
+}
+
+/// Spec §11.4 / CVDR-Verify reveal schema id.
+pub const REVEAL_SCHEMA_ID: &str = "openchatzd.cvdr.reveal_package";
+pub const REVEAL_VERSION: u64 = 1;
+pub const REVEAL_ENCODING: &str = "hex";
+
+/// Prepared-but-not-deleted drafts TTL-purge after this (spec §11.4); aligns with the 24 h window.
+pub const PREPARED_DRAFT_TTL_MS: TimestampMillis = DAY_IN_MS;
+
+#[derive(Serialize)]
+struct CanonicalRevealWire<'a> {
+    schema: &'a str,
+    version: u64,
+    encoding: &'a str,
+    salt: String,
+    targets: Vec<String>,
+}
+
+/// Canonical RevealWire JSON: salt hex + targets as principal text, sorted by raw bytes
+/// (same order as `targets_commitment`).
+pub fn reveal_wire_canonical_json(salt: &[u8; 32], targets: &[CanisterId]) -> Vec<u8> {
+    let mut sorted: Vec<&CanisterId> = targets.iter().collect();
+    sorted.sort_by(|a, b| a.as_slice().cmp(b.as_slice()));
+    let canonical = CanonicalRevealWire {
+        schema: REVEAL_SCHEMA_ID,
+        version: REVEAL_VERSION,
+        encoding: REVEAL_ENCODING,
+        salt: hex::encode(salt),
+        targets: sorted.iter().map(|t| t.to_text()).collect(),
+    };
+    serde_json::to_vec(&canonical).expect("RevealWire canonical serialization")
 }
 
 // ---------------------------------------------------------------------------
@@ -643,6 +798,29 @@ pub struct FrozenCvdrPackage {
     pub certificate_time: u64,
 }
 
+/// §11.3: single constructor from the stored package — never a re-projection of draft fields.
+impl From<&FrozenCvdrPackage> for local_user_index_canister::get_cvdr::FrozenWire {
+    fn from(p: &FrozenCvdrPackage) -> Self {
+        use local_user_index_canister::get_cvdr::{FROZEN_SCHEMA_ID, WIRE_ENCODING, WIRE_VERSION};
+        Self {
+            schema: FROZEN_SCHEMA_ID.to_string(),
+            version: WIRE_VERSION,
+            encoding: WIRE_ENCODING.to_string(),
+            receipt_body: p.receipt_body.clone(),
+            receipt_hash: p.receipt_hash,
+            tree_root: p.tree_root,
+            witness_bytes: p.witness_bytes.clone(),
+            certificate_bytes: p.certificate_bytes.clone(),
+            certificate_time: p.certificate_time,
+        }
+    }
+}
+
+/// §11.6: log at most this truncated prefix (first 8 hex chars = 4 bytes).
+pub fn receipt_id_prefix(receipt_id: &Hash) -> String {
+    hex::encode(&receipt_id[..4])
+}
+
 impl Storable for FrozenCvdrPackage {
     fn to_bytes(&self) -> Cow<'_, [u8]> {
         Cow::Owned(candid::encode_one(self).expect("FrozenCvdrPackage encode"))
@@ -687,7 +865,10 @@ impl Storable for Key32 {
         a.copy_from_slice(&bytes);
         Key32(a)
     }
-    const BOUND: Bound = Bound::Bounded { max_size: 32, is_fixed_size: true };
+    const BOUND: Bound = Bound::Bounded {
+        max_size: 32,
+        is_fixed_size: true,
+    };
 }
 
 impl Storable for Key40 {
@@ -702,7 +883,10 @@ impl Storable for Key40 {
         a.copy_from_slice(&bytes);
         Key40(a)
     }
-    const BOUND: Bound = Bound::Bounded { max_size: 40, is_fixed_size: true };
+    const BOUND: Bound = Bound::Bounded {
+        max_size: 40,
+        is_fixed_size: true,
+    };
 }
 
 fn index_key(record_id: &Hash, deletion_seq: u64) -> Key40 {
@@ -791,6 +975,10 @@ impl FrozenPackageStore {
             })
             .collect()
     }
+
+    pub fn receipt_ids(&self) -> Vec<Hash> {
+        self.primary.iter().map(|e| e.key().0).collect()
+    }
 }
 
 /// Durable, upgrade-surviving CVDR stores: the in-flight draft map (by user_canister_id) and the
@@ -807,11 +995,17 @@ pub struct CvdrStore {
     drafts: StableBTreeMap<Principal, CvdrDraft, Memory>,
     #[serde(skip, default = "init_frozen")]
     frozen: FrozenPackageStore,
+    #[serde(skip, default = "init_index_evidence")]
+    index_evidence: crate::model::cvdr_index_evidence::IndexCodeIdentityStore,
 }
 
 impl Default for CvdrStore {
     fn default() -> Self {
-        CvdrStore { drafts: init_drafts(), frozen: init_frozen() }
+        CvdrStore {
+            drafts: init_drafts(),
+            frozen: init_frozen(),
+            index_evidence: init_index_evidence(),
+        }
     }
 }
 
@@ -820,6 +1014,9 @@ fn init_drafts() -> StableBTreeMap<Principal, CvdrDraft, Memory> {
 }
 fn init_frozen() -> FrozenPackageStore {
     FrozenPackageStore::new()
+}
+fn init_index_evidence() -> crate::model::cvdr_index_evidence::IndexCodeIdentityStore {
+    crate::model::cvdr_index_evidence::IndexCodeIdentityStore::new()
 }
 
 impl CvdrStore {
@@ -874,12 +1071,49 @@ impl CvdrStore {
         self.frozen.receipt_leaves()
     }
 
+    pub fn frozen_receipt_ids_missing_index_evidence(&self) -> Vec<Hash> {
+        self.frozen
+            .receipt_ids()
+            .into_iter()
+            .filter(|id| !self.index_evidence.contains(id))
+            .collect()
+    }
+
+    pub fn insert_index_evidence(
+        &mut self,
+        receipt_id: Hash,
+        evidence: crate::model::cvdr_index_evidence::IndexCodeIdentityEvidence,
+    ) -> Result<(), crate::model::cvdr_index_evidence::IndexEvidenceInsertError> {
+        if self.frozen.get_by_receipt_id(&receipt_id).is_none() {
+            return Err(crate::model::cvdr_index_evidence::IndexEvidenceInsertError::FrozenPackageMissing);
+        }
+        self.index_evidence.insert(receipt_id, evidence)
+    }
+
+    pub fn get_index_evidence(
+        &self,
+        receipt_id: &Hash,
+    ) -> Option<crate::model::cvdr_index_evidence::IndexCodeIdentityEvidence> {
+        self.index_evidence.get(receipt_id)
+    }
+
+    pub fn has_index_evidence(&self, receipt_id: &Hash) -> bool {
+        self.index_evidence.contains(receipt_id)
+    }
+
+    pub fn index_evidence_count(&self) -> u64 {
+        self.index_evidence.count()
+    }
+
     // ---- awaiting-certificate drafts (tree design: many may be in-flight; no single slot) ----
 
     /// Count of in-flight drafts still awaiting a certificate. Replaces the removed single-slot
     /// guard for metrics/observability (spec §1/§2 — the global single-flight guard is gone).
     pub fn awaiting_certificate_count(&self) -> u64 {
-        self.drafts.iter().filter(|e| e.value().stage == DraftStage::AwaitingCertificate).count() as u64
+        self.drafts
+            .iter()
+            .filter(|e| e.value().stage == DraftStage::AwaitingCertificate)
+            .count() as u64
     }
 
     /// Every draft still `AwaitingCertificate` — the self-finalization sweep's work list (spec §6).
@@ -904,6 +1138,34 @@ impl CvdrStore {
             .find(|d| &d.receipt_id == receipt_id && d.is_finalizable())
     }
 
+    /// Any draft for `receipt_id` (including scrubbed post-capture). Used by §11.2 Pending
+    /// when no frozen package exists yet — Available is checked first so scrubbed+frozen
+    /// never stays Pending.
+    pub fn find_any_draft_by_receipt_id(&self, receipt_id: &Hash) -> Option<CvdrDraft> {
+        self.drafts.iter().map(|e| e.value()).find(|d| &d.receipt_id == receipt_id)
+    }
+
+    /// Scrub + drop prepared drafts older than [`PREPARED_DRAFT_TTL_MS`] (spec §11.4).
+    /// After purge the `receipt_id` serves Unknown.
+    pub fn purge_expired_prepared(&mut self, now: TimestampMillis) -> u64 {
+        let expired: Vec<CanisterId> = self
+            .drafts
+            .iter()
+            .filter(|e| {
+                let d = e.value();
+                d.stage == DraftStage::Prepared && now.saturating_sub(d.created_at) > PREPARED_DRAFT_TTL_MS
+            })
+            .map(|e| *e.key())
+            .collect();
+        let n = expired.len() as u64;
+        for id in expired {
+            if let Some(mut d) = self.drafts.remove(&id) {
+                d.scrub_sensitive();
+            }
+        }
+        n
+    }
+
     /// Look up a draft by `receipt_id` that is in a FINALIZABLE state — `AwaitingCertificate` or
     /// `FailedStuck` — for the §7 backstop (rule 1) and the `/cvdr_live` operator-fetch route.
     /// Both states retain the salt + target list needed to recompute `receipt_hash`/`receipt_body`
@@ -912,6 +1174,15 @@ impl CvdrStore {
     /// [`find_draft_by_receipt_id`]; kept as a distinct name so the backstop reads intent-first.
     pub fn find_finalizable_draft_by_receipt_id(&self, receipt_id: &Hash) -> Option<CvdrDraft> {
         self.find_draft_by_receipt_id(receipt_id)
+    }
+
+    /// Any draft (including captured/scrubbed) matching `receipt_id`, for timing anchors.
+    pub fn receipt_committed_at_ns(&self, receipt_id: &Hash) -> Option<u64> {
+        self.drafts
+            .iter()
+            .map(|e| e.value())
+            .find(|d| &d.receipt_id == receipt_id)
+            .map(|d| d.receipt_committed_at)
     }
 
     /// Count of receipts that reached a terminal self-finalization state, for metrics.
@@ -974,7 +1245,11 @@ mod tests {
         let base = h_index(p(3), &[1u8; 32]);
         assert_ne!(base, h_index(p(3), &[2u8; 32]), "executor module hash must affect h_index");
         assert_ne!(base, h_index(p(4), &[1u8; 32]), "index principal must affect h_index");
-        assert_ne!(base, h_user_pre(p(3), &[1u8; 32]), "executor and target hashes must not collide");
+        assert_ne!(
+            base,
+            h_user_pre(p(3), &[1u8; 32]),
+            "executor and target hashes must not collide"
+        );
     }
 
     // ---- CVDR finalization rework (spec §2/§4) ----
@@ -988,7 +1263,11 @@ mod tests {
         // sort ascending by raw principal bytes -> order-independent input
         assert_eq!(base, targets_commitment(&salt, &[c, a, b]), "must be order-independent");
         // salt-dependent
-        assert_ne!(base, targets_commitment(&[8u8; 32], &[a, b, c]), "salt must affect commitment");
+        assert_ne!(
+            base,
+            targets_commitment(&[8u8; 32], &[a, b, c]),
+            "salt must affect commitment"
+        );
         // count 0 is valid; commitment still computed (non-trivial)
         assert_ne!(targets_commitment(&salt, &[]), [0u8; 32]);
         // exact frozen formula: SHA256(TAG || salt || concat(len(u8) || principal_bytes) sorted)
@@ -1022,7 +1301,21 @@ mod tests {
         let index_id = p(3);
         let user_id = p(2);
         let receipt_id = receipt_id_for(&record_id, 5, &nonce);
-        let body = receipt_body_v1(&receipt_id, &nonce, index_id, user_id, &record_id, 5, &hu, &hi, &com, 111, 222, targets.len() as u32, &tc);
+        let body = receipt_body_v1(
+            &receipt_id,
+            &nonce,
+            index_id,
+            user_id,
+            &record_id,
+            5,
+            &hu,
+            &hi,
+            &com,
+            111,
+            222,
+            targets.len() as u32,
+            &tc,
+        );
 
         // leaf formula, computed independently
         let mut pre = Vec::new();
@@ -1052,11 +1345,47 @@ mod tests {
         assert_eq!(body, expected, "RECEIPT_BODY_V1 exact frozen byte layout");
 
         // receipt_committed_at (window anchor) must change the leaf
-        let body_ct = receipt_body_v1(&receipt_id, &nonce, index_id, user_id, &record_id, 5, &hu, &hi, &com, 111, 999, targets.len() as u32, &tc);
-        assert_ne!(receipt_leaf(&body), receipt_leaf(&body_ct), "receipt_committed_at must bind into the leaf");
+        let body_ct = receipt_body_v1(
+            &receipt_id,
+            &nonce,
+            index_id,
+            user_id,
+            &record_id,
+            5,
+            &hu,
+            &hi,
+            &com,
+            111,
+            999,
+            targets.len() as u32,
+            &tc,
+        );
+        assert_ne!(
+            receipt_leaf(&body),
+            receipt_leaf(&body_ct),
+            "receipt_committed_at must bind into the leaf"
+        );
         // uninstall_completed_at must change the leaf
-        let body_un = receipt_body_v1(&receipt_id, &nonce, index_id, user_id, &record_id, 5, &hu, &hi, &com, 333, 222, targets.len() as u32, &tc);
-        assert_ne!(receipt_leaf(&body), receipt_leaf(&body_un), "uninstall_completed_at must bind into the leaf");
+        let body_un = receipt_body_v1(
+            &receipt_id,
+            &nonce,
+            index_id,
+            user_id,
+            &record_id,
+            5,
+            &hu,
+            &hi,
+            &com,
+            333,
+            222,
+            targets.len() as u32,
+            &tc,
+        );
+        assert_ne!(
+            receipt_leaf(&body),
+            receipt_leaf(&body_un),
+            "uninstall_completed_at must bind into the leaf"
+        );
     }
 
     /// spec §2/§9: the witness decodes as an IC HashTree, reconstructs the certified root, and
@@ -1100,8 +1429,7 @@ mod tests {
         const CD_EXPECTED_DIGEST: &str = "eb5c5b2195e62d996b84c9bcc8259d19a83786a2f59e0878cec84c811f669aa0";
 
         let cbor = hex::decode(CD_EXAMPLE_TREE_CBOR).unwrap();
-        let tree: HashTree =
-            serde_cbor::from_slice(&cbor).expect("CD's example tree must decode as an IC HashTree");
+        let tree: HashTree = serde_cbor::from_slice(&cbor).expect("CD's example tree must decode as an IC HashTree");
         assert_eq!(
             hex::encode(tree.digest()),
             CD_EXPECTED_DIGEST,
@@ -1139,6 +1467,158 @@ mod tests {
         assert_eq!(s.frozen_receipt_leaves(), vec![(receipt_id, [4u8; 32])]);
     }
 
+    #[test]
+    fn index_evidence_store_is_insert_only_via_cvdr_store() {
+        use crate::model::cvdr_index_evidence::{IndexCodeIdentityEvidence, IndexEvidenceInsertError};
+
+        let mut s = CvdrStore::default();
+        let record_id = record_id_for(p(1).into());
+        let receipt_id = receipt_id_for(&record_id, 1, &[3u8; 32]);
+        let evidence = IndexCodeIdentityEvidence {
+            certificate_bytes: vec![0xaa, 0xbb],
+        };
+        assert_eq!(
+            s.insert_index_evidence(receipt_id, evidence.clone()),
+            Err(IndexEvidenceInsertError::FrozenPackageMissing)
+        );
+
+        let pkg = FrozenCvdrPackage {
+            receipt_body: vec![1, 2, 3],
+            receipt_hash: [4u8; 32],
+            tree_root: [5u8; 32],
+            witness_bytes: vec![6, 7],
+            certificate_bytes: vec![8, 9],
+            certificate_time: 1234,
+        };
+        assert_eq!(s.insert_frozen_package(receipt_id, record_id, 1, pkg), Ok(()));
+        assert_eq!(s.insert_index_evidence(receipt_id, evidence.clone()), Ok(()));
+        assert!(s.has_index_evidence(&receipt_id));
+        assert_eq!(s.index_evidence_count(), 1);
+        assert_eq!(
+            s.insert_index_evidence(
+                receipt_id,
+                IndexCodeIdentityEvidence {
+                    certificate_bytes: vec![0xff],
+                }
+            ),
+            Err(IndexEvidenceInsertError::AlreadyExists)
+        );
+        assert_eq!(s.get_index_evidence(&receipt_id), Some(evidence));
+    }
+
+    #[test]
+    fn frozen_alone_does_not_imply_index_evidence() {
+        let mut s = CvdrStore::default();
+        let record_id = record_id_for(p(2).into());
+        let receipt_id = receipt_id_for(&record_id, 2, &[9u8; 32]);
+        let pkg = FrozenCvdrPackage {
+            receipt_body: vec![1],
+            receipt_hash: [2u8; 32],
+            tree_root: [3u8; 32],
+            witness_bytes: vec![4],
+            certificate_bytes: vec![5],
+            certificate_time: 1,
+        };
+        assert_eq!(s.insert_frozen_package(receipt_id, record_id, 2, pkg), Ok(()));
+        assert!(!s.has_index_evidence(&receipt_id));
+        assert_eq!(s.get_index_evidence(&receipt_id), None);
+        assert_eq!(s.index_evidence_count(), 0);
+    }
+
+    #[test]
+    fn index_evidence_requires_matching_receipt_frozen_package() {
+        use crate::model::cvdr_index_evidence::{IndexCodeIdentityEvidence, IndexEvidenceInsertError};
+
+        let mut s = CvdrStore::default();
+        let record_a = record_id_for(p(3).into());
+        let receipt_a = receipt_id_for(&record_a, 1, &[1u8; 32]);
+        let receipt_b = receipt_id_for(&record_a, 2, &[2u8; 32]);
+        let pkg = FrozenCvdrPackage {
+            receipt_body: vec![1],
+            receipt_hash: [2u8; 32],
+            tree_root: [3u8; 32],
+            witness_bytes: vec![4],
+            certificate_bytes: vec![5],
+            certificate_time: 1,
+        };
+        assert_eq!(s.insert_frozen_package(receipt_a, record_a, 1, pkg), Ok(()));
+        assert_eq!(
+            s.insert_index_evidence(
+                receipt_b,
+                IndexCodeIdentityEvidence {
+                    certificate_bytes: vec![0x11],
+                }
+            ),
+            Err(IndexEvidenceInsertError::FrozenPackageMissing)
+        );
+        assert!(!s.has_index_evidence(&receipt_a));
+        assert!(!s.has_index_evidence(&receipt_b));
+    }
+
+    #[test]
+    fn index_evidence_empty_cert_rejected_after_frozen_exists() {
+        use crate::model::cvdr_index_evidence::{IndexCodeIdentityEvidence, IndexEvidenceInsertError};
+
+        let mut s = CvdrStore::default();
+        let record_id = record_id_for(p(4).into());
+        let receipt_id = receipt_id_for(&record_id, 1, &[4u8; 32]);
+        let pkg = FrozenCvdrPackage {
+            receipt_body: vec![1],
+            receipt_hash: [2u8; 32],
+            tree_root: [3u8; 32],
+            witness_bytes: vec![4],
+            certificate_bytes: vec![5],
+            certificate_time: 1,
+        };
+        assert_eq!(s.insert_frozen_package(receipt_id, record_id, 1, pkg), Ok(()));
+        assert_eq!(
+            s.insert_index_evidence(
+                receipt_id,
+                IndexCodeIdentityEvidence {
+                    certificate_bytes: vec![],
+                }
+            ),
+            Err(IndexEvidenceInsertError::EmptyCertificate)
+        );
+        assert!(!s.has_index_evidence(&receipt_id));
+    }
+
+    #[test]
+    fn frozen_receipt_ids_missing_index_evidence_lists_only_pending() {
+        use crate::model::cvdr_index_evidence::IndexCodeIdentityEvidence;
+
+        let mut s = CvdrStore::default();
+        let record_id = record_id_for(p(5).into());
+        let receipt_a = receipt_id_for(&record_id, 1, &[5u8; 32]);
+        let receipt_b = receipt_id_for(&record_id, 2, &[6u8; 32]);
+        let pkg = |n: u8| FrozenCvdrPackage {
+            receipt_body: vec![n],
+            receipt_hash: [n; 32],
+            tree_root: [n; 32],
+            witness_bytes: vec![n],
+            certificate_bytes: vec![n],
+            certificate_time: n as u64,
+        };
+        assert_eq!(s.insert_frozen_package(receipt_a, record_id, 1, pkg(1)), Ok(()));
+        assert_eq!(s.insert_frozen_package(receipt_b, record_id, 2, pkg(2)), Ok(()));
+        let mut missing = s.frozen_receipt_ids_missing_index_evidence();
+        missing.sort();
+        let mut expected = vec![receipt_a, receipt_b];
+        expected.sort();
+        assert_eq!(missing, expected);
+
+        assert_eq!(
+            s.insert_index_evidence(
+                receipt_a,
+                IndexCodeIdentityEvidence {
+                    certificate_bytes: vec![0xaa],
+                }
+            ),
+            Ok(())
+        );
+        assert_eq!(s.frozen_receipt_ids_missing_index_evidence(), vec![receipt_b]);
+    }
+
     // ---- Slice 2: §6 store-gate verification, proven with REAL mainnet A1 certificate bytes ----
 
     /// The reused BLS -> subnet delegation -> NNS -> `certified_data` verification path accepts a
@@ -1173,6 +1653,16 @@ mod tests {
         );
         assert_eq!(v.cert_time_ns, time_ns, "cert /time round-trips");
 
+        // INDEX path: commitment certificates do not carry `/canister/.../module_hash`.
+        assert_eq!(
+            verify_index_module_hash_evidence(CERT, self_id, constants::IC_ROOT_KEY, now_ms, None),
+            Err(IndexEvidenceRejectReason::ModuleHashMissing)
+        );
+        assert_eq!(
+            verify_index_module_hash_evidence(&[0xde, 0xad, 0xbe, 0xef], self_id, constants::IC_ROOT_KEY, now_ms, None),
+            Err(IndexEvidenceRejectReason::Certificate(CertRejectReason::CborDecodeFailed))
+        );
+
         // NEGATIVE (distinct reasons):
         // (a) garbage bytes — not a decodable certificate.
         assert_eq!(
@@ -1205,6 +1695,67 @@ mod tests {
             Err(CertRejectReason::Stale),
             "expired freshness -> Stale"
         );
+
+        // Independent range-auth taxonomy must stay distinct (Stef B1 / D2).
+        assert_ne!(
+            CertRejectReason::CanisterNotInRange.as_str(),
+            CertRejectReason::CanisterRangesMissing.as_str()
+        );
+        assert_ne!(
+            CertRejectReason::CanisterNotInRange.as_str(),
+            CertRejectReason::CanisterRangesMalformed.as_str()
+        );
+        assert_eq!(
+            map_range_auth_error(crate::model::cvdr_canister_ranges::RangeAuthError::NotInRange),
+            CertRejectReason::CanisterNotInRange
+        );
+        assert_eq!(
+            map_range_auth_error(crate::model::cvdr_canister_ranges::RangeAuthError::RangesMissing),
+            CertRejectReason::CanisterRangesMissing
+        );
+        assert_eq!(
+            map_range_auth_error(crate::model::cvdr_canister_ranges::RangeAuthError::Malformed),
+            CertRejectReason::CanisterRangesMalformed
+        );
+    }
+
+    /// Positive store-gate: genuine mainnet `read_state` certificate for
+    /// `/canister/<OpenChat LUI>/module_hash` verifies against the NNS root and
+    /// yields a non-empty module hash + cert time.
+    #[test]
+    fn verify_index_module_hash_accepts_real_mainnet_module_hash_cert() {
+        use ic_cbor::CertificateToCbor;
+        use ic_certification::{Certificate, LookupResult};
+
+        const CERT: &[u8] = include_bytes!("testdata/mainnet_module_hash_certificate.bin");
+        let self_id = Principal::from_text("nq4qv-wqaaa-aaaaf-bhdgq-cai").unwrap();
+        let cert = Certificate::from_cbor(CERT).unwrap();
+        let time_ns = match cert.tree.lookup_path([b"time".as_ref()]) {
+            LookupResult::Found(t) => leb128_u64(t),
+            _ => panic!("no /time in mainnet module_hash fixture"),
+        };
+        let now_ms = time_ns / 1_000_000;
+
+        let v = verify_index_module_hash_evidence(CERT, self_id, constants::IC_ROOT_KEY, now_ms, None)
+            .expect("mainnet module_hash certificate must verify");
+        assert_eq!(v.cert_time_ns, time_ns);
+        assert_eq!(v.module_hash.len(), 32, "WASM module hash is 32 bytes");
+        assert_ne!(v.module_hash, vec![0u8; 32]);
+
+        // Ordering gate: commitment time after cert time → reject.
+        assert_eq!(
+            verify_index_module_hash_evidence(CERT, self_id, constants::IC_ROOT_KEY, now_ms, Some(time_ns.saturating_add(1)),),
+            Err(IndexEvidenceRejectReason::CertTimeBeforeCommitment)
+        );
+        // Equal commitment time is accepted.
+        assert!(verify_index_module_hash_evidence(CERT, self_id, constants::IC_ROOT_KEY, now_ms, Some(time_ns),).is_ok());
+
+        // Wrong canister → not in delegated range (or path miss under that id).
+        let other = Principal::from_slice(&[0u8; 10]);
+        assert!(matches!(
+            verify_index_module_hash_evidence(CERT, other, constants::IC_ROOT_KEY, now_ms, None),
+            Err(IndexEvidenceRejectReason::Certificate(_)) | Err(IndexEvidenceRejectReason::ModuleHashMissing)
+        ));
     }
 
     /// HARD RULE (spec §6): the store-gate must REJECT (never Store) a fully verified certificate
@@ -1231,7 +1782,16 @@ mod tests {
         // `["receipts", receipt_id]` leaf: distinct reason `WitnessLeafNeReceiptHash` (not a
         // blanket failure — the D2 honest-taxonomy fix). (The witness DOES reconstruct the A1 root
         // == the cert's certified_data, so it passes the root check and fails at the leaf.)
-        match verify_finalization_package(CERT, WITNESS, &receipt_id, &receipt_hash, self_id, constants::IC_ROOT_KEY, now_ms, 0) {
+        match verify_finalization_package(
+            CERT,
+            WITNESS,
+            &receipt_id,
+            &receipt_hash,
+            self_id,
+            constants::IC_ROOT_KEY,
+            now_ms,
+            0,
+        ) {
             FinalizeVerdict::Reject(FinalizeRejectReason::WitnessLeafNeReceiptHash) => {}
             FinalizeVerdict::Reject(r) => panic!("expected witness_leaf_ne_receipt_hash, got Reject({})", r.as_str()),
             FinalizeVerdict::InWindow { .. } | FinalizeVerdict::Late { .. } => {
@@ -1294,11 +1854,20 @@ mod tests {
         );
 
         // witness-stage reasons (cert verifies; the witness fails to bind our receipt)
-        assert_eq!(reason(CERT, &[0x00, 0x01, 0x02], self_id, now_ms), FinalizeRejectReason::WitnessDecodeFailed);
+        assert_eq!(
+            reason(CERT, &[0x00, 0x01, 0x02], self_id, now_ms),
+            FinalizeRejectReason::WitnessDecodeFailed
+        );
         let other_witness = hex::decode(OTHER_TREE_CBOR).unwrap();
-        assert_eq!(reason(CERT, &other_witness, self_id, now_ms), FinalizeRejectReason::WitnessRootNeCertifiedData);
+        assert_eq!(
+            reason(CERT, &other_witness, self_id, now_ms),
+            FinalizeRejectReason::WitnessRootNeCertifiedData
+        );
         // A1 witness reconstructs the A1 root but has no ["receipts", rid] leaf -> leaf mismatch.
-        assert_eq!(reason(CERT, WITNESS, self_id, now_ms), FinalizeRejectReason::WitnessLeafNeReceiptHash);
+        assert_eq!(
+            reason(CERT, WITNESS, self_id, now_ms),
+            FinalizeRejectReason::WitnessLeafNeReceiptHash
+        );
     }
 
     /// spec §6 privacy: capture scrubs the salt + raw cleanup-target list from the retained draft,
@@ -1339,5 +1908,69 @@ mod tests {
         assert_eq!(draft.finalize_last_attempt_at, 333);
         assert_eq!(draft.stage, DraftStage::CertificateCaptured);
         assert_eq!(draft.receipt_id, [3u8; 32]);
+    }
+
+    #[test]
+    fn reveal_wire_json_is_sorted_hex_and_schema_tagged() {
+        let salt = [0xABu8; 32];
+        let a = p(3);
+        let b = p(1);
+        let json = reveal_wire_canonical_json(&salt, &[a, b]);
+        let v: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        assert_eq!(v["schema"], REVEAL_SCHEMA_ID);
+        assert_eq!(v["version"], REVEAL_VERSION);
+        assert_eq!(v["encoding"], REVEAL_ENCODING);
+        assert_eq!(v["salt"], hex::encode(salt));
+        let targets = v["targets"].as_array().unwrap();
+        assert_eq!(targets.len(), 2);
+        // sorted by raw principal bytes: p(1) before p(3)
+        assert_eq!(targets[0], b.to_text());
+        assert_eq!(targets[1], a.to_text());
+        assert_eq!(
+            targets_commitment(&salt, &[a, b]),
+            targets_commitment(&salt, &[b, a]),
+            "reveal sort must match commitment sort"
+        );
+    }
+
+    #[test]
+    fn purge_expired_prepared_scrubs_and_drops() {
+        let mut store = CvdrStore::default();
+        let mut draft = CvdrDraft {
+            user_id: p(1).into(),
+            user_canister_id: p(1),
+            index_canister_id: p(2),
+            record_id: [1u8; 32],
+            deletion_seq: 1,
+            nonce: [2u8; 32],
+            receipt_id: [9u8; 32],
+            module_hash_pre: vec![],
+            executor_module_hash: vec![],
+            h_user_pre: [0u8; 32],
+            h_index: [0u8; 32],
+            commitment: [0u8; 32],
+            salt: [0xCDu8; 32],
+            canisters_to_notify: vec![p(5)],
+            uninstall_completed_at: 0,
+            receipt_committed_at: 0,
+            finalize_attempt: 0,
+            finalize_last_attempt_at: 0,
+            created_at: 1,
+            attempt: 0,
+            stage: DraftStage::Prepared,
+        };
+        store.upsert_draft(draft.clone());
+        assert_eq!(store.purge_expired_prepared(1 + PREPARED_DRAFT_TTL_MS), 0);
+        assert!(store.get_draft(&p(1)).is_some());
+        assert_eq!(store.purge_expired_prepared(2 + PREPARED_DRAFT_TTL_MS), 1);
+        assert!(store.get_draft(&p(1)).is_none());
+        assert!(store.find_any_draft_by_receipt_id(&draft.receipt_id).is_none());
+        // fresh prepared not purged
+        draft.created_at = 2 + PREPARED_DRAFT_TTL_MS;
+        draft.user_canister_id = p(7);
+        draft.receipt_id = [8u8; 32];
+        store.upsert_draft(draft);
+        assert_eq!(store.purge_expired_prepared(2 + PREPARED_DRAFT_TTL_MS), 0);
+        assert!(store.get_draft(&p(7)).is_some());
     }
 }

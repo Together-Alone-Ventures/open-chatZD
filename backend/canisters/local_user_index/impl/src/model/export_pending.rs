@@ -75,14 +75,19 @@ impl Storable for ExportPendingRecord {
 }
 
 impl ExportPending {
+    // Mutators / drain helpers are banked (M7: do not reactivate export_pending /
+    // parked drain). Kept for stable layout + metrics (`len` / uninstall count).
+    #[expect(dead_code)]
     pub fn upsert(&mut self, record: ExportPendingRecord) {
         self.map.insert(record.user_canister_id, record);
     }
 
+    #[expect(dead_code)]
     pub fn get(&self, user_canister_id: &CanisterId) -> Option<ExportPendingRecord> {
         self.map.get(user_canister_id)
     }
 
+    #[expect(dead_code)]
     pub fn remove(&mut self, user_canister_id: &CanisterId) -> Option<ExportPendingRecord> {
         self.map.remove(user_canister_id)
     }
@@ -103,6 +108,7 @@ impl ExportPending {
     /// Drain-eligible records whose `next_retry_at` is due — BOTH `Parked` (export
     /// not yet confirmed) and `ExportedUninstallPending` (export done, uninstall
     /// pending) are self-healed by the drain.
+    #[expect(dead_code)]
     pub fn due_for_retry(&self, now: TimestampMillis) -> Vec<ExportPendingRecord> {
         self.map
             .iter()
@@ -111,6 +117,7 @@ impl ExportPending {
             .collect()
     }
 
+    #[expect(dead_code)]
     pub fn has_retryable(&self) -> bool {
         self.map.iter().any(|e| is_drain_eligible(&e.value().status))
     }

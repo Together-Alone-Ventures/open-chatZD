@@ -47,6 +47,7 @@
     import Router from "./Router.svelte";
     import Snow from "@shared_components/Snow.svelte";
     import UpgradeBanner from "./UpgradeBanner.svelte";
+    import CvdrAnonymousRecovery from "@shared_components/CvdrAnonymousRecovery.svelte";
     import { keyboard } from "@src/stores/keyboard.svelte";
 
     overrideItemIdKeyNameBeforeInitialisingDndZones("_id");
@@ -308,6 +309,8 @@
 <IncomingCall onJoinVideoCall={joinVideoCall} />
 
 <NotificationsBar />
+
+<CvdrAnonymousRecovery />
 
 <!-- should we perhaps just _always_ render the router -->
 {#if $identityStateStore.kind === "anon" || $identityStateStore.kind === "logging_in" || $identityStateStore.kind === "registering" || $identityStateStore.kind === "logged_in" || $identityStateStore.kind === "loading_user"}

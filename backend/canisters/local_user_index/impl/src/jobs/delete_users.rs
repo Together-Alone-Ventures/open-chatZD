@@ -1,4 +1,4 @@
-//! CVDR-on-Index delete leg (CVDR finalization rework — spec §2/§3/§5/§8).
+//! CVDR-on-Index delete leg (CVDR finalization rework — spec §2/§3/§5/§8/§11.4).
 //!
 //! The local_user_index drives a user deletion through a forward-only, durable,
 //! upgrade-surviving state machine. **OpenChat-native user deletion completes inside THIS job,
@@ -7,49 +7,66 @@
 //! removal + membership-removal notifications) — it is NOT gated on any finalizer. The receipt's
 //! claim is "targets captured; notification attempted or queued" (never "confirmed erased").
 //!
+//! Spec §11.4 sequencing: `prepare_account_deletion` must create a [`DraftStage::Prepared`] draft
+//! (and hand RevealWire to the user) **before** Identity enqueue reaches this job. Cold capture
+//! inside the job is removed — missing prepare → `prepare_required` retry.
+//!
 //! CVDR finalization (capturing the IC certificate into the immutable frozen package) is a
-//! SEPARATE, CVDR-only step that never holds the user deletion half-open. Its store is gated on
-//! FULL on-chain verification BEFORE store (spec §6 hard security rule — full BLS -> NNS + witness
-//! binding; a response failing verification is discarded and retried, never stored, so a single
-//! untrusted node cannot poison the first-wins slot). In Slice 1 the self-finalization loop (spec
-//! §6) and the `finalize_cvdr` backstop (spec §7) are not yet built — `finalize_cvdr` is an inert
-//! compile-safe stub (spec §8b). A published receipt therefore rests at `AwaitingCertificate`
-//! meaning "user fully deleted; only the CVDR certificate is still pending".
+//! SEPARATE, CVDR-only step (self-finalization §6 / backstop §7) that never holds the user
+//! deletion half-open. Its store is gated on FULL on-chain verification BEFORE store.
 //!
 //! Leg order, per in-flight [`CvdrDraft`] `stage`:
-//! 1. `Captured`            capture H_user_pre (`canister_status` module hash) + targets +
-//!                          record_id + `salt` (raw_rand), allocate `deletion_seq` + nonce,
-//!                          persist the draft BEFORE any destructive step.
-//! 2. (Captured -> )        `uninstall_code`, confirm no-module, record `uninstall_completed_at`.
-//! 3. `Uninstalled`         ATOMIC publish (spec §3): insert the receipt leaf into the certified
-//!                          receipt tree + `certified_data_set(root)` + record
-//!                          `receipt_committed_at`, all in one message with no `await` between;
-//!                          then run the cleanup (spec §8); advance to `AwaitingCertificate`.
-//!                          No single-slot guard — the tree holds many receipts under one root.
-//! 4. `AwaitingCertificate` user deletion is DONE. Awaiting only the CVDR certificate, captured
-//!                          by the CVDR-only finalization step (Slice 2).
+//! 1. `Prepared` (from `prepare_account_deletion`) salt+targets+receipt_id; RevealWire
+//!    already handed to the user. Not finalizable; not `/cvdr_live`.
+//! 2. (`Prepared` -> ) `uninstall_code`, confirm no-module, record `uninstall_completed_at`.
+//! 3. `Uninstalled` ATOMIC publish (spec §3) + cleanup (spec §8) → `AwaitingCertificate`.
+//! 4. `AwaitingCertificate` user deletion DONE; CVDR certificate pending.
 //!
 //! Forward-recovery only: every stage is idempotent and resumable from the persisted
 //! draft; nothing rolls back. The durable draft is stable-backed (survives upgrades); the
 //! certified receipt tree is heap-resident and rebuilt in post_upgrade (spec §4).
 
-use crate::model::cvdr::{self, CvdrDraft, DraftStage};
+use crate::model::cvdr::{CvdrDraft, DraftStage};
 use crate::{RuntimeState, UserIndexEvent, UserToDelete, mutate_state, read_state};
 use constants::SECOND_IN_MS;
 use ic_cdk::management_canister::CanisterStatusArgs;
 use ic_cdk_timers::TimerId;
-use rand::RngCore;
 use std::cell::Cell;
 use std::time::Duration;
 use tracing::{trace, warn};
-use types::{CanisterId, Empty, Milliseconds, UserId};
+use types::{CanisterId, Milliseconds, UserId};
 
 thread_local! {
     static TIMER_ID: Cell<Option<TimerId>> = Cell::default();
 }
 
-/// Bounded fast-retry backoff between leg attempts (transient failures / slot busy).
+/// Backoff between attempts after a transient failure. Success paths must not use this delay.
 const FAST_RETRY_INTERVAL_MS: Milliseconds = 30 * SECOND_IN_MS;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ScheduleKind {
+    Success,
+    Retry,
+}
+
+fn successor_delay_ms(kind: ScheduleKind, next_front_is_same_user: bool) -> Option<Milliseconds> {
+    match kind {
+        ScheduleKind::Success => None,
+        ScheduleKind::Retry if next_front_is_same_user => Some(FAST_RETRY_INTERVAL_MS),
+        ScheduleKind::Retry => None,
+    }
+}
+
+/// Delay to pass to `start_job_if_required` after `apply_outcome`, or `None` if the queue is idle.
+///
+/// Callers must invoke this **after** `apply_outcome` so a Retry push_back is visible at `front`.
+fn successor_timer_delay(
+    kind: ScheduleKind,
+    next_front_user: Option<UserId>,
+    attempted_user: UserId,
+) -> Option<Option<Milliseconds>> {
+    next_front_user.map(|front| successor_delay_ms(kind, front == attempted_user))
+}
 
 /// Emit a `warn!` once a retryable attempt has persisted past this count (e.g. a delete
 /// blocked indefinitely behind a stuck certified-data slot, or an absent finalizer).
@@ -80,11 +97,17 @@ fn get_next(state: &mut RuntimeState) -> Option<UserToDelete> {
 
 async fn process_user(user: UserToDelete) {
     let outcome = process_user_inner(&user).await;
+    let kind = match &outcome {
+        ProcessOutcome::AwaitingCertificate => ScheduleKind::Success,
+        ProcessOutcome::Retry { .. } => ScheduleKind::Retry,
+    };
 
     mutate_state(|state| {
         apply_outcome(state, &user, outcome);
-        let more = !state.data.users_to_delete_queue.is_empty();
-        start_job_if_required(state, more.then_some(FAST_RETRY_INTERVAL_MS));
+        let next_front = state.data.users_to_delete_queue.front().map(|u| u.user_id);
+        if let Some(delay) = successor_timer_delay(kind, next_front, user.user_id) {
+            start_job_if_required(state, delay);
+        }
     });
 }
 
@@ -140,97 +163,48 @@ pub(crate) fn complete_deletion(state: &mut RuntimeState, user_id: UserId, canis
 async fn process_user_inner(user: &UserToDelete) -> ProcessOutcome {
     let canister_id: CanisterId = user.user_id.into();
 
-    // Forward-only recovery: resume from the durable draft if present, else capture fresh.
+    // Spec §11.4: prepare must have created the draft. No cold capture in the delete job.
     let draft = match read_state(|state| state.data.cvdr.get_draft(&canister_id)) {
         Some(draft) => draft,
-        None => match capture_draft(user, canister_id).await {
-            Ok(draft) => draft,
-            Err(error_class) => return ProcessOutcome::Retry { error_class },
-        },
+        None => {
+            return ProcessOutcome::Retry {
+                error_class: "prepare_required",
+            };
+        }
     };
 
     advance_draft(draft).await
-}
-
-/// Capture the immutable pre-uninstall witnesses and persist the `Captured` draft BEFORE
-/// any destructive step. All inputs (targets, pre-uninstall module hash) are read while
-/// the user canister is still installed, so recovery never needs to re-read it.
-async fn capture_draft(user: &UserToDelete, canister_id: CanisterId) -> Result<CvdrDraft, &'static str> {
-    // Membership-removal targets — captured before uninstall.
-    let canisters_to_notify = match user_canister_c2c_client::c2c_groups_and_communities(canister_id, &Empty {}).await {
-        Ok(r) => r
-            .groups
-            .into_iter()
-            .map(|g| g.into())
-            .chain(r.communities.into_iter().map(|c| c.into()))
-            .collect::<Vec<CanisterId>>(),
-        Err(_) => return Err("groups_and_communities_unavailable"),
-    };
-
-    // H_user_pre input: the pre-uninstall module hash (the code being destroyed).
-    let module_hash_pre = match ic_cdk::management_canister::canister_status(&CanisterStatusArgs { canister_id }).await {
-        Ok(status) => status.module_hash.unwrap_or_default(),
-        Err(_) => return Err("canister_status_unavailable"),
-    };
-
-    let record_id = cvdr::record_id_for(user.user_id);
-    // Capture the executor (this index) provenance from durable deploy-supplied state at the
-    // SAME pre-uninstall point as the target's module_hash_pre. This captured value is
-    // authoritative for H_index; a mid-flight index upgrade cannot change it.
-    let (deletion_seq, nonce, now, index_canister_id, executor_module_hash) = mutate_state(|state| {
-        let seq = state.data.cvdr_next_deletion_seq;
-        state.data.cvdr_next_deletion_seq = seq.saturating_add(1);
-        let mut nonce = [0u8; 32];
-        state.env.rng().fill_bytes(&mut nonce);
-        (seq, nonce, state.env.now(), state.env.canister_id(), state.data.executor_module_hash.to_vec())
-    });
-
-    let h_user_pre = cvdr::h_user_pre(canister_id, &module_hash_pre);
-    let h_index = cvdr::h_index(index_canister_id, &executor_module_hash);
-    let commitment = cvdr::commitment(&record_id, deletion_seq, &h_user_pre, &h_index, canister_id);
-    let receipt_id = cvdr::receipt_id_for(&record_id, deletion_seq, &nonce);
-
-    // Fresh salt for TARGETS_COMMITMENT_V1 (spec §2), from management-canister raw_rand during
-    // pre-commitments (await is fine here — the §3 atomicity rule covers only the publish message).
-    // Never reused across deletions; committed into the receipt body and handed back in the
-    // user-held reveal package (later slice).
-    let salt = utils::canister::get_random_seed().await;
-
-    let draft = CvdrDraft {
-        user_id: user.user_id,
-        user_canister_id: canister_id,
-        index_canister_id,
-        record_id,
-        deletion_seq,
-        nonce,
-        receipt_id,
-        module_hash_pre,
-        executor_module_hash,
-        h_user_pre,
-        h_index,
-        commitment,
-        salt,
-        canisters_to_notify,
-        uninstall_completed_at: 0,
-        receipt_committed_at: 0,
-        finalize_attempt: 0,
-        finalize_last_attempt_at: 0,
-        created_at: now,
-        attempt: user.attempt as u32,
-        stage: DraftStage::Captured,
-    };
-    mutate_state(|state| state.data.cvdr.upsert_draft(draft.clone()));
-    Ok(draft)
 }
 
 /// Advance the draft forward by exactly one stage per attempt (each step idempotent).
 async fn advance_draft(draft: CvdrDraft) -> ProcessOutcome {
     let canister_id = draft.user_canister_id;
     match draft.stage {
-        DraftStage::Captured => {
+        // Prepared (spec §11.4) and legacy Captured: irreversible uninstall leg.
+        DraftStage::Prepared | DraftStage::Captured => {
+            // Flip Prepared → Captured *before* the first await so a mid-uninstall upgrade
+            // re-enqueues via `resume_in_flight_drafts` (which intentionally skips pure Prepared
+            // drafts that never entered the delete commit).
+            if draft.stage == DraftStage::Prepared {
+                let flipped = mutate_state(|state| {
+                    let mut d = state.data.cvdr.get_draft(&canister_id)?;
+                    if d.stage == DraftStage::Prepared {
+                        d.stage = DraftStage::Captured;
+                        state.data.cvdr.upsert_draft(d);
+                    }
+                    Some(())
+                });
+                if flipped.is_none() {
+                    return ProcessOutcome::Retry {
+                        error_class: "draft_lost",
+                    };
+                }
+            }
             // `uninstall_code` (idempotent) then confirm no-module before advancing.
             if utils::canister::uninstall(canister_id).await.is_err() {
-                return ProcessOutcome::Retry { error_class: "uninstall_failed" };
+                return ProcessOutcome::Retry {
+                    error_class: "uninstall_failed",
+                };
             }
             match ic_cdk::management_canister::canister_status(&CanisterStatusArgs { canister_id }).await {
                 Ok(status) if status.module_hash.is_none() => {
@@ -247,11 +221,17 @@ async fn advance_draft(draft: CvdrDraft) -> ProcessOutcome {
                     });
                     match advanced {
                         Some(()) => advance_publish(canister_id),
-                        None => ProcessOutcome::Retry { error_class: "draft_lost" },
+                        None => ProcessOutcome::Retry {
+                            error_class: "draft_lost",
+                        },
                     }
                 }
-                Ok(_) => ProcessOutcome::Retry { error_class: "module_still_present" },
-                Err(_) => ProcessOutcome::Retry { error_class: "status_unavailable" },
+                Ok(_) => ProcessOutcome::Retry {
+                    error_class: "module_still_present",
+                },
+                Err(_) => ProcessOutcome::Retry {
+                    error_class: "status_unavailable",
+                },
             }
         }
         DraftStage::Uninstalled => advance_publish(canister_id),
@@ -277,7 +257,9 @@ fn advance_publish(canister_id: CanisterId) -> ProcessOutcome {
     let now_ns = ic_cdk::api::time();
     mutate_state(|state| {
         let Some(mut draft) = state.data.cvdr.get_draft(&canister_id) else {
-            return ProcessOutcome::Retry { error_class: "draft_lost" };
+            return ProcessOutcome::Retry {
+                error_class: "draft_lost",
+            };
         };
         let first_publish = draft.stage != DraftStage::AwaitingCertificate;
         if draft.receipt_committed_at == 0 {
@@ -307,32 +289,59 @@ enum ProcessOutcome {
     Retry { error_class: &'static str },
 }
 
+/// Stages whose receipt leaf must be re-inserted into the heap tree after upgrade (spec §4 / M7).
+/// `FailedStuck` remains finalizable via §7 backstop and still needs `/cvdr_live` witnesses.
+pub(crate) fn should_reinsert_receipt_leaf(stage: DraftStage) -> bool {
+    matches!(stage, DraftStage::AwaitingCertificate | DraftStage::FailedStuck)
+}
+
+/// Stages that should re-enter the delete queue after upgrade (irreversible mid-flight only).
+pub(crate) fn should_resume_delete_queue(stage: DraftStage) -> bool {
+    matches!(
+        stage,
+        DraftStage::Captured | DraftStage::Uninstalled | DraftStage::AwaitingCertificate
+    )
+}
+
+/// Rebuild heap receipt-tree leaves from durable CVDR state (frozen packages + finalizable drafts).
+/// Does not touch `certified_data` — caller asserts the root after rebuild.
+pub(crate) fn rebuild_receipt_tree_from_durable(
+    cvdr: &crate::model::cvdr::CvdrStore,
+    tree: &mut crate::model::cvdr::ReceiptTree,
+) {
+    for (receipt_id, receipt_hash) in cvdr.frozen_receipt_leaves() {
+        tree.insert(&receipt_id, &receipt_hash);
+    }
+    for draft in cvdr.all_drafts() {
+        if should_reinsert_receipt_leaf(draft.stage) {
+            tree.insert(&draft.receipt_id, &draft.receipt_hash());
+        }
+    }
+}
+
 /// Post-upgrade CVDR recovery. Two pieces of state do not survive a local_user_index upgrade:
 /// the heap-resident certified receipt tree, and the IC `certified_data` (cleared on upgrade).
 ///
 /// Per spec §4, rebuild the receipt tree from durable state — every frozen package PLUS every
-/// in-flight `AwaitingCertificate` draft (published-but-unfinalized receipts must stay in the
-/// tree so their certificate can still be captured) — then re-assert `certified_data_set(root)`.
+/// in-flight `AwaitingCertificate` draft **and** `FailedStuck` draft (published-but-unfinalized
+/// receipts must stay in the tree so `/cvdr_live` + §7 backstop still work after upgrade) —
+/// then re-assert `certified_data_set(root)`.
 /// Also re-enqueue any draft whose user was popped off the volatile delete queue before the
 /// upgrade, so the forward-only job drives it to completion. Called from `init_state`; on a
 /// fresh install the stores are empty and this is a no-op.
 pub(crate) fn resume_in_flight_drafts(state: &mut RuntimeState) {
-    // Finalized receipts (frozen packages) — reuse the stored receipt_hash verbatim.
-    for (receipt_id, receipt_hash) in state.data.cvdr.frozen_receipt_leaves() {
-        state.data.cvdr_receipt_tree.insert(&receipt_id, &receipt_hash);
-    }
+    rebuild_receipt_tree_from_durable(&state.data.cvdr, &mut state.data.cvdr_receipt_tree);
 
     let drafts = state.data.cvdr.all_drafts();
-    let queued: std::collections::HashSet<UserId> =
-        state.data.users_to_delete_queue.iter().map(|u| u.user_id).collect();
+    let queued: std::collections::HashSet<UserId> = state.data.users_to_delete_queue.iter().map(|u| u.user_id).collect();
 
     for draft in &drafts {
-        // Published-but-unfinalized receipts: recompute the leaf and re-insert.
-        if draft.stage == DraftStage::AwaitingCertificate {
-            state.data.cvdr_receipt_tree.insert(&draft.receipt_id, &draft.receipt_hash());
-        }
-        // Re-enqueue any draft the queue lost when its user was popped before the upgrade.
-        if !queued.contains(&draft.user_id) {
+        // Re-enqueue mid-flight irreversible deletions the queue lost on upgrade.
+        // Do NOT enqueue `Prepared` — that would uninstall without user RevealWire ack /
+        // identity delete commit (spec §11.4).
+        // FailedStuck is not re-queued for uninstall (already past uninstall); self-finalize
+        // / backstop own remediation.
+        if should_resume_delete_queue(draft.stage) && !queued.contains(&draft.user_id) {
             state.data.users_to_delete_queue.push_back(UserToDelete {
                 user_id: draft.user_id,
                 #[allow(deprecated)]
@@ -345,5 +354,176 @@ pub(crate) fn resume_in_flight_drafts(state: &mut RuntimeState) {
     // Re-assert the certified root over the rebuilt tree (spec §4 upgrade rule).
     if !state.data.cvdr_receipt_tree.is_empty() {
         ic_cdk::api::certified_data_set(state.data.cvdr_receipt_tree.root());
+    }
+}
+
+#[cfg(test)]
+mod scheduler_tests {
+    use super::*;
+    use candid::Principal;
+    use std::collections::VecDeque;
+    use types::UserId;
+
+    fn uid(byte: u8) -> UserId {
+        UserId::from(Principal::from_slice(&[byte; 29]))
+    }
+
+    /// Mirrors `apply_outcome` queue effects then `successor_timer_delay` (ordering under test).
+    fn delay_after(kind: ScheduleKind, queue_after_pop: &[u8], attempted: u8) -> Option<Option<u64>> {
+        let mut q: VecDeque<u8> = queue_after_pop.iter().copied().collect();
+        if matches!(kind, ScheduleKind::Retry) {
+            q.push_back(attempted);
+        }
+        let next_front = q.front().copied().map(uid);
+        successor_timer_delay(kind, next_front, uid(attempted))
+    }
+
+    #[test]
+    fn resume_stage_policy_matches_helpers() {
+        assert!(should_reinsert_receipt_leaf(DraftStage::AwaitingCertificate));
+        assert!(should_reinsert_receipt_leaf(DraftStage::FailedStuck));
+        assert!(!should_reinsert_receipt_leaf(DraftStage::Prepared));
+        assert!(!should_reinsert_receipt_leaf(DraftStage::Captured));
+        assert!(!should_reinsert_receipt_leaf(DraftStage::CertificateCaptured));
+        assert!(!should_reinsert_receipt_leaf(DraftStage::LateFinalized));
+
+        assert!(should_resume_delete_queue(DraftStage::Captured));
+        assert!(should_resume_delete_queue(DraftStage::Uninstalled));
+        assert!(should_resume_delete_queue(DraftStage::AwaitingCertificate));
+        assert!(!should_resume_delete_queue(DraftStage::FailedStuck));
+        assert!(!should_resume_delete_queue(DraftStage::Prepared));
+    }
+
+    #[test]
+    fn rebuild_tree_reinserts_failed_stuck_leaf_for_witness() {
+        use crate::model::cvdr::{CvdrDraft, CvdrStore, ReceiptTree};
+        use ic_certification::{HashTree, LookupResult};
+
+        let mut store = CvdrStore::default();
+        let stuck = CvdrDraft {
+            user_id: uid(1),
+            user_canister_id: Principal::from_slice(&[1u8; 29]),
+            index_canister_id: Principal::from_slice(&[2u8; 29]),
+            record_id: [1u8; 32],
+            deletion_seq: 1,
+            nonce: [2u8; 32],
+            receipt_id: [9u8; 32],
+            module_hash_pre: vec![],
+            executor_module_hash: vec![7u8; 32],
+            h_user_pre: [3u8; 32],
+            h_index: [4u8; 32],
+            commitment: [5u8; 32],
+            salt: [0xABu8; 32],
+            canisters_to_notify: vec![Principal::from_slice(&[5u8; 29])],
+            uninstall_completed_at: 111,
+            receipt_committed_at: 222,
+            finalize_attempt: 3,
+            finalize_last_attempt_at: 333,
+            created_at: 1,
+            attempt: 0,
+            stage: DraftStage::FailedStuck,
+        };
+        let expected_hash = stuck.receipt_hash();
+        let stuck_id = stuck.receipt_id;
+        store.upsert_draft(stuck);
+
+        let prepared_id = [7u8; 32];
+        store.upsert_draft(CvdrDraft {
+            user_id: uid(2),
+            user_canister_id: Principal::from_slice(&[8u8; 29]),
+            index_canister_id: Principal::from_slice(&[2u8; 29]),
+            record_id: [8u8; 32],
+            deletion_seq: 1,
+            nonce: [2u8; 32],
+            receipt_id: prepared_id,
+            module_hash_pre: vec![],
+            executor_module_hash: vec![],
+            h_user_pre: [0u8; 32],
+            h_index: [0u8; 32],
+            commitment: [0u8; 32],
+            salt: [0xCDu8; 32],
+            canisters_to_notify: vec![],
+            uninstall_completed_at: 0,
+            receipt_committed_at: 0,
+            finalize_attempt: 0,
+            finalize_last_attempt_at: 0,
+            created_at: 1,
+            attempt: 0,
+            stage: DraftStage::Prepared,
+        });
+
+        // Simulate upgrade: heap tree wiped, rebuild from durable drafts.
+        let mut tree = ReceiptTree::default();
+        rebuild_receipt_tree_from_durable(&store, &mut tree);
+        assert!(!tree.is_empty());
+
+        let witness: HashTree = serde_cbor::from_slice(&tree.witness_cbor(&stuck_id)).expect("witness decodes");
+        assert_eq!(witness.digest(), tree.root());
+        match witness.lookup_path([b"receipts".as_slice(), stuck_id.as_slice()]) {
+            LookupResult::Found(v) => assert_eq!(v, expected_hash.as_slice()),
+            other => panic!("FailedStuck leaf missing after rebuild: {other:?}"),
+        }
+        if let LookupResult::Found(_) = witness.lookup_path([b"receipts".as_slice(), prepared_id.as_slice()]) {
+            panic!("Prepared must not appear as a receipt leaf")
+        }
+
+        // Cleanup shared stable draft memory for other unit tests in this process.
+        store.remove_draft(&Principal::from_slice(&[1u8; 29]));
+        store.remove_draft(&Principal::from_slice(&[8u8; 29]));
+    }
+
+    #[test]
+    fn success_always_schedules_immediately() {
+        assert_eq!(successor_delay_ms(ScheduleKind::Success, true), None);
+        assert_eq!(successor_delay_ms(ScheduleKind::Success, false), None);
+    }
+
+    #[test]
+    fn retry_backs_off_only_when_same_user_is_next() {
+        assert_eq!(successor_delay_ms(ScheduleKind::Retry, true), Some(FAST_RETRY_INTERVAL_MS));
+        assert_eq!(successor_delay_ms(ScheduleKind::Retry, false), None);
+    }
+
+    #[test]
+    fn retry_backoff_is_thirty_seconds() {
+        assert_eq!(FAST_RETRY_INTERVAL_MS, 30_000);
+    }
+
+    #[test]
+    fn success_with_others_waiting_runs_immediately() {
+        assert_eq!(delay_after(ScheduleKind::Success, &[2, 3], 1), Some(None));
+    }
+
+    #[test]
+    fn success_alone_leaves_queue_idle() {
+        assert_eq!(delay_after(ScheduleKind::Success, &[], 1), None);
+    }
+
+    #[test]
+    fn retry_alone_backs_off_after_requeue() {
+        assert_eq!(delay_after(ScheduleKind::Retry, &[], 1), Some(Some(FAST_RETRY_INTERVAL_MS)));
+    }
+
+    #[test]
+    fn retry_with_other_ahead_runs_immediately() {
+        assert_eq!(delay_after(ScheduleKind::Retry, &[2], 1), Some(None));
+    }
+
+    #[test]
+    fn retry_does_not_backoff_when_same_user_is_only_behind_another() {
+        // After push_back(1), front is 2 — must not treat attempted user as front.
+        assert_eq!(delay_after(ScheduleKind::Retry, &[2, 3], 1), Some(None));
+    }
+
+    #[test]
+    fn k_successes_never_accumulate_thirty_second_gaps() {
+        let mut forced_backoff_ms = 0u64;
+        for i in 0..8u8 {
+            let remaining: Vec<u8> = ((i + 1)..8).collect();
+            if let Some(Some(ms)) = delay_after(ScheduleKind::Success, &remaining, i) {
+                forced_backoff_ms = forced_backoff_ms.saturating_add(ms);
+            }
+        }
+        assert_eq!(forced_backoff_ms, 0);
     }
 }

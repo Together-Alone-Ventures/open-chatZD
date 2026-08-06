@@ -20,6 +20,7 @@ import type {
     MultiUserChatIdentifier,
     PayForPremiumItemResponse,
     PremiumItem,
+    PrepareAccountDeletionResponse,
     RegisterUserResponse,
     Tally,
     VerifiedCredentialArgs,
@@ -58,6 +59,8 @@ import {
     LocalUserIndexJoinGroupResponse,
     LocalUserIndexPayForPremiumItemArgs,
     LocalUserIndexPayForPremiumItemResponse,
+    LocalUserIndexPrepareAccountDeletionArgs,
+    LocalUserIndexPrepareAccountDeletionResponse,
     LocalUserIndexRegisterUserArgs,
     LocalUserIndexRegisterUserResponse,
     LocalUserIndexReinstateMissedDailyClaimsArgs,
@@ -94,6 +97,7 @@ import {
     joinChannelResponse,
     joinCommunityResponse,
     payForPremiumItemResponse,
+    prepareAccountDeletionResponse,
     registerUserResponse,
     withdrawFromIcpSwapResponse,
 } from "./mappers";
@@ -556,6 +560,17 @@ export class LocalUserIndexClient extends MultiCanisterMsgpackAgent {
             payForPremiumItemResponse,
             LocalUserIndexPayForPremiumItemArgs,
             LocalUserIndexPayForPremiumItemResponse,
+        );
+    }
+
+    prepareAccountDeletion(localUserIndex: string): Promise<PrepareAccountDeletionResponse> {
+        return this.update(
+            localUserIndex,
+            "prepare_account_deletion",
+            {},
+            prepareAccountDeletionResponse,
+            LocalUserIndexPrepareAccountDeletionArgs,
+            LocalUserIndexPrepareAccountDeletionResponse,
         );
     }
 

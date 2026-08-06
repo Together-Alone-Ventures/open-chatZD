@@ -59,6 +59,7 @@
     import ActiveCall from "./home/video/ActiveCall.svelte";
     import IncomingCall from "./home/video/IncomingCall.svelte";
     import VideoCallAccessRequests from "./home/video/VideoCallAccessRequests.svelte";
+    import CvdrAnonymousRecovery from "@shared_components/CvdrAnonymousRecovery.svelte";
 
     overrideItemIdKeyNameBeforeInitialisingDndZones("_id");
 
@@ -648,6 +649,8 @@
 {/if}
 
 <NotificationsBar />
+
+<CvdrAnonymousRecovery />
 
 {#if $identityStateStore.kind === "anon" || $identityStateStore.kind === "logging_in" || $identityStateStore.kind === "registering" || $identityStateStore.kind === "logged_in" || $identityStateStore.kind === "loading_user"}
     {#if !$isLoading || $reviewingTranslations}

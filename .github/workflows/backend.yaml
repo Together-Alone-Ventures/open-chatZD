@@ -23,9 +23,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Require CVDR_VERIFY_READ_TOKEN
+        env:
+          CVDR_VERIFY_READ_TOKEN: ${{ secrets.CVDR_VERIFY_READ_TOKEN }}
+        run: |
+          if [ -z "${CVDR_VERIFY_READ_TOKEN}" ]; then
+            echo "::error::CVDR_VERIFY_READ_TOKEN is required (private git deps: ICP-Delete-Leaf, zombie-core, CVDR-Verify)."
+            exit 1
+          fi
       - uses: ./.github/workflows/setup-rust
         with:
           cache: read
+          private_git_token: ${{ secrets.CVDR_VERIFY_READ_TOKEN }}
       - uses: arduino/setup-protoc@v1
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
@@ -39,9 +48,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Require CVDR_VERIFY_READ_TOKEN
+        env:
+          CVDR_VERIFY_READ_TOKEN: ${{ secrets.CVDR_VERIFY_READ_TOKEN }}
+        run: |
+          if [ -z "${CVDR_VERIFY_READ_TOKEN}" ]; then
+            echo "::error::CVDR_VERIFY_READ_TOKEN is required (private git deps: ICP-Delete-Leaf, zombie-core, CVDR-Verify)."
+            exit 1
+          fi
+      - name: Clear any PR-supplied CVDR-Verify stub
+        run: rm -rf CVDR-Verify
+      - name: Checkout CVDR-Verify sibling @ immutable SHA (pre-release pin)
+        uses: actions/checkout@v4
+        with:
+          repository: Together-Alone-Ventures/CVDR-Verify
+          # Do not use the future release tag for CI. Pin the gated sibling tip until
+          # v0.7.0 is minted once at the final release commit (Stef standing rule).
+          ref: ac64c1b881b46cda8ef909c4a23ae008f863536d
+          path: CVDR-Verify
+          token: ${{ secrets.CVDR_VERIFY_READ_TOKEN }}
+      - name: Require sibling OpenChatZD attestation module
+        run: test -f CVDR-Verify/mktd02/mktd02-verify/src/openchatzd/index_attestation.rs
       - uses: ./.github/workflows/setup-rust
         with:
           cache: read
+          private_git_token: ${{ secrets.CVDR_VERIFY_READ_TOKEN }}
       - uses: actions-rs/cargo@v1
         with:
           command: test

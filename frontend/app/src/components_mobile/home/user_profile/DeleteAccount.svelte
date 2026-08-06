@@ -18,7 +18,10 @@
     <ConfirmDeleteAccount
         bind:authenticating
         bind:deleting
-        onClose={() => (authenticating = false)} />
+        onClose={() => {
+            authenticating = false;
+            deleting = false;
+        }} />
 {/if}
 
 <SlidingPageContent title={i18nKey("Delete account")} subtitle={i18nKey("Advanced options")}>

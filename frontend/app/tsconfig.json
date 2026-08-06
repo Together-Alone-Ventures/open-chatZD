@@ -1,6 +1,8 @@
 {
     "extends": "../tsconfig.json",
     "compilerOptions": {
+        // TS6: include spans `../` (vite-env + component-lib) so inferred common root is `..`.
+        "rootDir": "..",
         "outDir": "build/out",
         "isolatedModules": true,
         "tsBuildInfoFile": null,

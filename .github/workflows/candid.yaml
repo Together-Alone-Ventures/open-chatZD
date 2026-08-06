@@ -31,9 +31,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Require CVDR_VERIFY_READ_TOKEN
+        env:
+          CVDR_VERIFY_READ_TOKEN: ${{ secrets.CVDR_VERIFY_READ_TOKEN }}
+        run: |
+          if [ -z "${CVDR_VERIFY_READ_TOKEN}" ]; then
+            echo "::error::CVDR_VERIFY_READ_TOKEN is required (private git deps: ICP-Delete-Leaf, zombie-core)."
+            exit 1
+          fi
       - uses: ./.github/workflows/setup-rust
         with:
           cache: read
+          private_git_token: ${{ secrets.CVDR_VERIFY_READ_TOKEN }}
       - name: install didc 0.3.2
         uses: supplypike/setup-bin@v1
         with:

@@ -46,6 +46,9 @@ import {
     communityRoles,
     compareRoles,
     contentTypeToPermission,
+    cvdrDownloadUrl,
+    cvdrReceiptStorageKey,
+    CVDR_RECEIPT_PENDING_KEY,
     defaultChatPermissions,
     defaultChatRules,
     deletedUser,
@@ -74,7 +77,10 @@ import {
     messageContextsEqual,
     nullMembership,
     parseBigInt,
+    parseCvdrReceiptSession,
     pinNumberFailureFromError,
+    pollCvdrHttp,
+    pollCvdrUntilSettled,
     publish,
     random64,
     removeEmailSignInSession,
@@ -83,6 +89,7 @@ import {
     setMinLogLevel,
     shouldPreprocessGate,
     storeEmailSignInSession,
+    serializeCvdrReceiptSession,
     toDer,
     toTitleCase,
     updateCreatedUser,
@@ -233,6 +240,9 @@ import {
     type PayForDiamondMembershipResponse,
     type PayForPremiumItemResponse,
     type PayForStreakInsuranceResponse,
+    type PrepareAccountDeletionResponse,
+    type CvdrPollStatus,
+    type CvdrReceiptSession,
     type PaymentGateApproval,
     type PaymentGateApprovals,
     type PendingCryptocurrencyTransfer,
@@ -744,6 +754,7 @@ export class OpenChat {
     deleteCurrentUser(
         identityKey: CryptoKeyPair,
         delegation: JsonnableDelegationChain,
+        options?: { deferLogout?: boolean },
     ): Promise<boolean> {
         if (!anonUserStore.value) {
             return this.#worker
@@ -753,7 +764,7 @@ export class OpenChat {
                     delegation,
                 })
                 .then((success) => {
-                    if (success) {
+                    if (success && !options?.deferLogout) {
                         this.clearCachedData().finally(() => this.logout());
                     }
                     return success;
@@ -761,6 +772,11 @@ export class OpenChat {
         } else {
             return Promise.resolve(false);
         }
+    }
+
+    /** Clear local state and navigate away after a deferred CVDR poll completes. */
+    finishDeleteAccountLogout(): Promise<void> {
+        return this.clearCachedData().finally(() => this.logout());
     }
 
     #chatUpdated(chatId: ChatIdentifier, updatedEvents: UpdatedEvent[]): void {
@@ -1178,10 +1194,18 @@ export class OpenChat {
     }
 
     async logout(): Promise<void> {
-        await Promise.all([
-            this.#worker.send({ kind: "logout" }),
-            this.#authClient.then((c) => c.logout()),
-        ]).then(() => window.location.replace("/"));
+        // AuthClient.logout can hang (especially local). Cap wait so callers always progress.
+        const authLogout = this.#authClient
+            .then((c) => c.logout())
+            .catch((err) => console.error("AuthClient.logout failed", err));
+        const workerLogout = this.#worker
+            .send({ kind: "logout" })
+            .catch((err) => console.error("worker logout failed", err));
+        await Promise.race([
+            Promise.all([workerLogout, authLogout]),
+            new Promise<void>((resolve) => window.setTimeout(resolve, 2000)),
+        ]);
+        window.location.replace("/");
     }
 
     unreadThreadMessageCount(
@@ -9814,6 +9838,184 @@ export class OpenChat {
                 console.log("Failed to pay for premium item", err);
                 return CommonResponses.unknownError(JSON.stringify(err));
             });
+    }
+
+    prepareAccountDeletion(): Promise<PrepareAccountDeletionResponse> {
+        const userId = currentUserIdStore.value;
+        if (userId === undefined) {
+            return Promise.resolve({ kind: "error", message: "not_signed_in" });
+        }
+        return this.#worker.send({
+            kind: "prepareAccountDeletion",
+            userId,
+        });
+    }
+
+    cvdrDownloadUrl(localUserIndex: string, receiptIdHex: string): string {
+        return cvdrDownloadUrl(this.config.canisterUrlPath, localUserIndex, receiptIdHex);
+    }
+
+    pollCvdr(localUserIndex: string, receiptIdHex: string): Promise<CvdrPollStatus> {
+        return pollCvdrHttp(this.cvdrDownloadUrl(localUserIndex, receiptIdHex));
+    }
+
+    /**
+     * Persist retrieval capability before irreversible delete.
+     * Returns false if write/readback fails — caller must block reveal/delete.
+     */
+    persistCvdrReceiptSession(
+        userId: string | undefined,
+        session: { receiptId: string; localUserIndex: string; deletionStarted?: boolean },
+    ): boolean {
+        try {
+            const raw = serializeCvdrReceiptSession(session);
+            const expectedId = session.receiptId.toLowerCase();
+            if (userId !== undefined) {
+                localStorage.setItem(cvdrReceiptStorageKey(userId), raw);
+            }
+            localStorage.setItem(CVDR_RECEIPT_PENDING_KEY, raw);
+            const pending = parseCvdrReceiptSession(
+                localStorage.getItem(CVDR_RECEIPT_PENDING_KEY),
+            );
+            if (
+                pending === undefined ||
+                pending.receiptId !== expectedId ||
+                pending.localUserIndex !== session.localUserIndex ||
+                pending.deletionStarted !== (session.deletionStarted === true)
+            ) {
+                return false;
+            }
+            if (userId !== undefined) {
+                const fromUser = parseCvdrReceiptSession(
+                    localStorage.getItem(cvdrReceiptStorageKey(userId)),
+                );
+                if (
+                    fromUser === undefined ||
+                    fromUser.receiptId !== expectedId ||
+                    fromUser.localUserIndex !== session.localUserIndex ||
+                    fromUser.deletionStarted !== (session.deletionStarted === true)
+                ) {
+                    return false;
+                }
+            }
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * Mark recovery as committed *before* irreversible delete (Stef recovery ordering).
+     * Returns false if write/readback fails — caller must not call delete.
+     */
+    markCvdrDeletionStarted(userId: string | undefined): boolean {
+        const existing = this.loadPersistedCvdrReceiptSession(userId);
+        if (!existing) return false;
+        return this.persistCvdrReceiptSession(userId, {
+            ...existing,
+            deletionStarted: true,
+        });
+    }
+
+    /**
+     * Roll back the pre-delete flag when delete fails or the flow is cancelled after
+     * the flag was set. Retries persist/readback, then force-rewrites both keys.
+     * Returns true when the session is prepare-only (or absent) after the call.
+     */
+    clearCvdrDeletionStarted(userId: string | undefined): boolean {
+        const existing = this.loadPersistedCvdrReceiptSession(userId);
+        if (!existing) return true;
+        if (existing.deletionStarted !== true) return true;
+
+        const prepareOnly = {
+            receiptId: existing.receiptId,
+            localUserIndex: existing.localUserIndex,
+            deletionStarted: false as const,
+        };
+
+        for (let i = 0; i < 3; i++) {
+            if (this.persistCvdrReceiptSession(userId, prepareOnly)) {
+                return true;
+            }
+        }
+
+        // Last resort: drop both keys then rewrite prepare-only (avoids a stuck true flag
+        // when a partial write left user-key and pending out of sync).
+        try {
+            if (userId !== undefined) {
+                localStorage.removeItem(cvdrReceiptStorageKey(userId));
+            }
+            localStorage.removeItem(CVDR_RECEIPT_PENDING_KEY);
+        } catch {
+            /* continue to persist attempt */
+        }
+        return this.persistCvdrReceiptSession(userId, prepareOnly);
+    }
+
+    /**
+     * Poll `/cvdr/<receipt_id>` until available or attempts exhausted.
+     * Does not logout or clear the persisted session.
+     */
+    async pollCvdrDelivery(
+        localUserIndex: string,
+        receiptId: string,
+        options?: {
+            maxAttempts?: number;
+            softWaitUnknownAttempts?: number;
+            onStatus?: (status: string) => void;
+        },
+    ): Promise<
+        | { kind: "available"; body: Uint8Array; contentType: string }
+        | { kind: "delayed" }
+    > {
+        return pollCvdrUntilSettled(() => this.pollCvdr(localUserIndex, receiptId), options);
+    }
+
+    loadPersistedCvdrReceiptSession(
+        userId: string | undefined,
+    ): CvdrReceiptSession | undefined {
+        try {
+            if (userId !== undefined) {
+                const fromUser = parseCvdrReceiptSession(
+                    localStorage.getItem(cvdrReceiptStorageKey(userId)),
+                );
+                if (fromUser) return fromUser;
+            }
+            return parseCvdrReceiptSession(localStorage.getItem(CVDR_RECEIPT_PENDING_KEY));
+        } catch {
+            return undefined;
+        }
+    }
+
+    clearPersistedCvdrReceiptSession(userId: string | undefined): void {
+        try {
+            if (userId !== undefined) {
+                localStorage.removeItem(cvdrReceiptStorageKey(userId));
+            }
+            localStorage.removeItem(CVDR_RECEIPT_PENDING_KEY);
+        } catch {
+            /* ignore */
+        }
+    }
+
+    /** @deprecated use persistCvdrReceiptSession */
+    persistCvdrReceiptId(userId: string, receiptIdHex: string): void {
+        const existing = this.loadPersistedCvdrReceiptSession(userId);
+        if (existing) {
+            this.persistCvdrReceiptSession(userId, {
+                receiptId: receiptIdHex,
+                localUserIndex: existing.localUserIndex,
+            });
+        }
+    }
+
+    /** @deprecated use loadPersistedCvdrReceiptSession */
+    loadPersistedCvdrReceiptId(userId: string): string | undefined {
+        return this.loadPersistedCvdrReceiptSession(userId)?.receiptId;
+    }
+
+    clearPersistedCvdrReceiptId(userId: string): void {
+        this.clearPersistedCvdrReceiptSession(userId);
     }
 
     async payForStreakInsurance(

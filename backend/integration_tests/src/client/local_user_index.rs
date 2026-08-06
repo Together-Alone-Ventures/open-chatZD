@@ -7,7 +7,6 @@ generate_query_call!(bot_chat_events);
 generate_query_call!(bot_community_events);
 generate_msgpack_query_call!(chat_events);
 generate_msgpack_query_call!(group_and_community_summary_updates_v2);
-generate_query_call!(cvdr_data_certificate);
 generate_query_call!(get_cvdr);
 generate_query_call!(latest_notification_index);
 generate_query_call!(notifications);
@@ -26,6 +25,7 @@ generate_msgpack_update_call!(join_channel);
 generate_msgpack_update_call!(join_community);
 generate_msgpack_update_call!(join_group);
 generate_msgpack_update_call!(pay_for_premium_item);
+generate_msgpack_update_call!(prepare_account_deletion);
 generate_msgpack_update_call!(register_user);
 generate_msgpack_update_call!(uninstall_bot);
 
@@ -386,5 +386,17 @@ pub mod happy_path {
         let response = super::latest_notification_index(env, sender, local_user_index, &Empty {});
         let local_user_index_canister::latest_notification_index::Response::Success(index) = response;
         index
+    }
+
+    /// Spec §11.4 prepare: returns receipt_id hex + RevealWire JSON.
+    pub fn prepare_account_deletion(
+        env: &mut PocketIc,
+        user: &User,
+    ) -> local_user_index_canister::prepare_account_deletion::SuccessResult {
+        let response = super::prepare_account_deletion(env, user.principal, user.local_user_index, &Empty {});
+        match response {
+            local_user_index_canister::prepare_account_deletion::Response::Success(s) => s,
+            other => panic!("'prepare_account_deletion' error: {other:?}"),
+        }
     }
 }

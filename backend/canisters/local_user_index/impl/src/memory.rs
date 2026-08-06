@@ -27,6 +27,13 @@ const CVDR_FROZEN_LOG_INDEX: MemoryId = MemoryId::new(8);
 const CVDR_FROZEN_LOG_DATA: MemoryId = MemoryId::new(9);
 const CVDR_FROZEN_PRIMARY: MemoryId = MemoryId::new(10);
 const CVDR_FROZEN_SECONDARY: MemoryId = MemoryId::new(11);
+// INDEX code-identity evidence (spec §14.2) — parallel insert-only store, slots FROZEN:
+//   12 = evidence StableLog INDEX memory
+//   13 = evidence StableLog DATA memory
+//   14 = primary StableBTreeMap: receipt_id -> log offset
+const CVDR_INDEX_EVIDENCE_LOG_INDEX: MemoryId = MemoryId::new(12);
+const CVDR_INDEX_EVIDENCE_LOG_DATA: MemoryId = MemoryId::new(13);
+const CVDR_INDEX_EVIDENCE_PRIMARY: MemoryId = MemoryId::new(14);
 
 pub type Memory = VirtualMemory<DefaultMemoryImpl>;
 
@@ -67,10 +74,36 @@ pub fn get_cvdr_frozen_secondary_memory() -> Memory {
     get_memory(CVDR_FROZEN_SECONDARY)
 }
 
+pub fn get_cvdr_index_evidence_log_index_memory() -> Memory {
+    get_memory(CVDR_INDEX_EVIDENCE_LOG_INDEX)
+}
+
+pub fn get_cvdr_index_evidence_log_data_memory() -> Memory {
+    get_memory(CVDR_INDEX_EVIDENCE_LOG_DATA)
+}
+
+pub fn get_cvdr_index_evidence_primary_memory() -> Memory {
+    get_memory(CVDR_INDEX_EVIDENCE_PRIMARY)
+}
+
 pub fn memory_sizes() -> BTreeMap<u8, u64> {
-    (0u8..=11).map(|id| (id, get_memory(MemoryId::new(id)).size())).collect()
+    (0u8..=14).map(|id| (id, get_memory(MemoryId::new(id)).size())).collect()
 }
 
 fn get_memory(id: MemoryId) -> Memory {
     MEMORY_MANAGER.with(|m| m.get(id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn memory_sizes_covers_index_evidence_slots() {
+        let sizes = memory_sizes();
+        assert!(sizes.contains_key(&12));
+        assert!(sizes.contains_key(&13));
+        assert!(sizes.contains_key(&14));
+        assert_eq!(sizes.keys().copied().max(), Some(14));
+    }
 }
