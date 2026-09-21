@@ -1,9 +1,14 @@
-//! INDEX Module Hash evidence capture (spec §14.8).
+//! INDEX Module Hash evidence capture (R-2).
 //!
-//! After a frozen commitment package exists, periodically fetch a subnet system-state
-//! `read_state` certificate for `/canister/<self>/module_hash`, verify it on-chain, then
-//! insert-only store. Never compares to `h_index` (offline V3). Never stores on verify fail.
+//! From the moment a deletion's `uninstall_code` completes, periodically fetch a subnet
+//! system-state `read_state` certificate for `/canister/<self>/module_hash`, verify it on-chain,
+//! extract the module hash, and insert-only store certificate + hash for every receipt it
+//! post-dates. One fetched certificate serves all due receipts. Never stores on verify fail; never
+//! stores a deployer-supplied value. Only receipts uninstalled under the CURRENTLY installed code
+//! are served (`CvdrStore::evidence_capturable`) — the upgrade interlock keeps that code installed
+//! until they are.
 
+use crate::model::cvdr::EvidencePending;
 use crate::model::cvdr::{self, Hash};
 use crate::model::cvdr_index_evidence::{IndexCodeIdentityEvidence, IndexEvidenceInsertError};
 use crate::model::http_outcall::{self, HttpHeader};
@@ -13,7 +18,7 @@ use constants::SECOND_IN_MS;
 use ic_cdk_timers::TimerId;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::time::Duration;
 use tracing::{trace, warn};
 use types::{CanisterId, Milliseconds};
@@ -21,9 +26,6 @@ use types::{CanisterId, Milliseconds};
 thread_local! {
     static TIMER_ID: std::cell::Cell<Option<TimerId>> = const { std::cell::Cell::new(None) };
     static ATTEMPTS: RefCell<HashMap<Hash, AttemptState>> = RefCell::new(HashMap::new());
-    /// Receipts that already hit the 24h INDEX give-up (epoch-local). Stops re-log spam and
-    /// prevents the sweep timer from being re-armed forever for the same IDs.
-    static INDEX_GIVEN_UP: RefCell<HashSet<Hash>> = RefCell::new(HashSet::new());
 }
 
 #[derive(Clone, Copy, Default)]
@@ -35,10 +37,8 @@ struct AttemptState {
 const SWEEP_INTERVAL_MS: Milliseconds = 3 * SECOND_IN_MS;
 const MAX_RESPONSE_BYTES: u64 = 16 * 1024;
 const RETRY_RESPONSE_BYTES: u64 = 64 * 1024;
-const GIVE_UP_MS: u64 = 24 * 60 * 60 * 1_000;
 const NS_PER_MS: u64 = 1_000_000;
 const INGRESS_EXPIRY_NS: u64 = 5 * 60 * 1_000_000_000;
-const MAX_CONCURRENT_CAPTURES: usize = 4;
 
 fn backoff_ms(attempt: u32) -> u64 {
     match attempt {
@@ -50,20 +50,22 @@ fn backoff_ms(attempt: u32) -> u64 {
     }
 }
 
-/// Permanent 24h INDEX give-up window anchor: `receipt_committed_at` only (Stef B timing).
-/// Never re-anchors to a later certificate time when the draft/anchor is absent.
-pub(crate) fn give_up_anchor_ns(receipt_committed_at_ns: Option<u64>) -> Option<u64> {
-    receipt_committed_at_ns.filter(|&t| t > 0)
+fn now_ns(state: &RuntimeState) -> u64 {
+    state.env.now().saturating_mul(NS_PER_MS)
+}
+
+/// Receipts the sweep may still serve: past uninstall, no evidence, window open (24 h from
+/// `uninstall_completed_at` — after that they drop out and stay V3A-UNAVAILABLE), uninstalled under
+/// the current code epoch.
+fn capturable(state: &RuntimeState) -> Vec<EvidencePending> {
+    state
+        .data
+        .cvdr
+        .evidence_capturable(now_ns(state), state.data.cvdr_code_epoch_started_at_ns)
 }
 
 pub(crate) fn start_if_required(state: &RuntimeState) -> bool {
-    let pending = state
-        .data
-        .cvdr
-        .frozen_receipt_ids_missing_index_evidence()
-        .into_iter()
-        .any(|id| !INDEX_GIVEN_UP.with(|g| g.borrow().contains(&id)));
-    if TIMER_ID.with(|t| t.get().is_none()) && pending {
+    if TIMER_ID.with(|t| t.get().is_none()) && !capturable(state).is_empty() {
         let timer_id = ic_cdk_timers::set_timer(Duration::from_millis(SWEEP_INTERVAL_MS), run_sweep);
         TIMER_ID.with(|t| t.set(Some(timer_id)));
         true
@@ -72,69 +74,46 @@ pub(crate) fn start_if_required(state: &RuntimeState) -> bool {
     }
 }
 
+/// Backoff gate, anchored at the uninstall for the first attempt.
+fn is_due(pending: &EvidencePending, attempt_state: AttemptState, now_ns: u64) -> bool {
+    let due_at_ns = if attempt_state.attempt == 0 {
+        pending.uninstall_completed_at.saturating_add(backoff_ms(0) * NS_PER_MS)
+    } else {
+        attempt_state
+            .last_attempt_at_ns
+            .saturating_add(backoff_ms(attempt_state.attempt) * NS_PER_MS)
+    };
+    now_ns >= due_at_ns
+}
+
 fn run_sweep() {
     TIMER_ID.with(|t| t.set(None));
     let now_ns = ic_cdk::api::time();
 
-    let due: Vec<(Hash, u64)> = mutate_state(|state| {
-        let mut due = Vec::new();
-        for receipt_id in state.data.cvdr.frozen_receipt_ids_missing_index_evidence() {
-            if INDEX_GIVEN_UP.with(|g| g.borrow().contains(&receipt_id)) {
-                continue;
-            }
-            let Some(pkg) = state.data.cvdr.get_frozen_package(&receipt_id) else {
-                continue;
-            };
-            let receipt_committed_at = state.data.cvdr.receipt_committed_at_ns(&receipt_id);
-            let attempt_state =
-                ATTEMPTS.with(|m| *m.borrow().get(&receipt_id).unwrap_or(&AttemptState::default()));
-            if let Some(anchor_ns) = give_up_anchor_ns(receipt_committed_at) {
-                let age_from_anchor_ms = now_ns.saturating_sub(anchor_ns) / NS_PER_MS;
-                if age_from_anchor_ms > GIVE_UP_MS {
-                    ATTEMPTS.with(|m| {
-                        m.borrow_mut().remove(&receipt_id);
-                    });
-                    INDEX_GIVEN_UP.with(|g| {
-                        g.borrow_mut().insert(receipt_id);
-                    });
-                    warn!(
-                        event = "cvdr_index_evidence_give_up",
-                        receipt_prefix = %cvdr::receipt_id_prefix(&receipt_id),
-                        "INDEX evidence not captured within 24h of receipt_committed_at; leaving UNAVAILABLE"
-                    );
-                    continue;
-                }
-                let due_at_ns = if attempt_state.attempt == 0 {
-                    anchor_ns.saturating_add(backoff_ms(0) * NS_PER_MS)
-                } else {
-                    attempt_state
-                        .last_attempt_at_ns
-                        .saturating_add(backoff_ms(attempt_state.attempt) * NS_PER_MS)
-                };
-                if now_ns < due_at_ns {
-                    continue;
-                }
-            } else if attempt_state.attempt > 0 {
-                let due_at_ns = attempt_state
-                    .last_attempt_at_ns
-                    .saturating_add(backoff_ms(attempt_state.attempt) * NS_PER_MS);
-                if now_ns < due_at_ns {
-                    continue;
-                }
-            }
-            due.push((receipt_id, pkg.certificate_time));
-        }
-        due
+    let due: Vec<EvidencePending> = read_state(|state| {
+        let pending = capturable(state);
+        // forget attempt state of receipts that left the work list (stored, or window lapsed)
+        ATTEMPTS.with(|m| m.borrow_mut().retain(|id, _| pending.iter().any(|p| &p.receipt_id == id)));
+        pending
+            .into_iter()
+            .filter(|p| {
+                let attempt_state = ATTEMPTS.with(|m| m.borrow().get(&p.receipt_id).copied().unwrap_or_default());
+                is_due(p, attempt_state, now_ns)
+            })
+            .collect()
     });
 
-    for (receipt_id, commitment_time) in due.into_iter().take(MAX_CONCURRENT_CAPTURES) {
+    if !due.is_empty() {
         ATTEMPTS.with(|m| {
             let mut map = m.borrow_mut();
-            let entry = map.entry(receipt_id).or_default();
-            entry.attempt = entry.attempt.saturating_add(1);
-            entry.last_attempt_at_ns = now_ns;
+            for p in &due {
+                let entry = map.entry(p.receipt_id).or_default();
+                entry.attempt = entry.attempt.saturating_add(1);
+                entry.last_attempt_at_ns = now_ns;
+            }
         });
-        ic_cdk::futures::spawn(attempt_capture(receipt_id, commitment_time));
+        // ONE certificate serves every due receipt it post-dates.
+        ic_cdk::futures::spawn(attempt_capture(due));
     }
 
     mutate_state(|state| {
@@ -142,59 +121,74 @@ fn run_sweep() {
     });
 }
 
-async fn attempt_capture(receipt_id: Hash, commitment_certificate_time_ns: u64) {
+async fn attempt_capture(due: Vec<EvidencePending>) {
     let self_id = read_state(|state| state.env.canister_id());
     let certificate = match fetch_module_hash_certificate(self_id, MAX_RESPONSE_BYTES).await {
         Some(c) => Some(c),
         None => fetch_module_hash_certificate(self_id, RETRY_RESPONSE_BYTES).await,
     };
     let Some(certificate) = certificate else {
-        trace!(receipt_prefix = %cvdr::receipt_id_prefix(&receipt_id), "INDEX read_state miss; will retry");
+        trace!(receipts = due.len(), "INDEX read_state miss; will retry");
         return;
     };
 
     mutate_state(|state| {
-        if state.data.cvdr.has_index_evidence(&receipt_id) {
-            return;
-        }
-        let Some(frozen) = state.data.cvdr.get_frozen_package(&receipt_id) else {
-            return;
-        };
-        let commitment_time = frozen.certificate_time.max(commitment_certificate_time_ns);
         let now = state.env.now();
         let ic_root_key = state.env.ic_root_key();
-
-        match cvdr::verify_index_module_hash_evidence(&certificate, self_id, &ic_root_key, now, Some(commitment_time)) {
-            Ok(_verified) => {
-                let evidence = IndexCodeIdentityEvidence {
-                    certificate_bytes: certificate,
-                };
-                match state.data.cvdr.insert_index_evidence(receipt_id, evidence) {
-                    Ok(()) | Err(IndexEvidenceInsertError::AlreadyExists) => {
-                        ATTEMPTS.with(|m| {
-                            m.borrow_mut().remove(&receipt_id);
-                        });
-                        trace!(receipt_prefix = %cvdr::receipt_id_prefix(&receipt_id), "INDEX module hash evidence stored");
-                    }
-                    Err(IndexEvidenceInsertError::EmptyCertificate) => {
-                        warn!(event = "cvdr_index_evidence_empty", receipt_prefix = %cvdr::receipt_id_prefix(&receipt_id));
-                    }
-                    Err(IndexEvidenceInsertError::FrozenPackageMissing) => {}
-                    Err(IndexEvidenceInsertError::LogFull) => {
-                        warn!(event = "cvdr_index_evidence_log_full", receipt_prefix = %cvdr::receipt_id_prefix(&receipt_id));
-                    }
-                }
-            }
-            Err(reason) => {
-                warn!(
-                    event = "cvdr_index_evidence_rejected",
-                    receipt_prefix = %cvdr::receipt_id_prefix(&receipt_id),
-                    reason = reason.as_str(),
-                    "INDEX evidence failed store-gate; discarded"
-                );
-            }
+        for pending in due {
+            store_verified_evidence(state, &pending, &certificate, self_id, &ic_root_key, now);
         }
     });
+}
+
+fn store_verified_evidence(
+    state: &mut RuntimeState,
+    pending: &EvidencePending,
+    certificate: &[u8],
+    self_id: CanisterId,
+    ic_root_key: &[u8],
+    now: types::TimestampMillis,
+) {
+    let receipt_id = pending.receipt_id;
+    if state.data.cvdr.has_index_evidence(&receipt_id) {
+        return;
+    }
+    // Not-before = this receipt's uninstall (hash-bound in RECEIPT_BODY_V2).
+    match cvdr::verify_index_module_hash_evidence(certificate, self_id, ic_root_key, now, Some(pending.uninstall_completed_at))
+    {
+        Ok(verified) => {
+            // Ops-integrity guard ONLY (R-2): the deployer's expectation is compared, logged and
+            // counted — it is never stored as evidence and never decides what is stored.
+            if let Some(expected) = state.data.expected_index_module_hash
+                && verified.module_hash.as_slice() != expected.as_slice()
+            {
+                state.data.cvdr_index_module_hash_expectation_mismatches =
+                    state.data.cvdr_index_module_hash_expectation_mismatches.saturating_add(1);
+                warn!(
+                    event = "cvdr_index_module_hash_expectation_mismatch",
+                    receipt_prefix = %cvdr::receipt_id_prefix(&receipt_id),
+                    "certified Index module hash differs from the deploy-supplied expectation"
+                );
+            }
+            let evidence = IndexCodeIdentityEvidence::new(certificate.to_vec(), verified.module_hash);
+            match state.data.cvdr.insert_index_evidence(receipt_id, evidence) {
+                Ok(()) | Err(IndexEvidenceInsertError::AlreadyExists) => {
+                    trace!(receipt_prefix = %cvdr::receipt_id_prefix(&receipt_id), "INDEX module hash evidence stored");
+                }
+                Err(e) => {
+                    warn!(event = "cvdr_index_evidence_not_stored", receipt_prefix = %cvdr::receipt_id_prefix(&receipt_id), error = ?e);
+                }
+            }
+        }
+        Err(reason) => {
+            warn!(
+                event = "cvdr_index_evidence_rejected",
+                receipt_prefix = %cvdr::receipt_id_prefix(&receipt_id),
+                reason = reason.as_str(),
+                "INDEX evidence failed store-gate; discarded"
+            );
+        }
+    }
 }
 
 async fn fetch_module_hash_certificate(self_id: CanisterId, max_response_bytes: u64) -> Option<Vec<u8>> {
@@ -267,7 +261,7 @@ fn parse_read_state_certificate(body: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::cvdr::{IndexEvidenceRejectReason, check_index_cert_not_before_commitment};
+    use crate::model::cvdr::{IndexEvidenceRejectReason, check_index_cert_not_before_uninstall};
 
     #[test]
     fn anonymous_read_state_request_encodes_module_hash_path() {
@@ -310,37 +304,13 @@ mod tests {
     }
 
     #[test]
-    fn give_up_anchor_is_receipt_committed_at_only() {
-        assert_eq!(give_up_anchor_ns(Some(100)), Some(100));
-        assert_eq!(give_up_anchor_ns(Some(0)), None);
-        assert_eq!(give_up_anchor_ns(None), None);
-    }
-
-    #[test]
-    fn index_given_up_is_sticky_within_epoch() {
-        let id = [0x11u8; 32];
-        INDEX_GIVEN_UP.with(|g| g.borrow_mut().clear());
-        assert!(!INDEX_GIVEN_UP.with(|g| g.borrow().contains(&id)));
-        INDEX_GIVEN_UP.with(|g| {
-            g.borrow_mut().insert(id);
-        });
-        assert!(INDEX_GIVEN_UP.with(|g| g.borrow().contains(&id)));
-        // Second insert is idempotent — models "do not re-log / re-queue".
-        INDEX_GIVEN_UP.with(|g| {
-            g.borrow_mut().insert(id);
-        });
-        assert_eq!(INDEX_GIVEN_UP.with(|g| g.borrow().len()), 1);
-        INDEX_GIVEN_UP.with(|g| g.borrow_mut().clear());
-    }
-
-    #[test]
     fn cert_time_before_commitment_is_rejected() {
         assert_eq!(
-            check_index_cert_not_before_commitment(10, 20),
-            Err(IndexEvidenceRejectReason::CertTimeBeforeCommitment)
+            check_index_cert_not_before_uninstall(10, 20),
+            Err(IndexEvidenceRejectReason::CertTimeBeforeUninstall)
         );
-        assert_eq!(check_index_cert_not_before_commitment(20, 20), Ok(()));
-        assert_eq!(check_index_cert_not_before_commitment(21, 20), Ok(()));
+        assert_eq!(check_index_cert_not_before_uninstall(20, 20), Ok(()));
+        assert_eq!(check_index_cert_not_before_uninstall(21, 20), Ok(()));
     }
 
     #[test]
@@ -363,21 +333,11 @@ mod tests {
         };
         assert_eq!(s.insert_frozen_package(receipt_id, record_id, 1, pkg), Ok(()));
         assert_eq!(
-            s.insert_index_evidence(
-                receipt_id,
-                IndexCodeIdentityEvidence {
-                    certificate_bytes: vec![0xaa],
-                }
-            ),
+            s.insert_index_evidence(receipt_id, IndexCodeIdentityEvidence::new(vec![0xaa], vec![0x1d; 32])),
             Ok(())
         );
         assert_eq!(
-            s.insert_index_evidence(
-                receipt_id,
-                IndexCodeIdentityEvidence {
-                    certificate_bytes: vec![0xbb],
-                }
-            ),
+            s.insert_index_evidence(receipt_id, IndexCodeIdentityEvidence::new(vec![0xbb], vec![0x1d; 32])),
             Err(IndexEvidenceInsertError::AlreadyExists)
         );
         assert_eq!(s.get_index_evidence(&receipt_id).unwrap().certificate_bytes, vec![0xaa]);

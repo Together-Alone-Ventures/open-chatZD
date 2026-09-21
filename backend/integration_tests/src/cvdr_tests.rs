@@ -627,8 +627,10 @@ fn self_finalization_captures_and_stores_via_mocked_outcall() {
 }
 
 /// INDEX capture plumbing under PocketIC: after a frozen package exists, the job POSTs
-/// `read_state` for `/module_hash`. PocketIC cannot mint a real NNS-rooted system-state
-/// certificate for that path, so this test proves (1) the outcall is issued, (2) an invalid
+/// `read_state` for `/module_hash`. This test covers the NEGATIVE store-gate legs (the positive leg,
+/// with a genuine PocketIC-signed certificate, is
+/// `cvdr_v2_upgrade_tests::stored_index_evidence_unblocks_upgrade_and_draft_finalises`): it proves
+/// (1) the outcall is issued, (2) an invalid
 /// gateway body is discarded (verify-before-store; count stays flat), and (3) after the 24h
 /// give-up window the job stops retrying.
 #[test]
@@ -971,59 +973,6 @@ fn p2_export_path_is_banked_not_half_alive() {
     );
 }
 
-/// Upgrade-survivability: a deletion mid-flight at AwaitingCertificate survives a
-/// local_user_index upgrade (the durable draft is stable-backed and the commitment is
-/// re-published post-upgrade), then finalizes cleanly.
-///
-/// Runs on a DEDICATED env (built via `setup_new_env`, never popped from nor returned to the
-/// shared pool). The upgrade marks every LUI for a stop/start upgrade via a recurring user_index
-/// timer that outlives a test; on a pooled env that timer would later stop a LUI another test is
-/// mid-call on (`CanisterStopped`). Isolation removes both the inbound and outbound coupling.
-#[test]
-#[ignore = "Slice 2/3: the finalize tail. The §4 post_upgrade tree-rebuild + root re-assert has unit coverage; a cert-absent survival assertion can re-enable the front half in Slice 1."]
-fn draft_survives_upgrade_then_finalizes() {
-    let mut owned_env = crate::setup::setup_new_env(None);
-    let TestEnv {
-        env,
-        canister_ids,
-        controller,
-    } = &mut owned_env;
-    let (user, user_auth) = register_user_and_include_auth(env, canister_ids);
-    let lui = user.local_user_index;
-
-    delete_and_reach_awaiting(env, canister_ids, &user, &user_auth);
-    let (_, before_id, _, _) = find_servable_cvdr_live(env, lui);
-    let (drafts, released, awaiting) = cvdr_metrics(env, lui);
-    assert_eq!((drafts, released, awaiting), (1, 0, true), "awaiting before upgrade");
-
-    // Upgrade the local_user_index canister with the draft still in flight. Bump the version so
-    // the upgrade ACTUALLY runs (same version is skipped by `should_perform_upgrade`).
-    let mut new_wasm = crate::wasms::LOCAL_USER_INDEX.clone();
-    new_wasm.version = types::BuildVersion::new(0, 0, 1);
-    client::user_index::happy_path::upgrade_local_user_index_canister_wasm(env, *controller, canister_ids.user_index, new_wasm);
-    // Deterministically wait for the upgrade to COMPLETE (LUI reports the bumped version, Running).
-    wait_for_lui_version(env, lui, types::BuildVersion::new(0, 0, 1));
-
-    // The draft survived; the commitment is re-published so the certificate is available.
-    let (drafts, released, awaiting) = cvdr_metrics(env, lui);
-    assert_eq!(
-        (drafts, released, awaiting),
-        (1, 0, true),
-        "draft survives the upgrade, still awaiting"
-    );
-
-    let (_, after_id, certificate, witness) = find_servable_cvdr_live(env, lui);
-    assert_eq!(after_id, before_id, "same receipt across the upgrade");
-    assert!(matches!(
-        finalize(env, lui, after_id, certificate, witness),
-        finalize_cvdr::Response::Captured
-    ));
-
-    let (drafts, released, _) = cvdr_metrics(env, lui);
-    assert_eq!((drafts, released), (0, 1), "finalizes cleanly after the upgrade");
-    assert!(matches!(fetch_cvdr(env, lui, after_id), get_cvdr::Response::Available(_)));
-}
-
 /// SECURITY (spec §7 rules 3–5, HARD store-gate): a forged (garbage), tampered, or stale
 /// certificate submitted to the permissionless backstop must be `Rejected` and must store NOTHING
 /// — an untrusted submitter cannot poison the first-wins slot with a bad-signature package. A
@@ -1273,46 +1222,6 @@ fn offline_verifier_round_trip_from_bytes() {
     };
     assert_eq!(leaf, receipt.receipt_hash);
     let _ = receipt;
-}
-
-/// Captured executor provenance survives a mid-flight index upgrade. The draft is captured
-/// (incl. the executor module hash) BEFORE uninstall; the LUI is then really upgraded
-/// (post_upgrade runs); and the finalized receipt carries the CAPTURED executor hash, which
-/// `h_index` binds. (The test env ships a single LUI wasm, so pre/post module bytes are equal;
-/// the captured-wins-over-live semantics is additionally enforced in code — finalize reads the
-/// draft, never live state — and covered by the `h_index_binds_executor_module_hash` unit test.)
-#[test]
-#[ignore = "Slice 2/3: reads the captured executor hash back from a finalized/stored receipt. Captured-wins semantics has unit coverage (h_index_binds_executor_module_hash)."]
-fn captured_executor_hash_survives_mid_flight_upgrade() {
-    let mut owned_env = crate::setup::setup_new_env(None);
-    let TestEnv {
-        env,
-        canister_ids,
-        controller,
-    } = &mut owned_env;
-    let (user, user_auth) = register_user_and_include_auth(env, canister_ids);
-    let lui = user.local_user_index;
-    let _captured_executor =
-        sha256::sha256(&std::fs::read(crate::utils::local_bin().join("local_user_index.wasm.gz")).unwrap());
-
-    delete_and_reach_awaiting(env, canister_ids, &user, &user_auth);
-    let (_, before_id, _, _) = find_servable_cvdr_live(env, lui);
-
-    let mut new_wasm = crate::wasms::LOCAL_USER_INDEX.clone();
-    new_wasm.version = types::BuildVersion::new(0, 0, 2);
-    client::user_index::happy_path::upgrade_local_user_index_canister_wasm(env, *controller, canister_ids.user_index, new_wasm);
-    wait_for_lui_version(env, lui, types::BuildVersion::new(0, 0, 2));
-
-    let (_, after_id, certificate, witness) = find_servable_cvdr_live(env, lui);
-    assert_eq!(after_id, before_id, "same in-flight deletion across the upgrade");
-    assert!(matches!(
-        finalize(env, lui, after_id, certificate, witness),
-        finalize_cvdr::Response::Captured
-    ));
-    assert!(matches!(
-        fetch_cvdr(env, lui, after_id),
-        get_cvdr::Response::Available(get_cvdr::AvailablePackage::FrozenWire(_))
-    ));
 }
 
 /// Spec §11.4 prepare: RevealWire issued, `/cvdr` Pending, `/cvdr_live` does not serve Prepared.

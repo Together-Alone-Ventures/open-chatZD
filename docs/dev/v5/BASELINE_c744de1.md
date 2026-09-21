@@ -224,3 +224,46 @@ finalises; (iii) window lapsed → upgrade succeeds; outcalls are answered in ev
 keep some draft inside its first seconds-without-evidence at any instant. Decision proposed: accept
 for now (upgrade tooling retries; the per-draft block lasts seconds), and add an operator
 "quiesce new uninstalls" switch only if Step 9 upgrade tests show real contention.
+
+**§5 amendments made while implementing (point C).**
+1. *Blocking set widened to every post-uninstall stage.* `CertificateCaptured` / `LateFinalized`
+   also block while they lack evidence inside the window: a package can be stored before its
+   evidence, and an upgrade in that gap would strand the receipt as V3A-UNAVAILABLE just the same.
+   Predicate: `uninstall_completed_at > 0` ∧ stage ∉ {`Prepared`, `Captured`} ∧ no evidence ∧
+   window open (`CvdrDraft::is_past_uninstall`, `CvdrStore::evidence_pending`).
+2. *Code-epoch rule.* `Data.cvdr_code_epoch_started_at_ns` records when the installed wasm started
+   (init / each successful `post_upgrade`). The sweep captures evidence only for — and both hooks
+   block only on — receipts with `uninstall_completed_at ≥ epoch` (`evidence_capturable`): a later
+   wasm must never obtain a certificate that would speak for an earlier wasm's deletion, and a
+   receipt that can no longer get evidence must not block. `post_upgrade` evaluates the predicate
+   against the *outgoing* epoch still in `Data`, so both hooks agree; epoch 0 (state written by a
+   wasm that predates the interlock) is treated conservatively — every pending receipt counts.
+   Consequence for the one-time transition: a receipt finalised under a pre-interlock wasm blocks
+   the upgrade until it has evidence or its 24 h window lapses (shown in `cvdr_v2_upgrade_tests`).
+3. *Give-up is now implicit.* A receipt leaves the sweep's work list when its window lapses; the
+   heap-only `INDEX_GIVEN_UP` set and its warning were removed (`cvdr_upgrade_blockers` and
+   `cvdr_index_evidence_count` in `/metrics` carry the signal).
+
+**§5 rulings at point C (Stef, 2026-09-22).**
+- Amendments 1–3 above are adopted as the normative interlock.
+- **24 h rule.** A receipt that reaches 24 h after `uninstall_completed_at` without stored index
+  evidence is **permanently V3A-unavailable**: the Index never captures evidence for it afterwards
+  (window closed; and, after any upgrade, the code-epoch rule forbids it), it stops blocking
+  upgrades, and the verifier reports it as V3A-unavailable — never as failed, never as passed.
+- **Claim wording (applied at step 5 together with the verifier labels, the cross-repo wording guard
+  and the RTS).** `OCZD_SUPPORTED_CLAIM` uses the suite's ratified phrase: OpenChatZD carries
+  "subnet-attested installed module identity during the finalization/certification window"; a second
+  sentence states that the Index upgrade interlock bounds that window from uninstall to evidence
+  capture. "Protected deletion→evidence interval" is the internal name only (code, logs, refusal
+  text, this document) and does not appear in claims.
+- **Operator note (Step 10 docs).** Each refused install consumes the IC `install_code` allowance and
+  the next attempt is rate-limited for several minutes; check `cvdr_upgrade_blockers == 0` in
+  `/metrics` before upgrading.
+- **Positive path proven end to end (no Step 9 gap).** PocketIC serves a genuine subnet-signed
+  `/canister/<index>/module_hash` certificate on `instances/<id>/api/v2/canister/<cid>/read_state`.
+  `cvdr_v2_upgrade_tests::stored_index_evidence_unblocks_upgrade_and_draft_finalises` replays the
+  Index's exact outcall body against it and returns the reply as the outcall response — production
+  code keeps its single `icp-api.io` URL, no test-mode branch. Shown: store-gate accepts the
+  certificate, certificate + extracted hash stored, expectation guard matches, blockers 1 → 0, the
+  upgrade refused without evidence succeeds with it while the draft is still `AwaitingCertificate`,
+  the draft finalises on the upgraded Index and is served with its evidence.

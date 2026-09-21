@@ -329,7 +329,9 @@ pub struct VerifiedIndexModuleHash {
 pub enum IndexEvidenceRejectReason {
     Certificate(CertRejectReason),
     ModuleHashMissing,
-    CertTimeBeforeCommitment,
+    /// The certificate `/time` predates the receipt's `uninstall_completed_at` — it cannot speak
+    /// for the code that performed the deletion.
+    CertTimeBeforeUninstall,
 }
 
 impl IndexEvidenceRejectReason {
@@ -337,20 +339,23 @@ impl IndexEvidenceRejectReason {
         match self {
             IndexEvidenceRejectReason::Certificate(r) => r.as_str(),
             IndexEvidenceRejectReason::ModuleHashMissing => "index_module_hash_path_missing",
-            IndexEvidenceRejectReason::CertTimeBeforeCommitment => "index_cert_time_before_commitment",
+            IndexEvidenceRejectReason::CertTimeBeforeUninstall => "index_cert_time_before_uninstall",
         }
     }
 }
 
-/// Store-gate for INDEX code-identity evidence (spec §14.3 / §14.8): BLS → NNS → range →
-/// exact path `/canister/<self>/module_hash` → `/time`. Optionally rejects if cert time predates
-/// the commitment certificate time. Does **not** compare to captured `h_index` (offline V3).
+/// Store-gate for INDEX code-identity evidence (R-2): BLS → NNS → range → exact path
+/// `/canister/<self>/module_hash` → `/time`. Returns the EXTRACTED module hash (the value stored as
+/// `index_module_hash`) and the certificate time. `not_before_ns` is the receipt's
+/// `uninstall_completed_at`: a certificate older than the deletion says nothing about the code that
+/// performed it. With the upgrade interlock (no upgrade between uninstall and evidence capture) the
+/// certified hash is the code identity of the deleting Index.
 pub fn verify_index_module_hash_evidence(
     certificate: &[u8],
     self_canister_id: Principal,
     ic_root_key: &[u8],
     now: TimestampMillis,
-    commitment_certificate_time_ns: Option<u64>,
+    not_before_ns: Option<u64>,
 ) -> Result<VerifiedIndexModuleHash, IndexEvidenceRejectReason> {
     use ic_cbor::CertificateToCbor;
     use ic_certificate_verification::VerifyCertificate;
@@ -376,8 +381,8 @@ pub fn verify_index_module_hash_evidence(
         LookupResult::Found(t) => leb128_u64(t),
         _ => return Err(IndexEvidenceRejectReason::Certificate(CertRejectReason::TimeMissing)),
     };
-    if let Some(commitment_time) = commitment_certificate_time_ns {
-        check_index_cert_not_before_commitment(cert_time_ns, commitment_time)?;
+    if let Some(not_before) = not_before_ns {
+        check_index_cert_not_before_uninstall(cert_time_ns, not_before)?;
     }
     Ok(VerifiedIndexModuleHash {
         module_hash,
@@ -385,15 +390,55 @@ pub fn verify_index_module_hash_evidence(
     })
 }
 
-pub(crate) fn check_index_cert_not_before_commitment(
+pub(crate) fn check_index_cert_not_before_uninstall(
     cert_time_ns: u64,
-    commitment_certificate_time_ns: u64,
+    uninstall_completed_at_ns: u64,
 ) -> Result<(), IndexEvidenceRejectReason> {
-    if cert_time_ns < commitment_certificate_time_ns {
-        Err(IndexEvidenceRejectReason::CertTimeBeforeCommitment)
+    if cert_time_ns < uninstall_completed_at_ns {
+        Err(IndexEvidenceRejectReason::CertTimeBeforeUninstall)
     } else {
         Ok(())
     }
+}
+
+/// How long after the uninstall index evidence may still be captured (and therefore how long a
+/// receipt without evidence can block an upgrade). Past it the receipt is permanently
+/// V3A-UNAVAILABLE, so blocking longer would protect nothing.
+pub const INDEX_EVIDENCE_WINDOW_NS: u64 = 24 * 60 * 60 * 1_000_000_000;
+
+/// A receipt that still NEEDS index evidence and can still GET it (R-2 interlock predicate input).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EvidencePending {
+    pub receipt_id: Hash,
+    pub stage: DraftStage,
+    /// `uninstall_completed_at` (ns) — the evidence not-before anchor and window start.
+    pub uninstall_completed_at: u64,
+}
+
+/// The operator-facing refusal raised while receipts are inside the protected interval
+/// `uninstall → index evidence stored` (`None` when nothing blocks).
+pub fn evidence_upgrade_refusal(blockers: &[EvidencePending]) -> Option<String> {
+    const MAX_LISTED: usize = 20;
+    if blockers.is_empty() {
+        return None;
+    }
+    let listed: Vec<String> = blockers
+        .iter()
+        .take(MAX_LISTED)
+        .map(|b| format!("{}({:?})", receipt_id_prefix(&b.receipt_id), b.stage))
+        .collect();
+    let more = blockers.len().saturating_sub(MAX_LISTED);
+    Some(format!(
+        "upgrade refused: {} CVDR receipt(s) are inside the protected deletion→evidence interval \
+         (uninstalled, authenticated Index module-hash evidence not yet stored): [{}]{}. \
+         Operator path: keep the CURRENT wasm installed; the evidence sweep stores the \
+         /canister/<index>/module_hash certificate within seconds-to-minutes (check \
+         `cvdr_index_evidence_count` / `cvdr_upgrade_blockers` in /metrics), or the 24 h evidence \
+         window lapses; then upgrade again.",
+        blockers.len(),
+        listed.join(", "),
+        if more > 0 { format!(" (+{more} more)") } else { String::new() },
+    ))
 }
 
 /// Distinct reason the store-gate ([`verify_finalization_package`]) REJECTED a submission (spec §7
@@ -680,6 +725,14 @@ impl CvdrDraft {
     /// scrubbed bookkeeping (their frozen package is the record) and are never legacy-blocking.
     pub fn is_legacy_pre_v2(&self) -> bool {
         self.record_salt.is_none() && !self.is_terminal()
+    }
+
+    /// R-2 interlock: this draft's receipt is past the uninstall, so the code that ran the deletion
+    /// must stay installed until index evidence is stored. `Prepared` / legacy `Captured` have not
+    /// uninstalled anything; every later stage — terminal ones included, because a package can be
+    /// stored before its evidence — is protected.
+    pub fn is_past_uninstall(&self) -> bool {
+        self.uninstall_completed_at > 0 && !matches!(self.stage, DraftStage::Prepared | DraftStage::Captured)
     }
 
     /// Terminal = the frozen package is stored and the draft is scrubbed bookkeeping.
@@ -992,10 +1045,6 @@ impl FrozenPackageStore {
             })
             .collect()
     }
-
-    pub fn receipt_ids(&self) -> Vec<Hash> {
-        self.primary.iter().map(|e| e.key().0).collect()
-    }
 }
 
 /// Durable, upgrade-surviving CVDR stores: the in-flight draft map (by user_canister_id) and the
@@ -1064,6 +1113,7 @@ impl CvdrStore {
     }
 
     /// Drafts written by a pre-V2 wasm that are still in flight (see [`CvdrDraft::is_legacy_pre_v2`]).
+    #[cfg(test)]
     pub fn legacy_pre_v2_draft_count(&self) -> u64 {
         self.drafts.iter().filter(|e| e.value().is_legacy_pre_v2()).count() as u64
     }
@@ -1111,11 +1161,34 @@ impl CvdrStore {
         self.frozen.receipt_leaves()
     }
 
-    pub fn frozen_receipt_ids_missing_index_evidence(&self) -> Vec<Hash> {
-        self.frozen
-            .receipt_ids()
+    /// Receipts past their uninstall, without stored index evidence, whose evidence window is still
+    /// open at `now_ns`. This ONE predicate drives both the upgrade interlock (`pre_upgrade` and
+    /// `post_upgrade`) and — filtered by the code epoch — the evidence sweep. Computed from durable
+    /// draft fields only (drafts are retained after terminal capture), never from heap state.
+    pub fn evidence_pending(&self, now_ns: u64) -> Vec<EvidencePending> {
+        self.drafts
+            .iter()
+            .map(|e| e.value())
+            .filter(|d| d.is_past_uninstall())
+            .filter(|d| now_ns.saturating_sub(d.uninstall_completed_at) <= INDEX_EVIDENCE_WINDOW_NS)
+            .filter(|d| !self.index_evidence.contains(&d.receipt_id))
+            .map(|d| EvidencePending {
+                receipt_id: d.receipt_id,
+                stage: d.stage,
+                uninstall_completed_at: d.uninstall_completed_at,
+            })
+            .collect()
+    }
+
+    /// The sweep's work list: pending receipts whose uninstall happened under the CURRENTLY
+    /// installed code (`uninstall_completed_at >= code_epoch_started_at_ns`). A receipt uninstalled
+    /// under an earlier wasm is never given evidence by a later one — that certificate would name
+    /// the wrong code. (With the interlock in place such receipts only exist for upgrades from a
+    /// wasm that predates it, or after the 24 h window lapsed.)
+    pub fn evidence_capturable(&self, now_ns: u64, code_epoch_started_at_ns: u64) -> Vec<EvidencePending> {
+        self.evidence_pending(now_ns)
             .into_iter()
-            .filter(|id| !self.index_evidence.contains(id))
+            .filter(|p| p.uninstall_completed_at >= code_epoch_started_at_ns)
             .collect()
     }
 
@@ -1124,8 +1197,15 @@ impl CvdrStore {
         receipt_id: Hash,
         evidence: crate::model::cvdr_index_evidence::IndexCodeIdentityEvidence,
     ) -> Result<(), crate::model::cvdr_index_evidence::IndexEvidenceInsertError> {
-        if self.frozen.get_by_receipt_id(&receipt_id).is_none() {
-            return Err(crate::model::cvdr_index_evidence::IndexEvidenceInsertError::FrozenPackageMissing);
+        // R-2: evidence is captured from `Uninstalled` onward, usually BEFORE the frozen package
+        // exists — it attaches to a post-uninstall draft or to a stored package.
+        let known = self.frozen.get_by_receipt_id(&receipt_id).is_some()
+            || self.drafts.iter().any(|e| {
+                let d = e.value();
+                d.receipt_id == receipt_id && d.is_past_uninstall()
+            });
+        if !known {
+            return Err(crate::model::cvdr_index_evidence::IndexEvidenceInsertError::ReceiptMissing);
         }
         self.index_evidence.insert(receipt_id, evidence)
     }
@@ -1214,15 +1294,6 @@ impl CvdrStore {
     /// [`find_draft_by_receipt_id`]; kept as a distinct name so the backstop reads intent-first.
     pub fn find_finalizable_draft_by_receipt_id(&self, receipt_id: &Hash) -> Option<CvdrDraft> {
         self.find_draft_by_receipt_id(receipt_id)
-    }
-
-    /// Any draft (including captured/scrubbed) matching `receipt_id`, for timing anchors.
-    pub fn receipt_committed_at_ns(&self, receipt_id: &Hash) -> Option<u64> {
-        self.drafts
-            .iter()
-            .map(|e| e.value())
-            .find(|d| &d.receipt_id == receipt_id)
-            .map(|d| d.receipt_committed_at)
     }
 
     /// Count of receipts that reached a terminal self-finalization state, for metrics.
@@ -1531,12 +1602,10 @@ mod tests {
         let mut s = CvdrStore::default();
         let record_id = record_id_for(p(1).into());
         let receipt_id = receipt_id_for(&record_id, 1, &[3u8; 32]);
-        let evidence = IndexCodeIdentityEvidence {
-            certificate_bytes: vec![0xaa, 0xbb],
-        };
+        let evidence = IndexCodeIdentityEvidence::new(vec![0xaa, 0xbb], vec![0x1d; 32]);
         assert_eq!(
             s.insert_index_evidence(receipt_id, evidence.clone()),
-            Err(IndexEvidenceInsertError::FrozenPackageMissing)
+            Err(IndexEvidenceInsertError::ReceiptMissing)
         );
 
         let pkg = FrozenCvdrPackage {
@@ -1552,12 +1621,7 @@ mod tests {
         assert!(s.has_index_evidence(&receipt_id));
         assert_eq!(s.index_evidence_count(), 1);
         assert_eq!(
-            s.insert_index_evidence(
-                receipt_id,
-                IndexCodeIdentityEvidence {
-                    certificate_bytes: vec![0xff],
-                }
-            ),
+            s.insert_index_evidence(receipt_id, IndexCodeIdentityEvidence::new(vec![0xff], vec![0x1d; 32])),
             Err(IndexEvidenceInsertError::AlreadyExists)
         );
         assert_eq!(s.get_index_evidence(&receipt_id), Some(evidence));
@@ -1600,13 +1664,8 @@ mod tests {
         };
         assert_eq!(s.insert_frozen_package(receipt_a, record_a, 1, pkg), Ok(()));
         assert_eq!(
-            s.insert_index_evidence(
-                receipt_b,
-                IndexCodeIdentityEvidence {
-                    certificate_bytes: vec![0x11],
-                }
-            ),
-            Err(IndexEvidenceInsertError::FrozenPackageMissing)
+            s.insert_index_evidence(receipt_b, IndexCodeIdentityEvidence::new(vec![0x11], vec![0x1d; 32])),
+            Err(IndexEvidenceInsertError::ReceiptMissing)
         );
         assert!(!s.has_index_evidence(&receipt_a));
         assert!(!s.has_index_evidence(&receipt_b));
@@ -1629,51 +1688,107 @@ mod tests {
         };
         assert_eq!(s.insert_frozen_package(receipt_id, record_id, 1, pkg), Ok(()));
         assert_eq!(
-            s.insert_index_evidence(
-                receipt_id,
-                IndexCodeIdentityEvidence {
-                    certificate_bytes: vec![],
-                }
-            ),
+            s.insert_index_evidence(receipt_id, IndexCodeIdentityEvidence::new(vec![], vec![0x1d; 32])),
             Err(IndexEvidenceInsertError::EmptyCertificate)
         );
         assert!(!s.has_index_evidence(&receipt_id));
     }
 
+    /// R-2 interlock predicate — truth table over stage × evidence × window × code epoch. ONE
+    /// predicate feeds `pre_upgrade`, `post_upgrade` and the evidence sweep.
     #[test]
-    fn frozen_receipt_ids_missing_index_evidence_lists_only_pending() {
+    fn evidence_pending_truth_table_drives_interlock_and_sweep() {
         use crate::model::cvdr_index_evidence::IndexCodeIdentityEvidence;
-
-        let mut s = CvdrStore::default();
-        let record_id = record_id_for(p(5).into());
-        let receipt_a = receipt_id_for(&record_id, 1, &[5u8; 32]);
-        let receipt_b = receipt_id_for(&record_id, 2, &[6u8; 32]);
-        let pkg = |n: u8| FrozenCvdrPackage {
-            receipt_body: vec![n],
-            receipt_hash: [n; 32],
-            tree_root: [n; 32],
-            witness_bytes: vec![n],
-            certificate_bytes: vec![n],
-            certificate_time: n as u64,
+        const T0: u64 = 1_000_000_000_000; // uninstall time (ns)
+        let draft = |n: u8, stage: DraftStage, uninstalled_at: u64| CvdrDraft {
+            user_canister_id: p(n),
+            user_id: p(n).into(),
+            receipt_id: [n; 32],
+            uninstall_completed_at: uninstalled_at,
+            record_salt: if matches!(stage, DraftStage::CertificateCaptured | DraftStage::LateFinalized) {
+                None
+            } else {
+                Some([0xC3; 32])
+            },
+            ..v2_draft(stage, Some([0xC3; 32]))
         };
-        assert_eq!(s.insert_frozen_package(receipt_a, record_id, 1, pkg(1)), Ok(()));
-        assert_eq!(s.insert_frozen_package(receipt_b, record_id, 2, pkg(2)), Ok(()));
-        let mut missing = s.frozen_receipt_ids_missing_index_evidence();
-        missing.sort();
-        let mut expected = vec![receipt_a, receipt_b];
-        expected.sort();
-        assert_eq!(missing, expected);
+        let mut s = CvdrStore::default();
+        s.upsert_draft(draft(1, DraftStage::Prepared, 0)); // nothing uninstalled yet
+        s.upsert_draft(draft(2, DraftStage::Captured, 0)); // legacy pre-uninstall stage
+        s.upsert_draft(draft(3, DraftStage::Uninstalled, T0));
+        s.upsert_draft(draft(4, DraftStage::AwaitingCertificate, T0));
+        s.upsert_draft(draft(5, DraftStage::FailedStuck, T0));
+        s.upsert_draft(draft(6, DraftStage::CertificateCaptured, T0)); // package can precede evidence
+        s.upsert_draft(draft(7, DraftStage::LateFinalized, T0));
 
+        let ids = |v: Vec<EvidencePending>| {
+            let mut ids: Vec<u8> = v.iter().map(|b| b.receipt_id[0]).collect();
+            ids.sort();
+            ids
+        };
+        // inside the window, no evidence: every post-uninstall receipt blocks; Prepared/Captured never do
+        assert_eq!(ids(s.evidence_pending(T0 + 1)), vec![3, 4, 5, 6, 7]);
         assert_eq!(
-            s.insert_index_evidence(
-                receipt_a,
-                IndexCodeIdentityEvidence {
-                    certificate_bytes: vec![0xaa],
-                }
-            ),
+            ids(s.evidence_pending(T0 + INDEX_EVIDENCE_WINDOW_NS)),
+            vec![3, 4, 5, 6, 7],
+            "window is inclusive"
+        );
+        // evidence stored for a DRAFT-only receipt (no frozen package needed any more) => unblocks it
+        assert_eq!(
+            s.insert_index_evidence([4; 32], IndexCodeIdentityEvidence::new(vec![0xaa], vec![0x1d; 32])),
             Ok(())
         );
-        assert_eq!(s.frozen_receipt_ids_missing_index_evidence(), vec![receipt_b]);
+        assert_eq!(ids(s.evidence_pending(T0 + 1)), vec![3, 5, 6, 7]);
+        // ... but never for a receipt that has not uninstalled, or an unknown one
+        for unknown in [[1u8; 32], [2u8; 32], [0xEE; 32]] {
+            assert_eq!(
+                s.insert_index_evidence(unknown, IndexCodeIdentityEvidence::new(vec![0xaa], vec![0x1d; 32])),
+                Err(crate::model::cvdr_index_evidence::IndexEvidenceInsertError::ReceiptMissing)
+            );
+        }
+        // window lapsed => nothing blocks (the receipt stays V3A-UNAVAILABLE; blocking protects nothing)
+        assert!(s.evidence_pending(T0 + INDEX_EVIDENCE_WINDOW_NS + 1).is_empty());
+        // code epoch: receipts uninstalled BEFORE the current wasm started are neither captured nor blocking
+        assert_eq!(
+            ids(s.evidence_capturable(T0 + 1, 0)),
+            vec![3, 5, 6, 7],
+            "epoch 0 = conservative"
+        );
+        assert_eq!(
+            ids(s.evidence_capturable(T0 + 1, T0)),
+            vec![3, 5, 6, 7],
+            "uninstalled at epoch start counts"
+        );
+        assert!(s.evidence_capturable(T0 + 2, T0 + 1).is_empty());
+    }
+
+    /// The interlock refusal names each blocker (prefix + stage) and the operator path.
+    #[test]
+    fn evidence_upgrade_refusal_lists_blockers_and_operator_path() {
+        assert_eq!(evidence_upgrade_refusal(&[]), None);
+        let blocker = |n: u8, stage| EvidencePending {
+            receipt_id: [n; 32],
+            stage,
+            uninstall_completed_at: 1,
+        };
+        let msg = evidence_upgrade_refusal(&[
+            blocker(0xa7, DraftStage::AwaitingCertificate),
+            blocker(0x0b, DraftStage::Uninstalled),
+        ])
+        .unwrap();
+        for needle in [
+            "upgrade refused: 2 CVDR receipt(s)",
+            "protected deletion→evidence interval",
+            "a7a7a7a7(AwaitingCertificate)",
+            "0b0b0b0b(Uninstalled)",
+            "Operator path",
+            "cvdr_upgrade_blockers",
+            "then upgrade again",
+        ] {
+            assert!(msg.contains(needle), "refusal must contain `{needle}`: {msg}");
+        }
+        let many: Vec<_> = (0..23).map(|i| blocker(i, DraftStage::FailedStuck)).collect();
+        assert!(evidence_upgrade_refusal(&many).unwrap().contains("(+3 more)"));
     }
 
     // ---- Slice 2: §6 store-gate verification, proven with REAL mainnet A1 certificate bytes ----
@@ -1799,12 +1914,12 @@ mod tests {
         assert_eq!(v.module_hash.len(), 32, "WASM module hash is 32 bytes");
         assert_ne!(v.module_hash, vec![0u8; 32]);
 
-        // Ordering gate: commitment time after cert time → reject.
+        // Ordering gate (R-2): a certificate older than the uninstall → reject.
         assert_eq!(
             verify_index_module_hash_evidence(CERT, self_id, constants::IC_ROOT_KEY, now_ms, Some(time_ns.saturating_add(1)),),
-            Err(IndexEvidenceRejectReason::CertTimeBeforeCommitment)
+            Err(IndexEvidenceRejectReason::CertTimeBeforeUninstall)
         );
-        // Equal commitment time is accepted.
+        // Certificate time equal to the uninstall time is accepted.
         assert!(verify_index_module_hash_evidence(CERT, self_id, constants::IC_ROOT_KEY, now_ms, Some(time_ns),).is_ok());
 
         // Wrong canister → not in delegated range (or path miss under that id).

@@ -9,6 +9,20 @@ use tracing::info;
 #[pre_upgrade]
 #[trace]
 fn pre_upgrade() {
+    // R-2 upgrade interlock — FIRST, before any state is taken or serialised. While a receipt is
+    // inside `uninstall → index evidence stored`, the code that performed the deletion must stay
+    // installed; trapping here fails `install_code` and leaves this wasm and its state untouched.
+    let refusal = crate::read_state(|state| {
+        let blockers = state.data.cvdr.evidence_capturable(
+            state.env.now().saturating_mul(1_000_000),
+            state.data.cvdr_code_epoch_started_at_ns,
+        );
+        crate::model::cvdr::evidence_upgrade_refusal(&blockers)
+    });
+    if let Some(refusal) = refusal {
+        ic_cdk::trap(refusal);
+    }
+
     info!("Pre-upgrade starting");
 
     let mut state = take_state();

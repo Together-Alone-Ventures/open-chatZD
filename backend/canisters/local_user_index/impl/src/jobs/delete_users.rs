@@ -217,6 +217,8 @@ async fn advance_draft(draft: CvdrDraft) -> ProcessOutcome {
                         }
                         d.stage = DraftStage::Uninstalled;
                         state.data.cvdr.upsert_draft(d);
+                        // R-2: the protected interval starts here — begin capturing index evidence.
+                        crate::jobs::self_capture_index_evidence::start_if_required(state);
                         Some(())
                     });
                     match advanced {
@@ -338,6 +340,19 @@ pub(crate) fn resume_in_flight_drafts(state: &mut RuntimeState) {
     if let Some(refusal) = crate::model::cvdr::pre_v2_upgrade_refusal(&state.data.cvdr.legacy_pre_v2_blockers()) {
         ic_cdk::trap(refusal);
     }
+    // R-2 upgrade interlock, incoming-wasm side: same predicate as `pre_upgrade`, evaluated against
+    // the OUTGOING code's epoch (still in `Data`). Covers upgrades from a wasm whose `pre_upgrade`
+    // predates the interlock (epoch 0 => every pending receipt counts).
+    let now_ns = state.env.now().saturating_mul(1_000_000);
+    let blockers = state
+        .data
+        .cvdr
+        .evidence_capturable(now_ns, state.data.cvdr_code_epoch_started_at_ns);
+    if let Some(refusal) = crate::model::cvdr::evidence_upgrade_refusal(&blockers) {
+        ic_cdk::trap(refusal);
+    }
+    // The upgrade (or install) is going ahead: the code epoch of THIS wasm starts now.
+    state.data.cvdr_code_epoch_started_at_ns = now_ns;
 
     rebuild_receipt_tree_from_durable(&state.data.cvdr, &mut state.data.cvdr_receipt_tree);
 

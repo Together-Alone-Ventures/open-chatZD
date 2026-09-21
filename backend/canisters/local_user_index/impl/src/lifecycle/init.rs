@@ -37,8 +37,8 @@ fn init(args: Args) {
         args.openai_api_key,
         args.test_mode,
     );
-    // CVDR v5: capture the deploy-supplied executor module hash (H_index provenance).
-    data.executor_module_hash = args.executor_module_hash;
+    // R-2: deploy-supplied expectation (ops-integrity guard only).
+    data.expected_index_module_hash = args.expected_index_module_hash;
 
     init_state(env, data, args.wasm_version);
 

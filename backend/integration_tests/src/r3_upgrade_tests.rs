@@ -201,7 +201,7 @@ fn user_init_args_ignore_retired_mktd_module_hash() {
 fn local_user_index_init_args_ignore_retired_receipts_canister_id() {
     let args = local_user_index_canister::init::Args {
         wasm_version: BuildVersion::new(1, 2, 3),
-        executor_module_hash: [5; 32],
+        expected_index_module_hash: Some([5; 32]),
         user_index_canister_id: Principal::anonymous(),
         group_index_canister_id: Principal::anonymous(),
         notifications_index_canister_id: Principal::anonymous(),

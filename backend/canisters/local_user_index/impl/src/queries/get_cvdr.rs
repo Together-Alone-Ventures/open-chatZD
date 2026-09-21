@@ -76,13 +76,8 @@ mod tests {
         let receipt_id = receipt_id_for(&record_id, 2, &[9u8; 32]);
         assert!(cvdr.insert_frozen_package(receipt_id, record_id, 2, sample_pkg()).is_ok());
         assert!(
-            cvdr.insert_index_evidence(
-                receipt_id,
-                IndexCodeIdentityEvidence {
-                    certificate_bytes: vec![0xde, 0xad],
-                }
-            )
-            .is_ok()
+            cvdr.insert_index_evidence(receipt_id, IndexCodeIdentityEvidence::new(vec![0xde, 0xad], vec![0x1d; 32]))
+                .is_ok()
         );
 
         match get_cvdr_from_store(&receipt_id, &cvdr) {

@@ -20,10 +20,8 @@ fn post_upgrade(args: Args) {
     let (mut data, errors, logs, traces): (Data, Vec<LogEntry>, Vec<LogEntry>, Vec<LogEntry>) =
         msgpack::deserialize(reader).unwrap();
 
-    // CVDR v5: refresh the deploy-supplied executor module hash (H_index provenance) to the
-    // newly-installed wasm. Any draft captured before this upgrade keeps its PRE-upgrade hash
-    // (the captured value is authoritative — see finalize_cvdr corroboration).
-    data.executor_module_hash = args.executor_module_hash;
+    // R-2: refresh the deploy-supplied expectation for the newly installed wasm (guard only).
+    data.expected_index_module_hash = args.expected_index_module_hash;
 
     canister_logger::init_with_logs(data.test_mode, errors, logs, traces);
 
