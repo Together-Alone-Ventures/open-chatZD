@@ -16,6 +16,7 @@ mod chit_tests;
 mod client;
 mod communities;
 mod cvdr_tests;
+mod cvdr_v2_upgrade_tests;
 mod cycles_dispenser_tests;
 mod delete_direct_chat_tests;
 mod delete_group_tests;

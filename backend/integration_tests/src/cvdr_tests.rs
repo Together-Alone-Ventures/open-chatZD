@@ -91,7 +91,7 @@ fn delete_and_store_package(
     receipt_id
 }
 
-fn finalize(
+pub(crate) fn finalize(
     env: &mut PocketIc,
     local_user_index: CanisterId,
     receipt_id: [u8; 32],
@@ -110,7 +110,7 @@ fn finalize(
     )
 }
 
-fn pending_live_package(env: &mut PocketIc, local_user_index: CanisterId) -> ([u8; 32], Vec<u8>, Vec<u8>) {
+pub(crate) fn pending_live_package(env: &mut PocketIc, local_user_index: CanisterId) -> ([u8; 32], Vec<u8>, Vec<u8>) {
     let (_, receipt_id, certificate, witness) = find_servable_cvdr_live(env, local_user_index);
     (receipt_id, certificate, witness)
 }
@@ -153,7 +153,7 @@ fn find_servable_cvdr_live(
     panic!("no servable /cvdr_live receipt for {lui_text} appeared");
 }
 
-fn fetch_cvdr(env: &PocketIc, local_user_index: CanisterId, receipt_id: [u8; 32]) -> get_cvdr::Response {
+pub(crate) fn fetch_cvdr(env: &PocketIc, local_user_index: CanisterId, receipt_id: [u8; 32]) -> get_cvdr::Response {
     client::local_user_index::get_cvdr(env, Principal::anonymous(), local_user_index, &get_cvdr::Args { receipt_id })
 }
 
@@ -1327,7 +1327,13 @@ fn prepare_issues_reveal_pending_and_live_excludes_prepared() {
     assert_eq!(prepared.receipt_id.len(), 64);
     let reveal: serde_json::Value = serde_json::from_str(&prepared.reveal_wire_json).unwrap();
     assert_eq!(reveal["schema"], "openchatzd.cvdr.reveal_package");
+    assert_eq!(reveal["version"], 2, "RevealWire v2 (R-1: carries record_salt)");
     assert!(reveal["salt"].as_str().unwrap().len() == 64);
+    assert!(reveal["record_salt"].as_str().unwrap().len() == 64);
+    assert_ne!(
+        reveal["record_salt"], reveal["salt"],
+        "record_salt is an independent raw_rand draw"
+    );
     assert!(reveal["targets"].is_array());
 
     let receipt_id: [u8; 32] = hex::decode(&prepared.receipt_id).unwrap().try_into().unwrap();
@@ -1342,6 +1348,79 @@ fn prepare_issues_reveal_pending_and_live_excludes_prepared() {
     let again = prepare_deletion(env, &user);
     assert_eq!(again.receipt_id, prepared.receipt_id);
     assert_eq!(again.reveal_wire_json, prepared.reveal_wire_json);
+}
+
+/// R-1 / R-4 end to end on real canisters: the published body is RECEIPT_BODY_V2, its `record_id`
+/// is the salted V2 derivation the user can recompute from RevealWire, it is NOT derivable from the
+/// public UserId alone, and neither salt appears in the public body.
+#[test]
+fn published_body_is_v2_with_non_identifying_record_id() {
+    // DEDICATED env (never returned to the shared pool): this test leaves a receipt awaiting its
+    // certificate, which pooled-env tests that scan pending `/cvdr_live` outcalls would pick up.
+    let mut owned_env = crate::setup::setup_new_env(None);
+    let TestEnv { env, canister_ids, .. } = &mut owned_env;
+    let (user, user_auth) = register_user_and_include_auth(env, canister_ids);
+    let lui = user.local_user_index;
+
+    let prepared = prepare_deletion(env, &user);
+    let reveal: serde_json::Value = serde_json::from_str(&prepared.reveal_wire_json).unwrap();
+    let record_salt = hex::decode(reveal["record_salt"].as_str().unwrap()).unwrap();
+    let targets_salt = hex::decode(reveal["salt"].as_str().unwrap()).unwrap();
+
+    client::identity::happy_path::delete_user(env, &user_auth, canister_ids.identity);
+    tick_many(env, 10);
+
+    let live = cvdr_http(env, lui, &format!("/cvdr_live/{}", prepared.receipt_id));
+    assert_eq!(live.status_code, 200, "published receipt is served by /cvdr_live");
+    let live: serde_json::Value = serde_json::from_slice(&live.body).unwrap();
+    let body = hex::decode(live["receipt_body"].as_str().expect("receipt_body")).unwrap();
+
+    // RECEIPT_BODY_V2: tag ‖ receipt_id(32) ‖ nonce(32) ‖ len‖index ‖ len‖user ‖ record_id(32) ‖ seq(8) ‖ …
+    let tag = b"OPENCHATZD_RECEIPT_BODY_V2";
+    assert_eq!(&body[..tag.len()], tag);
+    let mut at = tag.len();
+    assert_eq!(hex::encode(&body[at..at + 32]), prepared.receipt_id);
+    at += 32;
+    let nonce = &body[at..at + 32];
+    at += 32;
+    let index_len = body[at] as usize;
+    assert_eq!(&body[at + 1..at + 1 + index_len], lui.as_slice());
+    at += 1 + index_len;
+    let user_len = body[at] as usize;
+    assert_eq!(&body[at + 1..at + 1 + user_len], user.canister().as_slice());
+    at += 1 + user_len;
+    let record_id = &body[at..at + 32];
+    at += 32;
+    let deletion_seq = &body[at..at + 8];
+    // V2 tail: h_user_pre(32) ‖ uninstall(8) ‖ committed(8) ‖ targets_count(4) ‖ targets_commitment(32)
+    assert_eq!(
+        body.len(),
+        at + 8 + 32 + 8 + 8 + 4 + 32,
+        "no h_index / commitment in the V2 body"
+    );
+
+    let user_principal: Principal = user.user_id.into();
+    assert_eq!(
+        record_id,
+        tagged(b"OPENCHATZD_RECORD_ID_USER_V2", &[&record_salt, user_principal.as_slice()]),
+        "RevealWire record_salt + UserId recompute the displayed record_id"
+    );
+    assert_ne!(
+        record_id,
+        tagged(b"OPENCHATZD_RECORD_ID_USER_V1", &[user_principal.as_slice()]),
+        "record_id must not be the retired UserId-only derivation (public join key)"
+    );
+    assert_eq!(
+        hex::encode(tagged(b"OPENCHATZD_CVDR_RECEIPT_V1", &[record_id, deletion_seq, nonce])),
+        prepared.receipt_id,
+        "receipt_id recomputes from displayed fields (R-5)"
+    );
+    for (name, secret) in [("record_salt", &record_salt), ("targets salt", &targets_salt)] {
+        assert!(
+            !body.windows(32).any(|w| w == secret.as_slice()),
+            "{name} leaked into the public body"
+        );
+    }
 }
 
 /// Spec §11.4: delete without prepare does not uninstall (prepare_required gate).

@@ -39,7 +39,7 @@ pub(crate) fn get_cvdr_from_store(receipt_id: &[u8; 32], cvdr: &CvdrStore) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::cvdr::{FrozenCvdrPackage, receipt_id_for, record_id_for};
+    use crate::model::cvdr::{FrozenCvdrPackage, receipt_id_for, record_id_v2};
     use crate::model::cvdr_index_evidence::IndexCodeIdentityEvidence;
     use candid::Principal;
 
@@ -57,7 +57,7 @@ mod tests {
     #[test]
     fn frozen_only_serves_frozen_wire() {
         let mut cvdr = CvdrStore::default();
-        let record_id = record_id_for(Principal::from_slice(&[1]).into());
+        let record_id = record_id_v2(&[0x5Au8; 32], Principal::from_slice(&[1]).into());
         let receipt_id = receipt_id_for(&record_id, 1, &[3u8; 32]);
         assert!(cvdr.insert_frozen_package(receipt_id, record_id, 1, sample_pkg()).is_ok());
 
@@ -72,7 +72,7 @@ mod tests {
     #[test]
     fn frozen_plus_index_evidence_serves_portable_v2_with_gate_a_nested() {
         let mut cvdr = CvdrStore::default();
-        let record_id = record_id_for(Principal::from_slice(&[2]).into());
+        let record_id = record_id_v2(&[0x5Au8; 32], Principal::from_slice(&[2]).into());
         let receipt_id = receipt_id_for(&record_id, 2, &[9u8; 32]);
         assert!(cvdr.insert_frozen_package(receipt_id, record_id, 2, sample_pkg()).is_ok());
         assert!(
@@ -108,7 +108,7 @@ mod tests {
         use crate::model::cvdr::{CvdrDraft, DraftStage};
 
         let mut cvdr = CvdrStore::default();
-        let record_id = record_id_for(Principal::from_slice(&[3]).into());
+        let record_id = record_id_v2(&[0x5Au8; 32], Principal::from_slice(&[3]).into());
         let receipt_id = receipt_id_for(&record_id, 3, &[7u8; 32]);
         assert!(cvdr.insert_frozen_package(receipt_id, record_id, 3, sample_pkg()).is_ok());
 
@@ -116,15 +116,13 @@ mod tests {
             user_id: Principal::from_slice(&[3]).into(),
             user_canister_id: Principal::from_slice(&[3]),
             index_canister_id: Principal::from_slice(&[4]),
+            record_salt: Some([0x5Au8; 32]),
             record_id,
             deletion_seq: 3,
             nonce: [7u8; 32],
             receipt_id,
             module_hash_pre: vec![1],
-            executor_module_hash: vec![2],
             h_user_pre: [4u8; 32],
-            h_index: [5u8; 32],
-            commitment: [6u8; 32],
             salt: [0xAB; 32],
             canisters_to_notify: vec![Principal::from_slice(&[5])],
             uninstall_completed_at: 111,
@@ -160,21 +158,19 @@ mod tests {
         use crate::model::cvdr::{CvdrDraft, DraftStage};
 
         let mut cvdr = CvdrStore::default();
-        let record_id = record_id_for(Principal::from_slice(&[9]).into());
+        let record_id = record_id_v2(&[0x5Au8; 32], Principal::from_slice(&[9]).into());
         let receipt_id = receipt_id_for(&record_id, 9, &[1u8; 32]);
         let draft = CvdrDraft {
             user_id: Principal::from_slice(&[9]).into(),
             user_canister_id: Principal::from_slice(&[9]),
             index_canister_id: Principal::from_slice(&[4]),
+            record_salt: Some([0x5Au8; 32]),
             record_id,
             deletion_seq: 9,
             nonce: [1u8; 32],
             receipt_id,
             module_hash_pre: vec![],
-            executor_module_hash: vec![],
             h_user_pre: [0u8; 32],
-            h_index: [0u8; 32],
-            commitment: [0u8; 32],
             salt: [0x11; 32],
             canisters_to_notify: vec![],
             uninstall_completed_at: 0,

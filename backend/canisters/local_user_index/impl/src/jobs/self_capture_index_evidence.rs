@@ -345,13 +345,13 @@ mod tests {
 
     #[test]
     fn concurrent_inserts_keep_first_evidence() {
-        use crate::model::cvdr::{CvdrStore, FrozenCvdrPackage, receipt_id_for, record_id_for};
+        use crate::model::cvdr::{CvdrStore, FrozenCvdrPackage, receipt_id_for, record_id_v2};
         use crate::model::cvdr_index_evidence::{IndexCodeIdentityEvidence, IndexEvidenceInsertError};
         use candid::Principal;
 
         let mut s = CvdrStore::default();
         let user = Principal::from_slice(&[9u8; 29]);
-        let record_id = record_id_for(user.into());
+        let record_id = record_id_v2(&[0x5Au8; 32], user.into());
         let receipt_id = receipt_id_for(&record_id, 1, &[1u8; 32]);
         let pkg = FrozenCvdrPackage {
             receipt_body: vec![1],

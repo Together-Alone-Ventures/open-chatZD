@@ -171,3 +171,56 @@ OpenChat module couples to generic code only through `crate::v2_certificate`
 `v2_certificate.rs` is the single file both lines changed. Trial merge in a throwaway clone: clean
 (tree `632d7a92…`), builds, `cargo test --locked` 139/139 passed incl. 56/56 `openchatzd` (rustc 1.97.1).
 Wire at `ac64c1b`: frozen schema v1, portable schema `openchatzd.cvdr.portable_package` v2.
+
+## 5. Step-3 upgrade interlock — design, stated before coding (Brief B1 R-2; ruling (c), Stef 2026-09-21)
+
+**What must hold.** V3A = "the authenticated `/canister/<LUI>/module_hash` certificate names the code
+that performed the deletion". The certificate is fetched *after* the uninstall, so that claim is true
+only if the Index was not upgraded between `uninstall_completed_at` and the certificate `/time`.
+The interlock guarantees exactly that interval; it guarantees nothing else.
+
+**Observed constraint (point B, PocketIC).** An upgrade is stop → `install_code` → start. A canister
+with an open call context (e.g. the self-finalisation HTTP outcall) does not finish *stopping*, so
+no hook — old or new — runs until its outcalls resolve. The interlock therefore must not depend on
+the stop path, and no test may treat "still Stopping" as "refused".
+
+**Blocking set.** A draft blocks an upgrade iff all of:
+1. stage ∈ {`Uninstalled`, `AwaitingCertificate`, `FailedStuck`} (`Prepared` has no receipt and no
+   uninstall — it never blocks; it is resumed or TTL-purged as today);
+2. no index evidence is stored for its `receipt_id`;
+3. its evidence window is still open: `now − anchor ≤ 24 h`, anchor = `uninstall_completed_at`
+   (falling back to `receipt_committed_at`). After the existing 24 h give-up the receipt is
+   permanently V3A-UNAVAILABLE whatever happens next, so blocking longer protects nothing and
+   would make the Index un-upgradable for ever. Computed from durable draft fields, not heap state.
+
+**Two checks, same predicate (`CvdrStore::upgrade_blockers(now_ns)`), both before any state change.**
+- `pre_upgrade` (running wasm): first statement, before `take_state()`/serialisation — trap with the
+  refusal text. Authoritative: it holds whatever wasm is being installed.
+- `post_upgrade` (incoming wasm): in `resume_in_flight_drafts`, next to the pre-V2 refusal and before
+  the tree rebuild / re-queue / `certified_data_set` — covers upgrades *from* a wasm that predates
+  the `pre_upgrade` check. A trap in either hook fails `install_code`; the old wasm and its state
+  stay installed and `user_index` restarts it.
+- Refusal text: count, each blocker as `prefix(Stage)` (§11.6 prefix, max 20), and the operator
+  path: leave the current wasm running, the evidence sweep captures within seconds-to-minutes
+  (or the window lapses at 24 h), then upgrade again.
+
+**Evidence capture moves earlier.** Today capture starts only once a frozen package exists, which
+leaves `Uninstalled → package stored` unprotected. Step 3 starts the sweep at `Uninstalled`, keys
+evidence by `receipt_id` for a draft *or* a package, stores the certificate **and** the extracted
+`index_module_hash`, and replaces "cert `/time` ≥ commitment certificate time" with
+"cert `/time` ≥ `uninstall_completed_at`" (hash-bound in RECEIPT_BODY_V2, so a verifier can re-check
+it). One fetched certificate serves every draft it post-dates. The deployer value survives only as
+`expected_index_module_hash: Option<Hash>` — compared with the extracted hash for an ops warning +
+metric, never stored as evidence, never in a preimage; `Option` so a not-yet-upgraded `user_index`
+(still sending `executor_module_hash`) can upgrade a new Index.
+
+**Tests (point C).** Unit: predicate truth table (stage × evidence × window), refusal text, stored
+evidence struct decode of the pre-step-3 shape. PocketIC: (i) draft without evidence → upgrade
+refused, refusal names the receipt, and the **old wasm is still serving** (`/cvdr`, `/metrics`,
+a new registration) afterwards; (ii) evidence stored → same upgrade succeeds and the draft
+finalises; (iii) window lapsed → upgrade succeeds; outcalls are answered in every polling loop.
+
+**Known liveness limit (proposed ruling, not built in step 3).** A steady stream of deletions can
+keep some draft inside its first seconds-without-evidence at any instant. Decision proposed: accept
+for now (upgrade tooling retries; the per-draft block lasts seconds), and add an operator
+"quiesce new uninstalls" switch only if Step 9 upgrade tests show real contention.

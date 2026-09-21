@@ -8,36 +8,35 @@
 //! `data_certificate()`, then stores a releasable CVDR keyed by an unguessable
 //! `receipt_id`.
 //!
-//! ## V1 — exact field set + hash order (PINNED; bump [`CVDR_ENCODER_VERSION`] + the
-//!         tag for ANY change)
+//! ## Receipt formulas (PINNED — Brief B1 rulings R-1 / R-2 / R-4 / R-5; bump the tag for ANY change)
 //! All hashes are domain-separated SHA-256 over a fixed, length-stable preimage:
-//! - `record_id   = SHA-256(RECORD_ID_TAG || canonical UserId principal bytes)`
-//!   — byte-identical to the user canister's `mktd::record_id_for`; never `caller()`.
+//! - `record_id   = SHA-256(RECORD_ID_TAG_V2 || record_salt(32) || canonical UserId principal bytes)`
+//!   — NON-IDENTIFYING (R-1): `record_salt` is 32 `raw_rand` bytes sampled once at prepare,
+//!   persisted in the draft, never regenerated, never in the public package; it reaches the user
+//!   only in RevealWire. Without the salt a public `UserId` cannot be joined to a receipt.
 //! - `h_user_pre  = SHA-256(H_USER_TAG  || user_canister_principal || module_hash_pre)`
-//!   — TARGET provenance: WHICH canister was de-referenced and WHAT code it ran pre-uninstall.
-//! - `h_index     = SHA-256(H_INDEX_TAG || index_canister_principal || executor_module_hash)`
-//!   — EXECUTOR provenance: WHICH index performed the de-reference and WHAT code IT ran.
-//!   `executor_module_hash` is the index's OWN deploy-supplied module hash, captured into the
-//!   draft BEFORE uninstall (same capture point as `module_hash_pre`); a mid-flight index
-//!   upgrade does not change it. The de-reference *event* (record_id, deletion_seq, target
-//!   principal) is bound SEPARATELY and explicitly in the commitment — it is NOT this hash.
-//! - `commitment  = SHA-256(COMMITMENT_TAG || CVDR_ENCODER_VERSION || record_id ||
-//!   deletion_seq(8,BE) || h_user_pre || h_index || user_canister_principal)`
-//!   — the value published to `certified_data` and matched by the certificate. `h_index` (and
-//!   thus the captured executor module hash) is bound into this hash chain.
+//!   — Index-recorded observation of the target canister's pre-uninstall module hash:
+//!   integrity-bound by the certified receipt relation, NOT independently attested (R-2 addendum).
 //! - `receipt_id  = SHA-256(RECEIPT_ID_TAG || record_id || deletion_seq(8,BE) || nonce)`
-//!   — the public fetch capability; the 32-byte `nonce` (LUI rng, captured once at draft
-//!   creation and persisted) makes it unguessable from the public UserId/record_id.
+//!   — canonically derived, stable and independently recomputable from the receipt fields (R-5);
+//!   the 32-byte `nonce` (LUI rng, generated once before ID formation, persisted unchanged) is the
+//!   fetch capability.
+//! - `leaf        = SHA-256(RECEIPT_LEAF_TAG || RECEIPT_BODY_V2)` — the OpenChat deletion-event
+//!   value: `body fields -> leaf -> ReceiptTree inclusion -> certified root` (R-4).
 //!
-//! ## V2 — the IC `data_certificate()` bytes are stored verbatim in the [`FrozenCvdrPackage`]
-//!         (`certificate_bytes`), so an external verifier (CVDR-Verify) can re-check the NNS
-//!         signature over the certified receipt-tree root itself. The index verifies the
-//!         certificate in full BEFORE storing (spec §6 store-gate); it never claims `VerifiedFinal`.
+//! No deployer-supplied module hash enters any preimage (R-2). Index code identity is carried by
+//! the authenticated `/canister/<LUI>/module_hash` certificate in the evidence layer, never by the
+//! body.
 //!
-//! ## V3 — the release-record reference a verifier uses to match the index de-reference:
-//!         (`record_id`, `deletion_seq`, `h_index`, `h_user_pre`, `module_hash_pre` [target],
-//!         `executor_module_hash` [index]). A verifier recomputes `h_index`/`h_user_pre` from the
-//!         raw module hashes + principals and re-derives the commitment.
+//! RETIRED, historical only, never reused: `OPENCHATZD_RECORD_ID_USER_V1`,
+//! `OPENCHATZD_CVDR_H_INDEX_V1`, `OPENCHATZD_CVDR_COMMITMENT_V1`, `OPENCHATZD_RECEIPT_BODY_V1`, and
+//! the encoder version string `OPENCHATZD_CVDR_V1`.
+//!
+//! ## Certificate — the IC `data_certificate()` bytes are stored verbatim in the
+//!         [`FrozenCvdrPackage`] (`certificate_bytes`), so an external verifier (CVDR-Verify) can
+//!         re-check the NNS signature over the certified receipt-tree root itself. The index
+//!         verifies the certificate in full BEFORE storing (store-gate); it never claims
+//!         `VerifiedFinal`.
 
 use crate::memory::{
     Memory, get_cvdr_draft_memory, get_cvdr_frozen_log_data_memory, get_cvdr_frozen_log_index_memory,
@@ -52,27 +51,32 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use types::{CanisterId, TimestampMillis, UserId};
 
-/// PINNED domain tag for the index-side record_id (matches the user canister).
-const RECORD_ID_TAG: &[u8] = b"OPENCHATZD_RECORD_ID_USER_V1";
+/// PINNED domain tag for the non-identifying record_id (R-1).
+const RECORD_ID_TAG_V2: &[u8] = b"OPENCHATZD_RECORD_ID_USER_V2";
 /// PINNED domain tag for h_user_pre.
 const H_USER_TAG: &[u8] = b"OPENCHATZD_CVDR_H_USER_V1";
-/// PINNED domain tag for h_index.
-const H_INDEX_TAG: &[u8] = b"OPENCHATZD_CVDR_H_INDEX_V1";
-/// PINNED domain tag for the certified commitment preimage.
-const COMMITMENT_TAG: &[u8] = b"OPENCHATZD_CVDR_COMMITMENT_V1";
 /// PINNED domain tag for the unguessable receipt_id.
 const RECEIPT_ID_TAG: &[u8] = b"OPENCHATZD_CVDR_RECEIPT_V1";
 /// PINNED domain tag for the receipt-tree leaf (spec §2).
 const RECEIPT_LEAF_TAG: &[u8] = b"OPENCHATZD_RECEIPT_LEAF_V1";
-/// PINNED domain tag for the RECEIPT_BODY_V1 preimage (spec §2).
-const RECEIPT_BODY_TAG: &[u8] = b"OPENCHATZD_RECEIPT_BODY_V1";
+/// PINNED domain tag for the RECEIPT_BODY_V2 preimage (R-4). Being the first bytes of the leaf
+/// preimage it also domain-separates V2 leaves from V1 leaves under the unchanged leaf tag.
+const RECEIPT_BODY_TAG: &[u8] = b"OPENCHATZD_RECEIPT_BODY_V2";
 /// PINNED domain tag for TARGETS_COMMITMENT_V1 (spec §2).
 const TARGETS_COMMITMENT_TAG: &[u8] = b"OPENCHATZD_TARGETS_COMMITMENT_V1";
 /// Byte-string label for the receipt-tree path `["receipts", receipt_id]` (spec §2).
 const RECEIPTS_LABEL: &[u8] = b"receipts";
 
-/// PINNED CVDR encoding version. Bump (with the tags) for any preimage change.
-pub const CVDR_ENCODER_VERSION: &str = "OPENCHATZD_CVDR_V1";
+/// Domain tags and version strings RETIRED by the suite-v5 rulings (R-1 / R-2 / R-4). Historical
+/// only — no live tag may ever equal one of these.
+#[cfg(test)]
+const RETIRED_TAGS: [&[u8]; 5] = [
+    b"OPENCHATZD_RECORD_ID_USER_V1",
+    b"OPENCHATZD_CVDR_H_INDEX_V1",
+    b"OPENCHATZD_CVDR_COMMITMENT_V1",
+    b"OPENCHATZD_RECEIPT_BODY_V1",
+    b"OPENCHATZD_CVDR_V1",
+];
 
 pub type Hash = [u8; 32];
 
@@ -87,45 +91,16 @@ fn tagged(tag: &[u8], parts: &[&[u8]]) -> Hash {
     sha256::sha256(&preimage)
 }
 
-/// `record_id = SHA-256(RECORD_ID_TAG || canonical UserId principal bytes)`. Index-side,
-/// deterministic from the durable `UserId` — byte-identical to `mktd::record_id_for`.
-pub fn record_id_for(user_id: UserId) -> Hash {
+/// `record_id = SHA-256(RECORD_ID_TAG_V2 || record_salt(32) || canonical UserId principal bytes)`
+/// (R-1). Non-identifying: recomputable only by a holder of the per-deletion `record_salt`
+/// (the user, via RevealWire). Never `caller()`.
+pub fn record_id_v2(record_salt: &[u8; 32], user_id: UserId) -> Hash {
     let principal: Principal = user_id.into();
-    tagged(RECORD_ID_TAG, &[principal.as_slice()])
+    tagged(RECORD_ID_TAG_V2, &[record_salt, principal.as_slice()])
 }
 
 pub fn h_user_pre(user_canister_id: CanisterId, module_hash_pre: &[u8]) -> Hash {
     tagged(H_USER_TAG, &[user_canister_id.as_slice(), module_hash_pre])
-}
-
-/// `h_index` (EXECUTOR provenance) = `SHA-256(H_INDEX_TAG || index_canister_principal ||
-/// executor_module_hash)`. The executor counterpart of `h_user_pre` (target): witnesses WHICH
-/// index de-referenced and WHAT code IT ran. `executor_module_hash` is the index's OWN
-/// deploy-supplied module hash, captured into the draft before uninstall. The de-reference
-/// EVENT (record_id, deletion_seq, target principal) is bound separately + explicitly in the
-/// commitment — it is NOT folded into this executor-provenance hash.
-pub fn h_index(index_canister_id: CanisterId, executor_module_hash: &[u8]) -> Hash {
-    tagged(H_INDEX_TAG, &[index_canister_id.as_slice(), executor_module_hash])
-}
-
-pub fn commitment(
-    record_id: &Hash,
-    deletion_seq: u64,
-    h_user_pre: &Hash,
-    h_index: &Hash,
-    user_canister_id: CanisterId,
-) -> Hash {
-    tagged(
-        COMMITMENT_TAG,
-        &[
-            CVDR_ENCODER_VERSION.as_bytes(),
-            record_id,
-            &deletion_seq.to_be_bytes(),
-            h_user_pre,
-            h_index,
-            user_canister_id.as_slice(),
-        ],
-    )
 }
 
 pub fn receipt_id_for(record_id: &Hash, deletion_seq: u64, nonce: &[u8; 32]) -> Hash {
@@ -151,13 +126,13 @@ pub fn targets_commitment(salt: &[u8; 32], targets: &[CanisterId]) -> Hash {
     tagged(TARGETS_COMMITMENT_TAG, &[salt, &serialized])
 }
 
-/// `RECEIPT_BODY_V1` (spec §2, FROZEN — layout PINNED in CVDR_BUILD_SPEC_V1.md §2). A versioned
+/// `RECEIPT_BODY_V2` (R-4: `RECEIPT_BODY_V1 − {commitment, h_index}`; layout PINNED). A versioned
 /// fixed-width tag-concatenation (NOT CBOR). Binds every field a verifier needs, in this exact
 /// order:
 ///
 /// `RECEIPT_BODY_TAG ‖ receipt_id(32) ‖ nonce(32) ‖ index_canister_id(len(u8)‖bytes) ‖`
 /// `user_canister_id(len(u8)‖bytes) ‖ record_id(32) ‖ deletion_seq(u64 BE) ‖ h_user_pre(32) ‖`
-/// `h_index(32) ‖ commitment(32) ‖ uninstall_completed_at(u64 BE) ‖ receipt_committed_at(u64 BE) ‖`
+/// `uninstall_completed_at(u64 BE) ‖ receipt_committed_at(u64 BE) ‖`
 /// `targets_count(u32 BE) ‖ targets_commitment(32)`.
 ///
 /// `nonce` is `receipt_id`'s only derivation input not otherwise present (record_id + deletion_seq
@@ -169,7 +144,7 @@ pub fn targets_commitment(salt: &[u8; 32], targets: &[CanisterId]) -> Hash {
 /// `delete_requested_at` is excluded (context only); `certificate_time` arrives later. CVDR-Verify
 /// must recompute this exact layout.
 #[allow(clippy::too_many_arguments)]
-pub fn receipt_body_v1(
+pub fn receipt_body_v2(
     receipt_id: &Hash,
     nonce: &[u8; 32],
     index_canister_id: CanisterId,
@@ -177,8 +152,6 @@ pub fn receipt_body_v1(
     record_id: &Hash,
     deletion_seq: u64,
     h_user_pre: &Hash,
-    h_index: &Hash,
-    commitment: &Hash,
     uninstall_completed_at_ns: u64,
     receipt_committed_at_ns: u64,
     targets_count: u32,
@@ -198,8 +171,6 @@ pub fn receipt_body_v1(
     body.extend_from_slice(record_id);
     body.extend_from_slice(&deletion_seq.to_be_bytes());
     body.extend_from_slice(h_user_pre);
-    body.extend_from_slice(h_index);
-    body.extend_from_slice(commitment);
     body.extend_from_slice(&uninstall_completed_at_ns.to_be_bytes());
     body.extend_from_slice(&receipt_committed_at_ns.to_be_bytes());
     body.extend_from_slice(&targets_count.to_be_bytes());
@@ -597,9 +568,15 @@ pub enum DraftStage {
 pub struct CvdrDraft {
     pub user_id: UserId,
     pub user_canister_id: CanisterId,
-    /// This index's own principal (the executor) — bound into `h_index` and exposed in the
-    /// receipt so an offline verifier can recompute `h_index` without the certificate.
+    /// This index's own principal (the executor), bound into the receipt body.
     pub index_canister_id: CanisterId,
+    /// R-1: 32 `raw_rand` bytes sampled ONCE at prepare, persisted across retries, never
+    /// regenerated at finalisation, never in the public package; handed to the user in RevealWire.
+    /// `None` only on a draft written by a pre-V2 wasm (see [`CvdrDraft::is_legacy_pre_v2`]) or a
+    /// scrubbed terminal draft. Optional so that pre-V2 stored drafts — including the terminal ones
+    /// retained as bookkeeping — still DECODE (Candid rejects a missing non-optional field).
+    pub record_salt: Option<[u8; 32]>,
+    /// `record_id_v2(record_salt, user_id)` — non-identifying.
     pub record_id: Hash,
     pub deletion_seq: u64,
     /// 32 LUI-rng bytes; makes `receipt_id` unguessable. Captured once, never changed.
@@ -608,13 +585,9 @@ pub struct CvdrDraft {
     /// Pre-uninstall module hash of the TARGET user canister (the destroyed code); empty only
     /// if the canister was already module-less when captured.
     pub module_hash_pre: Vec<u8>,
-    /// The EXECUTOR (this index) module hash, captured from durable deploy-supplied state at the
-    /// same point as `module_hash_pre`. Authoritative for `h_index`; a mid-flight index upgrade
-    /// does not change this captured value.
-    pub executor_module_hash: Vec<u8>,
+    /// Index-recorded observation of the target's pre-uninstall module hash (R-2 addendum):
+    /// integrity-bound by the certified receipt relation, not independently attested.
     pub h_user_pre: Hash,
-    pub h_index: Hash,
-    pub commitment: Hash,
     /// 32 `raw_rand` bytes committed into `targets_commitment` (spec §2 TARGETS_COMMITMENT_V1).
     /// Captured at prepare; NEVER reused across deletions. Handed to the user in RevealWire
     /// before irreversible delete (spec §11.4).
@@ -644,10 +617,10 @@ impl CvdrDraft {
         targets_commitment(&self.salt, &self.canisters_to_notify)
     }
 
-    /// The `RECEIPT_BODY_V1` bytes for this draft (spec §2). Requires `uninstall_completed_at` and
+    /// The `RECEIPT_BODY_V2` bytes for this draft. Requires `uninstall_completed_at` and
     /// `receipt_committed_at` to be set (i.e. called at/after publish).
     pub fn receipt_body(&self) -> Vec<u8> {
-        receipt_body_v1(
+        receipt_body_v2(
             &self.receipt_id,
             &self.nonce,
             self.index_canister_id,
@@ -655,8 +628,6 @@ impl CvdrDraft {
             &self.record_id,
             self.deletion_seq,
             &self.h_user_pre,
-            &self.h_index,
-            &self.commitment,
             self.uninstall_completed_at,
             self.receipt_committed_at,
             self.canisters_to_notify.len() as u32,
@@ -681,6 +652,7 @@ impl CvdrDraft {
     /// AwaitingCertificate; the tree rebuild uses the frozen store's stored `receipt_hash`).
     pub fn scrub_sensitive(&mut self) {
         self.salt = [0u8; 32];
+        self.record_salt = None;
         self.canisters_to_notify = Vec::new();
     }
 
@@ -696,13 +668,30 @@ impl CvdrDraft {
 
     /// Canonical RevealWire JSON bytes (CVDR-Verify `openchatzd.cvdr.reveal_package`).
     pub fn reveal_wire_json(&self) -> Vec<u8> {
-        reveal_wire_canonical_json(&self.salt, &self.canisters_to_notify)
+        let record_salt = self.record_salt.expect(
+            "RevealWire needs record_salt: only V2 un-scrubbed drafts are revealed (pre-V2 drafts are refused at upgrade)",
+        );
+        reveal_wire_canonical_json(&self.salt, &record_salt, &self.canisters_to_notify)
+    }
+
+    /// A draft written by a pre-V2 wasm (V1 body, identifying `record_id`, no `record_salt`) that
+    /// has not reached a terminal stage. Such a draft cannot be carried forward: recomputing its
+    /// leaf under V2 would publish a V2-tagged receipt over a V1 `record_id`. Terminal drafts are
+    /// scrubbed bookkeeping (their frozen package is the record) and are never legacy-blocking.
+    pub fn is_legacy_pre_v2(&self) -> bool {
+        self.record_salt.is_none() && !self.is_terminal()
+    }
+
+    /// Terminal = the frozen package is stored and the draft is scrubbed bookkeeping.
+    pub fn is_terminal(&self) -> bool {
+        matches!(self.stage, DraftStage::CertificateCaptured | DraftStage::LateFinalized)
     }
 }
 
 /// Spec §11.4 / CVDR-Verify reveal schema id.
 pub const REVEAL_SCHEMA_ID: &str = "openchatzd.cvdr.reveal_package";
-pub const REVEAL_VERSION: u64 = 1;
+/// 2 = adds `record_salt` (R-1). Version 1 (targets salt only) is historical.
+pub const REVEAL_VERSION: u64 = 2;
 pub const REVEAL_ENCODING: &str = "hex";
 
 /// Prepared-but-not-deleted drafts TTL-purge after this (spec §11.4); aligns with the 24 h window.
@@ -714,12 +703,14 @@ struct CanonicalRevealWire<'a> {
     version: u64,
     encoding: &'a str,
     salt: String,
+    record_salt: String,
     targets: Vec<String>,
 }
 
-/// Canonical RevealWire JSON: salt hex + targets as principal text, sorted by raw bytes
-/// (same order as `targets_commitment`).
-pub fn reveal_wire_canonical_json(salt: &[u8; 32], targets: &[CanisterId]) -> Vec<u8> {
+/// Canonical RevealWire JSON, field order `schema, version, encoding, salt, record_salt, targets`:
+/// targets-salt hex, record-salt hex (the user's authorised-linkage secret for `record_id`, R-1),
+/// and targets as principal text sorted by raw bytes (same order as `targets_commitment`).
+pub fn reveal_wire_canonical_json(salt: &[u8; 32], record_salt: &[u8; 32], targets: &[CanisterId]) -> Vec<u8> {
     let mut sorted: Vec<&CanisterId> = targets.iter().collect();
     sorted.sort_by(|a, b| a.as_slice().cmp(b.as_slice()));
     let canonical = CanonicalRevealWire {
@@ -727,6 +718,7 @@ pub fn reveal_wire_canonical_json(salt: &[u8; 32], targets: &[CanisterId]) -> Ve
         version: REVEAL_VERSION,
         encoding: REVEAL_ENCODING,
         salt: hex::encode(salt),
+        record_salt: hex::encode(record_salt),
         targets: sorted.iter().map(|t| t.to_text()).collect(),
     };
     serde_json::to_vec(&canonical).expect("RevealWire canonical serialization")
@@ -814,6 +806,31 @@ impl From<&FrozenCvdrPackage> for local_user_index_canister::get_cvdr::FrozenWir
             certificate_time: p.certificate_time,
         }
     }
+}
+
+/// The operator-facing refusal raised by `post_upgrade` while pre-V2 drafts are in flight (`None`
+/// when nothing blocks). Names each blocking receipt by its §11.6 prefix + stage and the way out.
+pub fn pre_v2_upgrade_refusal(blockers: &[(String, DraftStage)]) -> Option<String> {
+    const MAX_LISTED: usize = 20;
+    if blockers.is_empty() {
+        return None;
+    }
+    let listed: Vec<String> = blockers
+        .iter()
+        .take(MAX_LISTED)
+        .map(|(prefix, stage)| format!("{prefix}({stage:?})"))
+        .collect();
+    let more = blockers.len().saturating_sub(MAX_LISTED);
+    Some(format!(
+        "upgrade refused: {} in-flight CVDR draft(s) were written by a pre-V2 wasm (RECEIPT_BODY_V1): [{}]{}. \
+         Operator path: keep the CURRENT wasm installed; let each listed receipt finalise via the \
+         self-finalisation loop, or relay its /cvdr_live package to the permissionless `finalize_cvdr` \
+         backstop (Prepared drafts expire after 24 h; Captured/Uninstalled drafts complete via the delete \
+         job first); then upgrade again.",
+        blockers.len(),
+        listed.join(", "),
+        if more > 0 { format!(" (+{more} more)") } else { String::new() },
+    ))
 }
 
 /// §11.6: log at most this truncated prefix (first 8 hex chars = 4 bytes).
@@ -1023,6 +1040,14 @@ impl CvdrStore {
     // ---- draft lifecycle (in-flight, keyed by user_canister_id) ----
 
     pub fn upsert_draft(&mut self, draft: CvdrDraft) {
+        // R-1 invariant, enforced at the single write path: `record_salt` is cleared ONLY by
+        // `scrub_sensitive` on a terminal draft. A non-terminal draft without it could never have
+        // its `record_id` recomputed by the user — fail the message rather than persist it.
+        assert!(
+            draft.record_salt.is_some() || draft.is_terminal(),
+            "CVDR invariant: non-terminal draft {} has no record_salt",
+            receipt_id_prefix(&draft.receipt_id)
+        );
         self.drafts.insert(draft.user_canister_id, draft);
     }
 
@@ -1036,6 +1061,21 @@ impl CvdrStore {
 
     pub fn draft_count(&self) -> u64 {
         self.drafts.len()
+    }
+
+    /// Drafts written by a pre-V2 wasm that are still in flight (see [`CvdrDraft::is_legacy_pre_v2`]).
+    pub fn legacy_pre_v2_draft_count(&self) -> u64 {
+        self.drafts.iter().filter(|e| e.value().is_legacy_pre_v2()).count() as u64
+    }
+
+    /// `(receipt_id prefix, stage)` of every in-flight pre-V2 draft — what blocks an upgrade.
+    pub fn legacy_pre_v2_blockers(&self) -> Vec<(String, DraftStage)> {
+        self.drafts
+            .iter()
+            .map(|e| e.value())
+            .filter(|d| d.is_legacy_pre_v2())
+            .map(|d| (receipt_id_prefix(&d.receipt_id), d.stage))
+            .collect()
     }
 
     /// Every in-flight draft. Used post-upgrade to resume deletions the volatile delete
@@ -1208,14 +1248,64 @@ mod tests {
         Principal::from_slice(&[b; 10])
     }
 
+    const TEST_RECORD_SALT: [u8; 32] = [0x5A; 32];
+
+    /// Test shorthand: `record_id_v2` under a fixed salt.
+    fn record_id_for(user_id: UserId) -> Hash {
+        record_id_v2(&TEST_RECORD_SALT, user_id)
+    }
+
+    /// R-1: exact formula `SHA-256(RECORD_ID_TAG_V2 ‖ record_salt(32) ‖ principal bytes)`.
     #[test]
-    fn record_id_matches_tagged_sha256() {
+    fn record_id_v2_matches_tagged_salted_sha256() {
         let uid: UserId = p(7).into();
         let principal: Principal = uid.into();
+        let salt = [0xC3u8; 32];
         let mut pre = Vec::new();
-        pre.extend_from_slice(RECORD_ID_TAG);
+        pre.extend_from_slice(b"OPENCHATZD_RECORD_ID_USER_V2");
+        pre.extend_from_slice(&salt);
         pre.extend_from_slice(principal.as_slice());
-        assert_eq!(record_id_for(uid), sha256::sha256(&pre));
+        assert_eq!(record_id_v2(&salt, uid), sha256::sha256(&pre));
+    }
+
+    /// R-1: non-identifying — the same UserId under two salts gives unrelated record_ids, and the
+    /// retired unsalted V1 derivation (what anyone holding a public UserId could compute) never
+    /// reproduces a V2 record_id.
+    #[test]
+    fn record_id_v2_is_not_joinable_from_the_user_id_alone() {
+        let uid: UserId = p(7).into();
+        let principal: Principal = uid.into();
+        let a = record_id_v2(&[1u8; 32], uid);
+        let b = record_id_v2(&[2u8; 32], uid);
+        assert_ne!(a, b, "record_salt must affect record_id");
+        let mut v1 = b"OPENCHATZD_RECORD_ID_USER_V1".to_vec();
+        v1.extend_from_slice(principal.as_slice());
+        assert_ne!(a, sha256::sha256(&v1));
+        let mut v2_unsalted = b"OPENCHATZD_RECORD_ID_USER_V2".to_vec();
+        v2_unsalted.extend_from_slice(principal.as_slice());
+        assert_ne!(a, sha256::sha256(&v2_unsalted));
+    }
+
+    /// R-1/R-2/R-4: retired tags are historical only — no live tag may equal one.
+    #[test]
+    fn retired_tags_are_never_live() {
+        let live: [&[u8]; 6] = [
+            RECORD_ID_TAG_V2,
+            H_USER_TAG,
+            RECEIPT_ID_TAG,
+            RECEIPT_LEAF_TAG,
+            RECEIPT_BODY_TAG,
+            TARGETS_COMMITMENT_TAG,
+        ];
+        for tag in live {
+            assert!(
+                !RETIRED_TAGS.contains(&tag),
+                "live tag {:?} is retired",
+                std::str::from_utf8(tag)
+            );
+        }
+        assert_eq!(RECEIPT_BODY_TAG, b"OPENCHATZD_RECEIPT_BODY_V2");
+        assert_eq!(RECEIPT_LEAF_TAG, b"OPENCHATZD_RECEIPT_LEAF_V1", "leaf tag unchanged (R-4)");
     }
 
     #[test]
@@ -1224,32 +1314,6 @@ mod tests {
         let a = receipt_id_for(&rid, 5, &[0u8; 32]);
         let b = receipt_id_for(&rid, 5, &[1u8; 32]);
         assert_ne!(a, b, "nonce must affect receipt_id");
-    }
-
-    #[test]
-    fn commitment_field_order_is_load_bearing() {
-        let rid = record_id_for(p(1).into());
-        let hu = h_user_pre(p(2), &[9u8; 32]);
-        let hi = h_index(p(3), &[7u8; 32]);
-        let base = commitment(&rid, 3, &hu, &hi, p(2));
-        // Swapping h_user_pre and h_index must change the commitment.
-        assert_ne!(base, commitment(&rid, 3, &hi, &hu, p(2)));
-        // Changing the sequence must change the commitment.
-        assert_ne!(base, commitment(&rid, 4, &hu, &hi, p(2)));
-    }
-
-    #[test]
-    fn h_index_binds_executor_module_hash() {
-        // h_index is EXECUTOR provenance: it must change when the index's module hash changes,
-        // and differ from h_user_pre (target) even for the same principal + module hash.
-        let base = h_index(p(3), &[1u8; 32]);
-        assert_ne!(base, h_index(p(3), &[2u8; 32]), "executor module hash must affect h_index");
-        assert_ne!(base, h_index(p(4), &[1u8; 32]), "index principal must affect h_index");
-        assert_ne!(
-            base,
-            h_user_pre(p(3), &[1u8; 32]),
-            "executor and target hashes must not collide"
-        );
     }
 
     // ---- CVDR finalization rework (spec §2/§4) ----
@@ -1285,15 +1349,13 @@ mod tests {
         assert_eq!(base, sha256::sha256(&pre));
     }
 
-    /// spec §2 leaf = SHA256(RECEIPT_LEAF_TAG || RECEIPT_BODY_V1); pins the exact amended field
+    /// leaf = SHA256(RECEIPT_LEAF_TAG || RECEIPT_BODY_V2); pins the exact V2 field
     /// ORDER/widths, and confirms the load-bearing timestamps are bound INSIDE the leaf (window
     /// rule anti-spoof).
     #[test]
     fn receipt_leaf_matches_formula_and_binds_timestamps() {
         let record_id = record_id_for(p(1).into());
         let hu = h_user_pre(p(2), &[9u8; 32]);
-        let hi = h_index(p(3), &[7u8; 32]);
-        let com = commitment(&record_id, 5, &hu, &hi, p(2));
         let salt = [4u8; 32];
         let targets = vec![p(8), p(6)];
         let tc = targets_commitment(&salt, &targets);
@@ -1301,7 +1363,7 @@ mod tests {
         let index_id = p(3);
         let user_id = p(2);
         let receipt_id = receipt_id_for(&record_id, 5, &nonce);
-        let body = receipt_body_v1(
+        let body = receipt_body_v2(
             &receipt_id,
             &nonce,
             index_id,
@@ -1309,8 +1371,6 @@ mod tests {
             &record_id,
             5,
             &hu,
-            &hi,
-            &com,
             111,
             222,
             targets.len() as u32,
@@ -1323,9 +1383,10 @@ mod tests {
         pre.extend_from_slice(&body);
         assert_eq!(receipt_leaf(&body), sha256::sha256(&pre));
 
-        // EXACT amended byte layout (spec §2), recomputed independently — pins the frozen order.
+        // EXACT V2 byte layout (R-4), recomputed independently — pins the frozen order. The tag is
+        // spelled out so a silent tag edit fails here too.
         let mut expected = Vec::new();
-        expected.extend_from_slice(RECEIPT_BODY_TAG);
+        expected.extend_from_slice(b"OPENCHATZD_RECEIPT_BODY_V2");
         expected.extend_from_slice(&receipt_id);
         expected.extend_from_slice(&nonce);
         // principals are len(u8) ‖ raw bytes (G adjacency ruling)
@@ -1336,16 +1397,16 @@ mod tests {
         expected.extend_from_slice(&record_id);
         expected.extend_from_slice(&5u64.to_be_bytes());
         expected.extend_from_slice(&hu);
-        expected.extend_from_slice(&hi);
-        expected.extend_from_slice(&com);
         expected.extend_from_slice(&111u64.to_be_bytes());
         expected.extend_from_slice(&222u64.to_be_bytes());
         expected.extend_from_slice(&(targets.len() as u32).to_be_bytes());
         expected.extend_from_slice(&tc);
-        assert_eq!(body, expected, "RECEIPT_BODY_V1 exact frozen byte layout");
+        assert_eq!(body, expected, "RECEIPT_BODY_V2 exact frozen byte layout");
+        // V2 = V1 − {h_index(32), commitment(32)}: fixed part is tag(26) + 32+32 + 2×(1+10) + 32 + 8 + 32 + 8+8 + 4 + 32.
+        assert_eq!(body.len(), 26 + 64 + 22 + 32 + 8 + 32 + 16 + 4 + 32);
 
         // receipt_committed_at (window anchor) must change the leaf
-        let body_ct = receipt_body_v1(
+        let body_ct = receipt_body_v2(
             &receipt_id,
             &nonce,
             index_id,
@@ -1353,8 +1414,6 @@ mod tests {
             &record_id,
             5,
             &hu,
-            &hi,
-            &com,
             111,
             999,
             targets.len() as u32,
@@ -1366,7 +1425,7 @@ mod tests {
             "receipt_committed_at must bind into the leaf"
         );
         // uninstall_completed_at must change the leaf
-        let body_un = receipt_body_v1(
+        let body_un = receipt_body_v2(
             &receipt_id,
             &nonce,
             index_id,
@@ -1374,8 +1433,6 @@ mod tests {
             &record_id,
             5,
             &hu,
-            &hi,
-            &com,
             333,
             222,
             targets.len() as u32,
@@ -1878,15 +1935,13 @@ mod tests {
             user_id: p(1).into(),
             user_canister_id: p(1),
             index_canister_id: p(2),
+            record_salt: Some([0x5Au8; 32]),
             record_id: [1u8; 32],
             deletion_seq: 7,
             nonce: [2u8; 32],
             receipt_id: [3u8; 32],
             module_hash_pre: vec![9],
-            executor_module_hash: vec![8],
             h_user_pre: [4u8; 32],
-            h_index: [5u8; 32],
-            commitment: [6u8; 32],
             salt: [0xAB; 32],
             canisters_to_notify: vec![p(3), p(4)],
             uninstall_completed_at: 111,
@@ -1900,6 +1955,11 @@ mod tests {
         draft.scrub_sensitive();
         // sensitive fields gone
         assert_eq!(draft.salt, [0u8; 32], "salt scrubbed");
+        assert_eq!(
+            draft.record_salt, None,
+            "record_salt scrubbed (R-1: never retained server-side)"
+        );
+        assert!(!draft.is_legacy_pre_v2(), "a scrubbed TERMINAL draft is not a legacy blocker");
         assert!(draft.canisters_to_notify.is_empty(), "raw target list scrubbed");
         // bookkeeping kept
         assert_eq!(draft.uninstall_completed_at, 111);
@@ -1915,12 +1975,22 @@ mod tests {
         let salt = [0xABu8; 32];
         let a = p(3);
         let b = p(1);
-        let json = reveal_wire_canonical_json(&salt, &[a, b]);
+        let record_salt = [0xC3u8; 32];
+        let json = reveal_wire_canonical_json(&salt, &record_salt, &[a, b]);
         let v: serde_json::Value = serde_json::from_slice(&json).unwrap();
         assert_eq!(v["schema"], REVEAL_SCHEMA_ID);
-        assert_eq!(v["version"], REVEAL_VERSION);
+        assert_eq!(v["version"], 2, "RevealWire v2 carries record_salt (R-1)");
         assert_eq!(v["encoding"], REVEAL_ENCODING);
         assert_eq!(v["salt"], hex::encode(salt));
+        assert_eq!(v["record_salt"], hex::encode(record_salt));
+        // canonical field order is part of the wire contract
+        let text = String::from_utf8(json.clone()).unwrap();
+        let pos = |k: &str| text.find(&format!("\"{k}\":")).unwrap_or_else(|| panic!("missing {k}"));
+        let order = ["schema", "version", "encoding", "salt", "record_salt", "targets"];
+        assert!(
+            order.windows(2).all(|w| pos(w[0]) < pos(w[1])),
+            "RevealWire field order: {text}"
+        );
         let targets = v["targets"].as_array().unwrap();
         assert_eq!(targets.len(), 2);
         // sorted by raw principal bytes: p(1) before p(3)
@@ -1933,6 +2003,227 @@ mod tests {
         );
     }
 
+    /// R-1 linkage: the RevealWire `record_salt` + the user's own UserId recompute the public
+    /// `record_id`, and with `deletion_seq` + `nonce` from the body, the `receipt_id`.
+    #[test]
+    fn reveal_record_salt_recomputes_record_id_and_receipt_id() {
+        let uid: UserId = p(1).into();
+        let record_salt = [0xC3u8; 32];
+        let record_id = record_id_v2(&record_salt, uid);
+        let nonce = [2u8; 32];
+        let draft = CvdrDraft {
+            user_id: uid,
+            user_canister_id: p(1),
+            index_canister_id: p(2),
+            record_salt: Some(record_salt),
+            record_id,
+            deletion_seq: 4,
+            nonce,
+            receipt_id: receipt_id_for(&record_id, 4, &nonce),
+            module_hash_pre: vec![9],
+            h_user_pre: h_user_pre(p(1), &[9]),
+            salt: [0xAB; 32],
+            canisters_to_notify: vec![p(3)],
+            uninstall_completed_at: 111,
+            receipt_committed_at: 222,
+            finalize_attempt: 0,
+            finalize_last_attempt_at: 0,
+            created_at: 1,
+            attempt: 0,
+            stage: DraftStage::AwaitingCertificate,
+        };
+        let reveal: serde_json::Value = serde_json::from_slice(&draft.reveal_wire_json()).unwrap();
+        let revealed: [u8; 32] = hex::decode(reveal["record_salt"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        assert_eq!(record_id_v2(&revealed, uid), draft.record_id);
+        // the public body never contains the salt
+        let body = draft.receipt_body();
+        assert!(
+            !body.windows(32).any(|w| w == record_salt),
+            "record_salt must not appear in the receipt body"
+        );
+        assert!(
+            body.windows(32).any(|w| w == draft.record_id),
+            "record_id is displayed in the body"
+        );
+    }
+
+    /// Stored-struct upgrade (Candid, stable `StableBTreeMap`): a draft written by the pre-V2 wasm
+    /// (with `executor_module_hash`/`h_index`/`commitment`, without `record_salt`) still DECODES —
+    /// so the refusal below is an explicit decision, never a decode trap — and is flagged legacy
+    /// unless terminal.
+    #[test]
+    fn pre_v2_stored_draft_decodes_and_is_flagged_legacy() {
+        #[derive(CandidType, Serialize)]
+        struct PreV2Draft {
+            user_id: UserId,
+            user_canister_id: CanisterId,
+            index_canister_id: CanisterId,
+            record_id: Hash,
+            deletion_seq: u64,
+            nonce: [u8; 32],
+            receipt_id: Hash,
+            module_hash_pre: Vec<u8>,
+            executor_module_hash: Vec<u8>,
+            h_user_pre: Hash,
+            h_index: Hash,
+            commitment: Hash,
+            salt: [u8; 32],
+            canisters_to_notify: Vec<CanisterId>,
+            uninstall_completed_at: u64,
+            receipt_committed_at: u64,
+            finalize_attempt: u32,
+            finalize_last_attempt_at: u64,
+            created_at: TimestampMillis,
+            attempt: u32,
+            stage: DraftStage,
+        }
+        let old = |stage| PreV2Draft {
+            user_id: p(1).into(),
+            user_canister_id: p(1),
+            index_canister_id: p(2),
+            record_id: [1u8; 32],
+            deletion_seq: 7,
+            nonce: [2u8; 32],
+            receipt_id: [3u8; 32],
+            module_hash_pre: vec![9],
+            executor_module_hash: vec![8; 32],
+            h_user_pre: [4u8; 32],
+            h_index: [5u8; 32],
+            commitment: [6u8; 32],
+            salt: [0xAB; 32],
+            canisters_to_notify: vec![p(3)],
+            uninstall_completed_at: 111,
+            receipt_committed_at: 222,
+            finalize_attempt: 1,
+            finalize_last_attempt_at: 333,
+            created_at: 100,
+            attempt: 2,
+            stage,
+        };
+        for (stage, legacy) in [
+            (DraftStage::Prepared, true),
+            (DraftStage::Captured, true),
+            (DraftStage::Uninstalled, true),
+            (DraftStage::AwaitingCertificate, true),
+            (DraftStage::FailedStuck, true),
+            (DraftStage::CertificateCaptured, false),
+            (DraftStage::LateFinalized, false),
+        ] {
+            let bytes = candid::encode_one(old(stage)).unwrap();
+            let draft = CvdrDraft::from_bytes(Cow::Owned(bytes));
+            assert_eq!(draft.record_salt, None);
+            assert_eq!((draft.deletion_seq, draft.receipt_id, draft.stage), (7, [3u8; 32], stage));
+            assert_eq!(draft.is_legacy_pre_v2(), legacy, "{stage:?}");
+        }
+        // a V2 draft round-trips with its salt and is never legacy
+        let mut store = CvdrStore::default();
+        let v2 = CvdrDraft::from_bytes(Cow::Owned(candid::encode_one(old(DraftStage::Prepared)).unwrap()));
+        let v2 = CvdrDraft {
+            record_salt: Some([0xC3; 32]),
+            ..v2
+        };
+        store.upsert_draft(v2);
+        let back = store.get_draft(&p(1)).unwrap();
+        assert_eq!(back.record_salt, Some([0xC3; 32]));
+        assert!(!back.is_legacy_pre_v2());
+        assert_eq!(store.legacy_pre_v2_draft_count(), 0);
+    }
+
+    fn v2_draft(stage: DraftStage, record_salt: Option<[u8; 32]>) -> CvdrDraft {
+        CvdrDraft {
+            user_id: p(1).into(),
+            user_canister_id: p(1),
+            index_canister_id: p(2),
+            record_salt,
+            record_id: [1u8; 32],
+            deletion_seq: 1,
+            nonce: [2u8; 32],
+            receipt_id: [0xA7u8; 32],
+            module_hash_pre: vec![],
+            h_user_pre: [0u8; 32],
+            salt: [0xCDu8; 32],
+            canisters_to_notify: vec![p(5)],
+            uninstall_completed_at: 0,
+            receipt_committed_at: 0,
+            finalize_attempt: 0,
+            finalize_last_attempt_at: 0,
+            created_at: 1,
+            attempt: 0,
+            stage,
+        }
+    }
+
+    const NON_TERMINAL: [DraftStage; 5] = [
+        DraftStage::Prepared,
+        DraftStage::Captured,
+        DraftStage::Uninstalled,
+        DraftStage::AwaitingCertificate,
+        DraftStage::FailedStuck,
+    ];
+
+    /// R-1 invariant: a NON-TERMINAL V2 draft never has `record_salt == None`. Every non-terminal
+    /// stage persists and reloads with its salt; the salt survives stage transitions; only
+    /// `scrub_sensitive` (terminal capture) clears it; and the single write path refuses to persist
+    /// a non-terminal draft without one.
+    #[test]
+    fn non_terminal_v2_draft_always_carries_record_salt() {
+        let mut store = CvdrStore::default();
+        let salt = Some([0xC3u8; 32]);
+        let mut draft = v2_draft(DraftStage::Prepared, salt);
+        for stage in NON_TERMINAL {
+            draft.stage = stage;
+            store.upsert_draft(draft.clone());
+            let back = store.get_draft(&p(1)).unwrap();
+            assert_eq!(back.record_salt, salt, "{stage:?} keeps the prepare-time record_salt");
+            assert!(!back.is_terminal() && !back.is_legacy_pre_v2());
+        }
+        assert_eq!(store.legacy_pre_v2_draft_count(), 0);
+        // terminal capture is the only place the salt goes away
+        draft.stage = DraftStage::CertificateCaptured;
+        draft.scrub_sensitive();
+        store.upsert_draft(draft);
+        assert_eq!(store.get_draft(&p(1)).unwrap().record_salt, None);
+        assert_eq!(store.legacy_pre_v2_draft_count(), 0);
+    }
+
+    #[test]
+    fn write_path_refuses_a_non_terminal_draft_without_record_salt() {
+        for stage in NON_TERMINAL {
+            let refused = std::panic::catch_unwind(|| {
+                let mut store = CvdrStore::default();
+                store.upsert_draft(v2_draft(stage, None));
+            });
+            assert!(refused.is_err(), "{stage:?} without record_salt must not be persisted");
+        }
+    }
+
+    /// The upgrade refusal names each blocker (prefix + stage) and the operator path.
+    #[test]
+    fn pre_v2_upgrade_refusal_lists_blockers_and_operator_path() {
+        assert_eq!(pre_v2_upgrade_refusal(&[]), None);
+        let blockers = vec![
+            ("a7a7a7a7".to_string(), DraftStage::AwaitingCertificate),
+            ("0badf00d".to_string(), DraftStage::FailedStuck),
+        ];
+        let msg = pre_v2_upgrade_refusal(&blockers).unwrap();
+        for needle in [
+            "upgrade refused: 2 in-flight",
+            "pre-V2",
+            "a7a7a7a7(AwaitingCertificate)",
+            "0badf00d(FailedStuck)",
+            "self-finalisation loop",
+            "finalize_cvdr",
+            "then upgrade again",
+        ] {
+            assert!(msg.contains(needle), "refusal must contain `{needle}`: {msg}");
+        }
+        let many: Vec<_> = (0..25).map(|i| (format!("{i:08x}"), DraftStage::Prepared)).collect();
+        assert!(pre_v2_upgrade_refusal(&many).unwrap().contains("(+5 more)"));
+    }
+
     #[test]
     fn purge_expired_prepared_scrubs_and_drops() {
         let mut store = CvdrStore::default();
@@ -1940,15 +2231,13 @@ mod tests {
             user_id: p(1).into(),
             user_canister_id: p(1),
             index_canister_id: p(2),
+            record_salt: Some([0x5Au8; 32]),
             record_id: [1u8; 32],
             deletion_seq: 1,
             nonce: [2u8; 32],
             receipt_id: [9u8; 32],
             module_hash_pre: vec![],
-            executor_module_hash: vec![],
             h_user_pre: [0u8; 32],
-            h_index: [0u8; 32],
-            commitment: [0u8; 32],
             salt: [0xCDu8; 32],
             canisters_to_notify: vec![p(5)],
             uninstall_completed_at: 0,
