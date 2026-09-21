@@ -3,6 +3,7 @@ use openchat_installer_canister::*;
 
 // Updates
 generate_update_call!(install_canisters);
+generate_update_call!(upgrade_canister);
 generate_update_call!(upload_wasm_chunk);
 
 pub mod happy_path {

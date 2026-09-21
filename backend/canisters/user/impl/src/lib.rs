@@ -55,7 +55,6 @@ mod guards;
 mod jobs;
 mod lifecycle;
 mod memory;
-mod mktd;
 mod model;
 mod openchat_bot;
 mod queries;
@@ -497,19 +496,12 @@ struct Data {
     pub idempotency_checker: IdempotencyChecker,
     pub bots: InstalledBots,
     pub premium_items: PremiumItems,
-    /// MKTd02 Leaf-mode deletion: set synchronously by the adapter's
-    /// `tombstone_state()` during Phase A. Single source of truth for
-    /// `MKTdUserAdapter::is_tombstoned()` and the D8 mutation block. Additive;
-    /// defaults to `false` for canisters upgraded from a pre-P1 wasm.
+    /// Historical: set by the retired user-canister MKTd02 adapter during its Phase A (removed by
+    /// R-3). Nothing sets it any more; it is kept, with the D8 mutation block below, so a canister
+    /// that was already tombstoned by that path stays write-blocked after upgrading. Additive;
+    /// defaults to `false`.
     #[serde(default)]
     pub pii_tombstoned: bool,
-    /// MKTd02 Phase C: the receipt id of THIS user's finalized CVDR, persisted on
-    /// successful finalize so the pre-uninstall export (P2) can retrieve the
-    /// canonical receipt without an engine enumeration API (the engine only
-    /// exposes `get_receipt(receipt_id)`). `None` until finalized; additive,
-    /// defaults to `None` on upgrade from a pre-P2 wasm.
-    #[serde(default)]
-    pub mktd_finalized_receipt_id: Option<[u8; 32]>,
 }
 
 impl Data {
@@ -581,7 +573,6 @@ impl Data {
             bots: InstalledBots::default(),
             premium_items: PremiumItems::default(),
             pii_tombstoned: false,
-            mktd_finalized_receipt_id: None,
         }
     }
 

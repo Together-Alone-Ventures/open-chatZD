@@ -59,7 +59,6 @@ mod memory;
 mod model;
 mod queries;
 mod updates;
-mod wasm_hash;
 
 const CHILD_CANISTER_INITIAL_CYCLES_BALANCE: Cycles = CYCLES_REQUIRED_FOR_UPGRADE + CHILD_CANISTER_TOP_UP_AMOUNT; // 0.5T cycles
 const CHILD_CANISTER_TOP_UP_AMOUNT: Cycles = 200_000_000_000; // 0.2T cycles
@@ -557,8 +556,6 @@ struct Data {
     pub global_users: GlobalUserMap,
     pub bots: BotsMap,
     pub child_canister_wasms: ChildCanisterWasms<ChildCanisterType>,
-    #[serde(default)]
-    pub user_canister_module_hash: Hash,
     // CVDR v5: this index's OWN deployed module hash (gzip upload hash), deploy-supplied at init
     // and refreshed on every post_upgrade. The captured H_index executor provenance — never read
     // from inside the canister, never computed from receipt fields.
@@ -572,11 +569,6 @@ struct Data {
     pub cycles_dispenser_canister_id: CanisterId,
     pub escrow_canister_id: CanisterId,
     pub online_users_canister_id: CanisterId,
-    /// P2: durable receipts canister for the pre-uninstall CVDR export (§5,
-    /// env-driven). `None` = export disabled. Additive; defaults to `None` on
-    /// upgrade from a pre-P2 wasm.
-    #[serde(default)]
-    pub receipts_canister_id: Option<CanisterId>,
     pub internet_identity_canister_id: CanisterId,
     pub website_canister_id: CanisterId,
     pub users_requiring_upgrade: CanistersRequiringUpgrade,
@@ -664,7 +656,6 @@ impl Data {
         escrow_canister_id: CanisterId,
         event_relay_canister_id: CanisterId,
         online_users_canister_id: CanisterId,
-        receipts_canister_id: Option<CanisterId>,
         internet_identity_canister_id: CanisterId,
         website_canister_id: CanisterId,
         canister_pool_target_size: u16,
@@ -679,7 +670,6 @@ impl Data {
             local_communities: LocalCommunityMap::default(),
             global_users: GlobalUserMap::default(),
             child_canister_wasms: ChildCanisterWasms::default(),
-            user_canister_module_hash: Hash::default(),
             executor_module_hash: Hash::default(),
             user_index_canister_id,
             group_index_canister_id,
@@ -689,7 +679,6 @@ impl Data {
             cycles_dispenser_canister_id,
             escrow_canister_id,
             online_users_canister_id,
-            receipts_canister_id,
             internet_identity_canister_id,
             website_canister_id,
             users_requiring_upgrade: CanistersRequiringUpgrade::default(),

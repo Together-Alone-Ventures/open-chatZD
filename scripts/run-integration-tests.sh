@@ -22,7 +22,7 @@ fi
 
 if [[ $WASM_SRC == "build" ]]
 then
-    OPENCHAT_LOCAL_REPLICA=true ./scripts/generate-all-canister-wasms.sh || exit 1
+    ./scripts/generate-all-canister-wasms.sh || exit 1
 elif [[ $WASM_SRC != "local" ]]
 then
     ./scripts/download-all-canister-wasms.sh $WASM_SRC || exit 1

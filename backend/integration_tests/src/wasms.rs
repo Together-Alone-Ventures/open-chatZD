@@ -21,7 +21,6 @@ lazy_static! {
     pub static ref ONLINE_USERS: CanisterWasm = get_canister_wasm("online_users");
     pub static ref OPENCHAT_INSTALLER: CanisterWasm = get_canister_wasm("openchat_installer");
     pub static ref PROPOSALS_BOT: CanisterWasm = get_canister_wasm("proposals_bot");
-    pub static ref RECEIPTS: CanisterWasm = get_canister_wasm("receipts");
     pub static ref REGISTRY: CanisterWasm = get_canister_wasm("registry");
     pub static ref SIGN_IN_WITH_EMAIL: CanisterWasm = get_canister_wasm("sign_in_with_email");
     pub static ref SNS_WASM: CanisterWasm = get_canister_wasm("sns_wasm");
@@ -31,6 +30,44 @@ lazy_static! {
     pub static ref USER: CanisterWasm = get_canister_wasm("user");
     pub static ref USER_INDEX: CanisterWasm = get_canister_wasm("user_index");
 }
+
+/// Docker-built wasms of the pre-R-3 baseline (`c744de1`), used only by `r3_upgrade_tests`.
+/// Not committed: copy them to `wasms/baseline_c744de1/` (docs/dev/v5/BASELINE_c744de1.md §3.2).
+///
+/// Every load is checked against the SHA-256 recorded in that document, so the upgrade test can
+/// only ever start from the exact `c744de1` all-canister-recipe artefacts.
+pub fn baseline_c744de1(canister_name: &str) -> CanisterWasm {
+    let expected = BASELINE_C744DE1_SHA256
+        .iter()
+        .find(|(name, _)| *name == canister_name)
+        .unwrap_or_else(|| panic!("no recorded c744de1 baseline hash for `{canister_name}`"))
+        .1;
+    let wasm = get_canister_wasm(&format!("baseline_c744de1/{canister_name}"));
+    let actual = hex::encode(sha256::sha256(&wasm.module));
+    assert_eq!(
+        actual, expected,
+        "wasms/baseline_c744de1/{canister_name}.wasm.gz is not the c744de1 artefact recorded in \
+         docs/dev/v5/BASELINE_c744de1.md §3.2"
+    );
+    wasm
+}
+
+/// `.wasm.gz` SHA-256 values from docs/dev/v5/BASELINE_c744de1.md §3.2 (all-canister Docker recipe).
+const BASELINE_C744DE1_SHA256: [(&str, &str); 4] = [
+    (
+        "local_user_index",
+        "83601cf8e1c35f487011c94eb9a02519a785755240b175462bbf04264396a601",
+    ),
+    (
+        "openchat_installer",
+        "81e2aa0b295122bd66efefcfc7dcda72c1910b9378486f2682e63d33d4177b64",
+    ),
+    ("user", "eec4762080e2bdd941cf3f9dcb8530665d6dfa9d2a8a9d81828ab4d066b80b45"),
+    (
+        "user_index",
+        "f4c2d4c98fb9e5e56ab2f099859c35f237b3fbae3a8b66a858f11da53b053357",
+    ),
+];
 
 fn get_canister_wasm(canister_name: &str) -> CanisterWasm {
     let wasm = read_file_from_local_bin(&format!("{canister_name}.wasm.gz"));

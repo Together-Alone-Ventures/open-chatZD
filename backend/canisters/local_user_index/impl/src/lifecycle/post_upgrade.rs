@@ -1,7 +1,6 @@
 use crate::Data;
 use crate::lifecycle::{init_env, init_state};
 use crate::memory::{get_stable_memory_map_memory, get_upgrades_memory};
-use crate::wasm_hash::deployed_module_hash;
 use canister_logger::LogEntry;
 use canister_tracing_macros::trace;
 use ic_cdk::post_upgrade;
@@ -20,17 +19,6 @@ fn post_upgrade(args: Args) {
 
     let (mut data, errors, logs, traces): (Data, Vec<LogEntry>, Vec<LogEntry>, Vec<LogEntry>) =
         msgpack::deserialize(reader).unwrap();
-
-    if data.user_canister_module_hash == [0; 32] {
-        let user_wasm = &data
-            .child_canister_wasms
-            .get(local_user_index_canister::ChildCanisterType::User)
-            .wasm
-            .module;
-        if !user_wasm.is_empty() {
-            data.user_canister_module_hash = deployed_module_hash(user_wasm).expect("user canister wasm hash");
-        }
-    }
 
     // CVDR v5: refresh the deploy-supplied executor module hash (H_index provenance) to the
     // newly-installed wasm. Any draft captured before this upgrade keeps its PRE-upgrade hash

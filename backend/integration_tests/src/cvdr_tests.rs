@@ -37,7 +37,7 @@ fn prepare_deletion(env: &mut PocketIc, user: &User) -> prepare_account_deletion
     client::local_user_index::happy_path::prepare_account_deletion(env, user)
 }
 
-fn delete_and_reach_awaiting(env: &mut PocketIc, canister_ids: &CanisterIds, user: &User, auth: &UserAuth) {
+pub(crate) fn delete_and_reach_awaiting(env: &mut PocketIc, canister_ids: &CanisterIds, user: &User, auth: &UserAuth) {
     prepare_deletion(env, user);
     client::identity::happy_path::delete_user(env, auth, canister_ids.identity);
     tick_many(env, 10);
@@ -159,7 +159,7 @@ fn fetch_cvdr(env: &PocketIc, local_user_index: CanisterId, receipt_id: [u8; 32]
 
 /// The v5 metrics triple (drafts_in_flight, released_count, awaiting_certificate) read off
 /// the public `/metrics` http route.
-fn cvdr_metrics(env: &PocketIc, local_user_index: CanisterId) -> (u64, u64, bool) {
+pub(crate) fn cvdr_metrics(env: &PocketIc, local_user_index: CanisterId) -> (u64, u64, bool) {
     let response = client::http_request(
         env,
         Principal::anonymous(),
@@ -188,7 +188,7 @@ fn cvdr_index_evidence_count(env: &PocketIc, local_user_index: CanisterId) -> u6
         .expect("cvdr_index_evidence_count")
 }
 
-fn metrics_json(env: &PocketIc, canister_id: CanisterId) -> serde_json::Value {
+pub(crate) fn metrics_json(env: &PocketIc, canister_id: CanisterId) -> serde_json::Value {
     let response = client::http_request(
         env,
         Principal::anonymous(),
@@ -205,12 +205,6 @@ fn metrics_json(env: &PocketIc, canister_id: CanisterId) -> serde_json::Value {
 }
 
 /// Receipts-canister stored-receipt count — proof of whether the index ever called `store`.
-fn receipts_stored(env: &PocketIc, receipts: CanisterId) -> u64 {
-    metrics_json(env, receipts)["receipts_stored"]
-        .as_u64()
-        .expect("receipts_stored")
-}
-
 /// The LUI's P2 durable parked/export-pending counts (`export_pending.len()` and its
 /// uninstall-pending sub-count) — both must stay flat under v5 (the parked set is never fed).
 fn lui_export_pending(env: &PocketIc, lui: CanisterId) -> (u64, u64) {
@@ -238,6 +232,11 @@ fn module_hash_is_none(env: &PocketIc, user: &User) -> bool {
 /// Running again — so this never returns mid-stop (no `CanisterStopped` race) and has no pre-stop
 /// false positive. Replaces a fixed `tick_many`, which was non-deterministic under load.
 fn wait_for_lui_version(env: &mut PocketIc, lui: CanisterId, expected: types::BuildVersion) {
+    wait_for_version(env, lui, expected)
+}
+
+/// Poll any OpenChat canister's `/metrics` until it reports `expected` (upgrade completed, Running).
+pub(crate) fn wait_for_version(env: &mut PocketIc, lui: CanisterId, expected: types::BuildVersion) {
     let req = HttpRequest {
         method: "GET".to_string(),
         url: "/metrics".to_string(),
@@ -272,7 +271,7 @@ fn wait_for_lui_version(env: &mut PocketIc, lui: CanisterId, expected: types::Bu
             return;
         }
     }
-    panic!("LUI {lui} did not reach version {expected} after upgrade");
+    panic!("canister {lui} did not reach version {expected} after upgrade");
 }
 
 /// Independent reimplementation of the canister's domain-tagged SHA-256 (`SHA-256(tag || parts)`),
@@ -926,9 +925,9 @@ fn export_cvdr_verify_e2e_fixture(env: &PocketIc, lui: CanisterId, receipt_id_he
 }
 
 /// NEGATIVE: the P2 export / parked-retry path is BANKED, not half-alive. A full v5 deletion
-/// must attempt NO receipts-canister `store` c2c (the dedicated canister's stored count never
-/// moves) and must never populate the durable parked/export-pending set (so the parked-retry
-/// drain has nothing and does not run) — verified as deltas, then re-verified after extra time.
+/// must never populate the durable parked/export-pending set (so the parked-retry drain has
+/// nothing and does not run) — verified as deltas, then re-verified after extra time. (The
+/// dedicated receipts canister itself was removed by R-3; the banked map is kept for stable layout.)
 #[test]
 #[ignore = "Slice 2/3: asserts released>=1 via finalize. The P2-banked property still holds cert-absent; re-enable/adapt when the store path lands."]
 fn p2_export_path_is_banked_not_half_alive() {
@@ -940,7 +939,6 @@ fn p2_export_path_is_banked_not_half_alive() {
     let lui = user.local_user_index;
 
     // Baselines (the test env is shared, so assert no NET change from this deletion).
-    let receipts_before = receipts_stored(env, canister_ids.receipts);
     let export_pending_before = lui_export_pending(env, lui);
 
     // Drive a complete v5 deletion.
@@ -956,13 +954,7 @@ fn p2_export_path_is_banked_not_half_alive() {
     assert!(released >= 1, "deletion completed via the v5 CVDR path");
     assert!(module_hash_is_none(env, &user), "user canister uninstalled by the v5 leg");
 
-    // P2 path provably untouched: no store c2c reached the dedicated receipts canister, and the
-    // durable parked/export-pending set was never populated.
-    assert_eq!(
-        receipts_stored(env, canister_ids.receipts),
-        receipts_before,
-        "v5 leg must attempt NO receipts-canister store c2c"
-    );
+    // P2 path provably untouched: the durable parked/export-pending set was never populated.
     assert_eq!(
         lui_export_pending(env, lui),
         export_pending_before,
@@ -972,11 +964,6 @@ fn p2_export_path_is_banked_not_half_alive() {
     // Let multiple parked-retry intervals worth of time elapse: nothing deferred ever fires.
     env.advance_time(Duration::from_secs(60));
     tick_many(env, 15);
-    assert_eq!(
-        receipts_stored(env, canister_ids.receipts),
-        receipts_before,
-        "no deferred/retried export ever fires (parked-retry job absent)"
-    );
     assert_eq!(
         lui_export_pending(env, lui),
         export_pending_before,
