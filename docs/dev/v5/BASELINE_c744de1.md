@@ -412,3 +412,37 @@ the suite: `validity: PASS | INCOMPLETE | FAIL`, exit `0 | 4 | 1` (the OpenChat-
   `delete_user_succeeds_if_signed_in_recently` (delete_user_tests.rs; its `_299_999` case exhausted its
   10-tick uninstall wait under pooled load in 3 of 10 full-suite runs); the pooled env is
   untouched for every other test.
+
+## 9. Step 10 — build recipe, cross-checks, docs, release number (Stef, 2026-09-22)
+
+- **Recipe fixes.** `Dockerfile`: `${canister_name:-}` under `set -u` (all-canister branch no
+  longer needs an explicit empty build-arg; header shows the canonical invocation).
+  `scripts/docker-build-all-wasms.sh`: passes `--secret id=gh_token,src="$HOME/.config/tav/gh_token"`
+  (or `env=GH_TOKEN` when the file is absent), `DOCKER_BUILDKIT=1`, `--platform linux/amd64`;
+  fails early with a clear message when neither is present. The two LUI files reserved since
+  point A (`jobs/self_finalize_cvdr.rs`, `model/cvdr_canister_ranges.rs`) are now rustfmt-clean;
+  `cargo fmt --all -- --check` reports nothing.
+- **C2 cross-check.** `86ddca205` rebuilt from a clean worktree with the canonical recipe
+  (`git_commit_id` = the full commit SHA, `canister_name=` because that tree predates the fix):
+  `local_user_index.wasm.gz` = `d1e0c496…5945e5`, **equal to CD's independent build**. The point-C2
+  working-tree build (`845716ce…`) differed only by its embedded `<sha>-c2-worktree` commit id.
+- **Same-window dual build.** Step 10 tree, two all-canister builds with distinct `build_nonce`
+  (12:27Z and 12:37Z): all 23 hashes identical (`RELEASES.md`); LUI `1ea8f3cd…dcfd2`.
+- **Fresh end-to-end package.** `stored_index_evidence_unblocks_upgrade_and_draft_finalises` on the
+  Step 10 wasms exported the exact served `PortablePackageV3`; the pinned verifier (export of
+  CVDR-Verify `8b0d835`, `--locked --release`) reports `validity: PASS`, `V3A_PASS`, certified
+  module hash `1ea8f3cd…` = the dual-build LUI hash; without the fixture flag `FAIL` naming the
+  selector. Binary output captured verbatim in `docs/dev/v5/STEP10_E2E_VERIFY.txt`.
+- **Docs.** `CVDR_BUILD_SPEC.md` (suite v5, v2) supersedes `CVDR_BUILD_SPEC_V1.md` (banner,
+  historical); `PROJECT_STATE` retired to a stub; the June 2026 packet docs carry a HISTORICAL
+  banner; `OpenChatZD_RTS_draft.md` rewritten for suite v5 (RT-OCZD-1…6) with the ratified claim
+  verbatim; propagation list in `CVDR_BUILD_SPEC.md` §10; `docs/dev/v5/OPERATOR_NOTES.md`
+  (`cvdr_upgrade_blockers`, install allowance / rate limit, ~30 s outcall expiry, discard reasons).
+- **CI pin** advanced to CVDR-Verify `8b0d835` — required, not optional: the LUI corpus mirror guard
+  fails when the sibling checkout lacks `tests/fixtures/v5-openchatzd/corpus/`.
+- **Release number v0.8.0**, untagged: `RELEASES.md` here (commit table, cross-checks, 23 hashes,
+  census, retirements) and `mktd02/mktd02-verify/RELEASES.md` + `Cargo.toml` comment in CVDR-Verify
+  (crate already `0.8.0` since `2ddee83`; "DRAFT" wording dropped). No tag is minted.
+- **Observation (not fixed, pre-existing at c744de1):** `cargo check -p local_user_index_canister_impl`
+  ICEs in rustc 1.95.0 while emitting dead-code warnings for the cdylib (`slice/index.rs:1031`);
+  `cargo build`, `clippy --tests` and Docker are unaffected; `RUSTFLAGS=-Adead_code` works around it.

@@ -1,4 +1,8 @@
-# OpenChatZD CVDR Build Spec — v1 (ADOPTED baseline)
+# OpenChatZD CVDR Build Spec — v1 (historical; superseded by CVDR_BUILD_SPEC.md)
+
+> **SUPERSEDED (2026-09-22): governing spec is now `CVDR_BUILD_SPEC.md` (suite v5, Brief B1 R-1…R-6 + C2).**
+> This V1 text is the historical M1–M4 record (PortablePackageV2, RECEIPT_BODY_V1, `h_index` in the preimage,
+> "no demonstrated interlock"). §2–§11 and §13–§16 remain in force where the v5 spec is silent.
 
 **Status:** governing build spec for the CVDR finalization rework. Derived from Master
 Implementation Plan v4 (ADOPTED) + Finalization Baseline v1. On conflict, Master Plan v4 wins.

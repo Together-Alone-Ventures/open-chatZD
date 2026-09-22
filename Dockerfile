@@ -1,9 +1,11 @@
 # syntax=docker/dockerfile:1.7
-# To build run:
-#   DOCKER_BUILDKIT=1 docker build --secret id=gh_token,env=GH_TOKEN \
+# To build run (canonical all-canister recipe — the one published module hashes name; omit
+# canister_name, or pass it to build a single canister):
+#   DOCKER_BUILDKIT=1 docker build --secret id=gh_token,src="$HOME/.config/tav/gh_token" \
 #     --build-arg git_commit_id=$(git rev-parse HEAD) \
-#     --build-arg canister_name=local_user_index \
-#     -t openchat .
+#     --platform linux/amd64 -t openchat .
+# (or `--secret id=gh_token,env=GH_TOKEN`; the secret is read by path/env inside BuildKit only and
+# never printed. Add `--build-arg canister_name=local_user_index` for a single canister.)
 #
 # M2: pass distinct build_nonce so only the post-toolchain layers rebuild.
 FROM ubuntu:24.04 AS builder
@@ -46,7 +48,7 @@ RUN --mount=type=secret,id=gh_token \
     export GIT_CONFIG_COUNT=1; \
     export GIT_CONFIG_KEY_0="url.https://x-access-token:${TOKEN}@github.com/.insteadOf"; \
     export GIT_CONFIG_VALUE_0="https://github.com/"; \
-    if [[ -z "$canister_name" ]]; then \
+    if [[ -z "${canister_name:-}" ]]; then \
       bash ./scripts/generate-all-canister-wasms.sh; \
     else \
       bash ./scripts/generate-wasm.sh "$canister_name"; \
