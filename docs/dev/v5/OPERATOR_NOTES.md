@@ -45,6 +45,12 @@ log; nothing here changes what is stored.
   (`"mainnet"` on mainnet). A verifier that sees `non-production-test-root` on a production
   package should treat the deployment as misconfigured.
 
+## Test runner
+
+The integration suite runs at the repo-prescribed six workers
+(`./scripts/run-integration-tests.sh local 6`); the Step 9 flake isolation (dedicated PocketIC envs) was
+validated at that concurrency.
+
 ## Toolchain note
 
 `cargo check -p local_user_index_canister_impl` on rustc 1.95.0 hits a compiler ICE while

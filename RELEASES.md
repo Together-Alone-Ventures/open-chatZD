@@ -59,6 +59,9 @@ amendment (2026-09-22). Governing spec `CVDR_BUILD_SPEC.md`; record `docs/dev/v5
 | user | `36cc902354360b30621fcfe6f473ce4d813d842152aa1131ec609fae24858f44` |
 | user_index | `61395cd69840eca39298090930fe23519d2e80a05507870210384cb27d81f129` |
 
+**Reproduce:** `git checkout 8118d26a && bash scripts/docker-build-all-wasms.sh` — hashes embed
+`git_commit_id`, so only a build at that commit reproduces this table.
+
 **End-to-end evidence:** a fresh `PortablePackageV3` served by the Step 10 `local_user_index` under
 PocketIC (genuine commitment + `/module_hash` certificates) verified with the pinned verifier —
 binary output in `docs/dev/v5/STEP10_E2E_VERIFY.txt`.
