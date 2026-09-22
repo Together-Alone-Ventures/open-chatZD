@@ -383,8 +383,10 @@ fn cvdr_gate_a_frozen_wire_http_matches_candid() {
 /// E-2 / §11.7-2 — Pending → Available on the same receipt_id with no 404 in the gap.
 #[test]
 fn pending_then_available_no_404_in_the_gap() {
-    let mut wrapper = ENV.deref().get();
-    let TestEnv { env, canister_ids, .. } = wrapper.env();
+    // Step 9 flake isolation (ruling (b), point A): DEDICATED env — this test scans / mutates
+    // pending CVDR state that other pooled-env tests race on.
+    let mut owned_env = crate::setup::setup_new_env(None);
+    let TestEnv { env, canister_ids, .. } = &mut owned_env;
     let (user, user_auth) = register_user_and_include_auth(env, canister_ids);
     let lui = user.local_user_index;
 
@@ -567,8 +569,10 @@ fn concurrent_deletes_both_reach_awaiting_certificate() {
 /// proves timer -> outcall -> verify-before-store -> store with a mocked gateway response.
 #[test]
 fn self_finalization_captures_and_stores_via_mocked_outcall() {
-    let mut wrapper = ENV.deref().get();
-    let TestEnv { env, canister_ids, .. } = wrapper.env();
+    // Step 9 flake isolation (ruling (b), point A): DEDICATED env — this test scans / mutates
+    // pending CVDR state that other pooled-env tests race on.
+    let mut owned_env = crate::setup::setup_new_env(None);
+    let TestEnv { env, canister_ids, .. } = &mut owned_env;
     let (user, user_auth) = register_user_and_include_auth(env, canister_ids);
     let lui = user.local_user_index;
     let (_, base_frozen, _) = cvdr_metrics(env, lui);
@@ -979,8 +983,10 @@ fn p2_export_path_is_banked_not_half_alive() {
 /// subsequent valid submission still `Captured`s; the rejected attempts left the receipt intact.
 #[test]
 fn forged_or_stale_certificate_is_rejected() {
-    let mut wrapper = ENV.deref().get();
-    let TestEnv { env, canister_ids, .. } = wrapper.env();
+    // Step 9 flake isolation (ruling (b), point A): DEDICATED env — this test scans / mutates
+    // pending CVDR state that other pooled-env tests race on.
+    let mut owned_env = crate::setup::setup_new_env(None);
+    let TestEnv { env, canister_ids, .. } = &mut owned_env;
     let (user, user_auth) = register_user_and_include_auth(env, canister_ids);
     let lui = user.local_user_index;
     let (_, base_r, _) = cvdr_metrics(env, lui);
@@ -1351,8 +1357,10 @@ fn delete_without_prepare_does_not_uninstall() {
 /// Spec §11.4: after deletion completes the user is de-registered — prepare is rejected.
 #[test]
 fn prepare_fails_after_user_deleted() {
-    let mut wrapper = ENV.deref().get();
-    let TestEnv { env, canister_ids, .. } = wrapper.env();
+    // Step 9 flake isolation (ruling (b), point A): DEDICATED env — this test scans / mutates
+    // pending CVDR state that other pooled-env tests race on.
+    let mut owned_env = crate::setup::setup_new_env(None);
+    let TestEnv { env, canister_ids, .. } = &mut owned_env;
     let (user, auth) = register_user_and_include_auth(env, canister_ids);
 
     delete_and_reach_awaiting(env, canister_ids, &user, &auth);

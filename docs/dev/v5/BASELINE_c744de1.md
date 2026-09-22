@@ -376,3 +376,39 @@ the suite: `validity: PASS | INCOMPLETE | FAIL`, exit `0 | 4 | 1` (the OpenChat-
   only as evidence that never arrives (pending → permanently unavailable).
 - **CI pin:** `backend.yaml` moves from `ac64c1b` to the `openchatzd-v5` commit once it exists
   (second half of point E, after the CVDR-Verify commit word).
+
+## 8. Step 9 — vector corpus, Antoine regression invariants, flake isolation (Brief B1 §2 step 6 / plan Steps 8–9)
+
+- **Corpus** `docs/test-vectors/openchatzd-v5/` (README there): 4 positive (`receipt_id`,
+  `record_id_v2`, `RECEIPT_BODY_V2` + leaf, canonical FrozenWire / PortablePackageV3 / RevealWire v2
+  JSON with SHA-256s) and 5 negative vectors (old tag / prefix dispatch, altered `receipt_id` or
+  nonce, identifying `record_id`, module hash in the preimage or mismatched evidence, altered body
+  field), each naming the verifier check that rejects it. **Generated from the live formulas and
+  hash-gated**: `local_user_index_canister_impl::model::cvdr_vectors::corpus_matches_committed_files_byte_for_byte`
+  regenerates every file and compares byte for byte; `manifest.json` pins each SHA-256; rewrite only
+  with `OPENCHATZD_WRITE_VECTORS=1` and a ruling. CVDR-Verify carries a byte-identical mirror
+  (`tests/fixtures/v5-openchatzd/corpus/`, PROVENANCE there) driven through the real CLI by
+  `tests/openchatzd_v5_corpus.rs` (7 tests); the LUI `corpus_mirror_in_cvdr_verify_is_byte_identical`
+  guard compares the mirror with the source whenever a sibling checkout is present (skip when absent,
+  same semantics as the label drift guard). The certificate-level negative (displayed
+  `index_module_hash` ≠ certified → `INDEX_HASH_MISMATCH`) is pinned over the genuine PocketIC
+  fixture in `openchatzd_v3_e2e.rs`, not synthesised.
+- **Invariants as named tests** (`cvdr_vectors.rs`, plan Step 8): `invariant_cvdr_on_index_ownership_and_passive_user_target`
+  (no certified data / CVDR / ReceiptTree code in the user canister; ReceiptTree in the LUI),
+  `invariant_single_certified_data_meaning` (exactly two `certified_data_set` writers, both in
+  `delete_users.rs`, both publishing `cvdr_receipt_tree.root()`), `invariant_genesis_receipt_tree_root_is_deterministic`
+  (empty root = `labeled_hash("receipts", SHA256("\x11ic-hashtree-empty"))` = `36661ea7…af202d`),
+  `invariant_self_finalisation_primary_backstop_and_store_gate_order` (`verify_finalization_package`
+  precedes `insert_frozen_package` in both the self-loop and the permissionless backstop),
+  `invariant_index_evidence_is_never_overwritten` (store-gate `AlreadyStored` + insert-only store),
+  `invariant_antoine_named_tests_present` (dual-layout `canister_ranges` tests; certificate-pair
+  delay / completion-window timing labels), `invariant_no_ceremonial_dependency` (no mktd02 / mktd03 /
+  zombie-core in `Cargo.lock`, R-3 option (i)).
+- **Flake isolation (ruling (b), point A):** dedicated PocketIC envs for
+  `forged_or_stale_certificate_is_rejected`, `prepare_fails_after_user_deleted`,
+  `pending_then_available_no_404_in_the_gap`,
+  `self_finalization_captures_and_stores_via_mocked_outcall` (cvdr_tests.rs) and
+  `deleted_user_removed_from_groups_and_communities` and the parametrised
+  `delete_user_succeeds_if_signed_in_recently` (delete_user_tests.rs; its `_299_999` case exhausted its
+  10-tick uninstall wait under pooled load in 3 of 10 full-suite runs); the pooled env is
+  untouched for every other test.

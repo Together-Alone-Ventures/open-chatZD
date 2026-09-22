@@ -138,7 +138,7 @@ fn sibling_source_matches_openchatzd_labels(src: &str) -> Result<(), String> {
 /// Resolve CVDR-Verify root: prefer a checkout that actually contains the OpenChatZD
 /// attestation module (Together-alone sibling or nested CI path).
 #[cfg(test)]
-fn resolve_cvdr_verify_root() -> Option<std::path::PathBuf> {
+pub(crate) fn resolve_cvdr_verify_root() -> Option<std::path::PathBuf> {
     let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let candidates = [
         manifest.join("../../../../../CVDR-Verify"), // Together-alone/<repos>

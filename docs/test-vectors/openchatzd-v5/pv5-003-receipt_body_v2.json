@@ -1,0 +1,31 @@
+{
+  "vector": "pv5-003",
+  "kind": "positive",
+  "layout": "\"OPENCHATZD_RECEIPT_BODY_V2\"(26) ‖ receipt_id(32) ‖ nonce(32) ‖ len‖index ‖ len‖user ‖ record_id(32) ‖ deletion_seq(u64 BE) ‖ h_user_pre(32) ‖ uninstall_completed_at(u64 BE ns) ‖ receipt_committed_at(u64 BE ns) ‖ targets_count(u32 BE) ‖ targets_commitment(32); leaf = SHA256(\"OPENCHATZD_RECEIPT_LEAF_V1\" ‖ body)",
+  "inputs": {
+    "record_salt": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+    "user_id_principal": "l2hgx-oicai-baeaq-caiba-eaq",
+    "index_canister_id": "5w2os-7qdam-bqgay-dambq-gay",
+    "deletion_seq": 5,
+    "nonce": "0202020202020202020202020202020202020202020202020202020202020202",
+    "module_hash_pre": "0909090909090909090909090909090909090909090909090909090909090909",
+    "targets_salt": "0404040404040404040404040404040404040404040404040404040404040404",
+    "targets": [
+      "piew3-ciiba-eaqca-ibaea-qca",
+      "773wu-zqgay-dambq-gayda-mbq"
+    ],
+    "uninstall_completed_at_ns": 111,
+    "receipt_committed_at_ns": 222
+  },
+  "derived": {
+    "record_id": "dad2610907664d6711d4788fdea16dafde67c941bc11ca52ad1cfc193c21f97d",
+    "receipt_id": "ad27c3c80ce173e8b5de4b66d45b176852037dadacc16ce6af1f098eda8b5337",
+    "h_user_pre": "61137316afd99fd879e1369fda9436a55a9ca627356755842726ff8a30a7a7fc",
+    "targets_commitment": "a06af2c83778d1e4bbf685e99d8a0f01229d8a24ea41d8edae9d65e71b83b618"
+  },
+  "expected": {
+    "receipt_body": "4f50454e434841545a445f524543454950545f424f44595f5632ad27c3c80ce173e8b5de4b66d45b176852037dadacc16ce6af1f098eda8b533702020202020202020202020202020202020202020202020202020202020202020a030303030303030303030a02020202020202020202dad2610907664d6711d4788fdea16dafde67c941bc11ca52ad1cfc193c21f97d000000000000000561137316afd99fd879e1369fda9436a55a9ca627356755842726ff8a30a7a7fc000000000000006f00000000000000de00000002a06af2c83778d1e4bbf685e99d8a0f01229d8a24ea41d8edae9d65e71b83b618",
+    "receipt_body_len": 236,
+    "leaf": "11a0f498d74b0e723f6b73db92f8b9b4f11537c9e90f16e2ef7f15818aeb58a0"
+  }
+}
