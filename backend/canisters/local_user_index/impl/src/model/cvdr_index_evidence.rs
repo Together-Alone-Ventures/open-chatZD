@@ -8,7 +8,6 @@ use crate::memory::{
     get_cvdr_index_evidence_primary_memory,
 };
 use crate::model::cvdr::Hash;
-use crate::model::cvdr_index_attestation::{PORTABLE_PACKAGE_SCHEMA, PORTABLE_PACKAGE_VERSION};
 use candid::CandidType;
 use ic_stable_structures::storable::Bound;
 use ic_stable_structures::{StableBTreeMap, StableLog, Storable};
@@ -29,13 +28,19 @@ pub struct IndexCodeIdentityEvidence {
     /// only when decoding evidence stored by an earlier wasm, which kept the certificate alone
     /// (Candid rejects a missing non-optional field, so the field must be optional to decode).
     pub index_module_hash: Option<Vec<u8>>,
+    /// R-6: the trust root the certificate was verified under, stamped from Index configuration at
+    /// the store-gate (`"mainnet"` for the IC NNS key, a self-labelled non-production id otherwise).
+    /// Never client-supplied, never inferred from the certificate. `None` only when decoding
+    /// evidence stored by a pre-step-4 wasm.
+    pub trust_root_key_id: Option<String>,
 }
 
 impl IndexCodeIdentityEvidence {
-    pub fn new(certificate_bytes: Vec<u8>, index_module_hash: Vec<u8>) -> Self {
+    pub fn new(certificate_bytes: Vec<u8>, index_module_hash: Vec<u8>, trust_root_key_id: String) -> Self {
         Self {
             certificate_bytes,
             index_module_hash: Some(index_module_hash),
+            trust_root_key_id: Some(trust_root_key_id),
         }
     }
 }
@@ -53,27 +58,6 @@ impl Storable for IndexCodeIdentityEvidence {
     const BOUND: Bound = Bound::Unbounded;
 }
 
-/// Outer downloadable package when INDEX evidence is present (spec §14.1).
-/// `frozen` must be the exact canonical FrozenWire bytes for the same receipt.
-#[derive(CandidType, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-pub struct PortablePackageV2 {
-    pub schema: String,
-    pub version: u32,
-    pub frozen: Vec<u8>,
-    pub index_code_identity_evidence: IndexCodeIdentityEvidence,
-}
-
-impl PortablePackageV2 {
-    pub fn new(frozen: Vec<u8>, index_code_identity_evidence: IndexCodeIdentityEvidence) -> Self {
-        Self {
-            schema: PORTABLE_PACKAGE_SCHEMA.to_string(),
-            version: PORTABLE_PACKAGE_VERSION,
-            frozen,
-            index_code_identity_evidence,
-        }
-    }
-}
-
 #[derive(Debug, PartialEq, Eq)]
 pub enum IndexEvidenceInsertError {
     AlreadyExists,
@@ -81,6 +65,8 @@ pub enum IndexEvidenceInsertError {
     EmptyCertificate,
     /// The extracted `index_module_hash` is absent or empty (R-2: certificate AND hash are stored).
     ModuleHashMissing,
+    /// `trust_root_key_id` absent or empty (R-6: stamped at the store-gate, always).
+    TrustRootMissing,
     /// No receipt (post-uninstall draft or frozen package) exists for this `receipt_id`.
     ReceiptMissing,
 }
@@ -129,6 +115,9 @@ impl IndexCodeIdentityStore {
         if evidence.index_module_hash.as_ref().is_none_or(|h| h.is_empty()) {
             return Err(IndexEvidenceInsertError::ModuleHashMissing);
         }
+        if evidence.trust_root_key_id.as_ref().is_none_or(|id| id.is_empty()) {
+            return Err(IndexEvidenceInsertError::TrustRootMissing);
+        }
         if self.primary.contains_key(&ReceiptKey(receipt_id)) {
             return Err(IndexEvidenceInsertError::AlreadyExists);
         }
@@ -165,12 +154,12 @@ mod tests {
     fn insert_only_rejects_overwrite() {
         let mut store = IndexCodeIdentityStore::new();
         let receipt_id = [7u8; 32];
-        let first = IndexCodeIdentityEvidence::new(vec![1, 2, 3], vec![0x1d; 32]);
+        let first = IndexCodeIdentityEvidence::new(vec![1, 2, 3], vec![0x1d; 32], "mainnet".to_string());
         assert_eq!(store.insert(receipt_id, first), Ok(()));
         assert_eq!(store.count(), 1);
         assert_eq!(store.get(&receipt_id).unwrap().certificate_bytes, vec![1, 2, 3]);
 
-        let second = IndexCodeIdentityEvidence::new(vec![9, 9, 9], vec![0x1d; 32]);
+        let second = IndexCodeIdentityEvidence::new(vec![9, 9, 9], vec![0x1d; 32], "mainnet".to_string());
         assert_eq!(store.insert(receipt_id, second), Err(IndexEvidenceInsertError::AlreadyExists));
         assert_eq!(store.get(&receipt_id).unwrap().certificate_bytes, vec![1, 2, 3]);
         assert_eq!(store.count(), 1);
@@ -190,6 +179,24 @@ mod tests {
         let decoded = IndexCodeIdentityEvidence::from_bytes(Cow::Owned(bytes));
         assert_eq!(decoded.certificate_bytes, vec![1, 2, 3]);
         assert_eq!(decoded.index_module_hash, None);
+        assert_eq!(decoded.trust_root_key_id, None);
+    }
+
+    #[test]
+    fn rejects_evidence_without_trust_root_id() {
+        let mut store = IndexCodeIdentityStore::new();
+        for id in [None, Some(String::new())] {
+            let err = store.insert(
+                [1u8; 32],
+                IndexCodeIdentityEvidence {
+                    certificate_bytes: vec![1],
+                    index_module_hash: Some(vec![0x1d; 32]),
+                    trust_root_key_id: id,
+                },
+            );
+            assert_eq!(err, Err(IndexEvidenceInsertError::TrustRootMissing));
+        }
+        assert_eq!(store.count(), 0);
     }
 
     #[test]
@@ -201,6 +208,7 @@ mod tests {
                 IndexCodeIdentityEvidence {
                     certificate_bytes: vec![1],
                     index_module_hash: hash,
+                    trust_root_key_id: Some("mainnet".to_string()),
                 },
             );
             assert_eq!(err, Err(IndexEvidenceInsertError::ModuleHashMissing));
@@ -211,20 +219,12 @@ mod tests {
     #[test]
     fn rejects_empty_certificate_blob() {
         let mut store = IndexCodeIdentityStore::new();
-        let err = store.insert([1u8; 32], IndexCodeIdentityEvidence::new(vec![], vec![0x1d; 32]));
+        let err = store.insert(
+            [1u8; 32],
+            IndexCodeIdentityEvidence::new(vec![], vec![0x1d; 32], "mainnet".to_string()),
+        );
         assert_eq!(err, Err(IndexEvidenceInsertError::EmptyCertificate));
         assert_eq!(store.count(), 0);
-    }
-
-    #[test]
-    fn portable_package_v2_pins_schema_and_nests_frozen_bytes() {
-        let frozen = vec![0xde, 0xad, 0xbe, 0xef];
-        let evidence = IndexCodeIdentityEvidence::new(vec![0xca, 0xfe], vec![0x1d; 32]);
-        let pkg = PortablePackageV2::new(frozen.clone(), evidence.clone());
-        assert_eq!(pkg.schema, PORTABLE_PACKAGE_SCHEMA);
-        assert_eq!(pkg.version, PORTABLE_PACKAGE_VERSION);
-        assert_eq!(pkg.frozen, frozen);
-        assert_eq!(pkg.index_code_identity_evidence, evidence);
     }
 
     #[test]
@@ -233,11 +233,17 @@ mod tests {
         let a = [1u8; 32];
         let b = [2u8; 32];
         assert_eq!(
-            store.insert(a, IndexCodeIdentityEvidence::new(vec![10], vec![0x1d; 32])),
+            store.insert(
+                a,
+                IndexCodeIdentityEvidence::new(vec![10], vec![0x1d; 32], "mainnet".to_string())
+            ),
             Ok(())
         );
         assert_eq!(
-            store.insert(b, IndexCodeIdentityEvidence::new(vec![20], vec![0x1d; 32])),
+            store.insert(
+                b,
+                IndexCodeIdentityEvidence::new(vec![20], vec![0x1d; 32], "mainnet".to_string())
+            ),
             Ok(())
         );
         assert!(store.contains(&a));
@@ -253,17 +259,5 @@ mod tests {
         assert!(!store.contains(&[0u8; 32]));
         assert_eq!(store.get(&[0u8; 32]), None);
         assert_eq!(store.count(), 0);
-    }
-
-    #[test]
-    fn portable_package_v2_preserves_exact_frozen_byte_identity() {
-        let frozen = (0u8..64).collect::<Vec<_>>();
-        let pkg = PortablePackageV2::new(frozen.clone(), IndexCodeIdentityEvidence::new(vec![1], vec![0x1d; 32]));
-        assert_eq!(pkg.frozen.as_slice(), frozen.as_slice());
-        assert_ne!(
-            pkg.frozen,
-            candid::encode_one(&frozen).unwrap(),
-            "nested frozen must stay raw Gate A bytes, not a re-encoded Vec"
-        );
     }
 }

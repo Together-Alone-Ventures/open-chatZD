@@ -267,3 +267,29 @@ for now (upgrade tooling retries; the per-draft block lasts seconds), and add an
   certificate, certificate + extracted hash stored, expectation guard matches, blockers 1 → 0, the
   upgrade refused without evidence succeeds with it while the draft is still `AwaitingCertificate`,
   the draft finalises on the upgraded Index and is served with its evidence.
+
+## 6. Step 4 — PortablePackageV3 wire contract (Brief B1 R-6; point D)
+
+Schema `openchatzd.cvdr.portable_package`, `version` **3** exact. Canonical JSON = serde declaration
+order, no whitespace, byte fields lowercase hex (`encoding: "hex"`), served byte-identically on
+`GET /cvdr/<receipt_id>` and as the Candid `Available(PortablePackageV3)` re-serialisation (Gate B):
+
+```
+schema, version, encoding, trust_root_key_id, frozen,
+index_code_identity_evidence { certificate_bytes, index_module_hash }
+```
+
+- `frozen` — hex of the exact Gate A FrozenWire JSON bytes (schema `openchatzd.cvdr.frozen_package`
+  v1: `receipt_body` (RECEIPT_BODY_V2), `receipt_hash`, `tree_root`, `witness_bytes`,
+  `certificate_bytes`, `certificate_time`).
+- `trust_root_key_id` — stamped by the Index at the evidence store-gate from its **configured**
+  root key (`"mainnet"` iff it equals the IC NNS key, else `"non-production-test-root"`); stored
+  with the evidence; never client-supplied, never inferred from a certificate.
+- `index_module_hash` — the hash extracted from `certificate_bytes` at the store-gate; the verifier
+  equality-checks it against the certificate under the declared trust root (V3A).
+- **Pending/final structural rule.** `FrozenWire` (commitment-only, V3A-unavailable) and
+  `PortablePackageV3` are distinct Candid arms; a V3 package cannot omit the certificate, the
+  extracted hash or the trust-root id. Evidence stored by a pre-step-4 wasm (no hash / no id) is
+  never projected into V3 with serve-time values — such a receipt is served as `FrozenWire`.
+- **Fail closed (verifier side, step 5):** unknown keys, `version ≠ 3`, unknown `trust_root_key_id`
+  → reject. FrozenWire/V2 remain historical decoders only; V2 is never emitted (zero mainnet packages).

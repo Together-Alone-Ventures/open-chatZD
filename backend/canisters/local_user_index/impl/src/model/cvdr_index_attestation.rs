@@ -6,14 +6,14 @@
 //! Timing labels are the five-value axis orthogonal to V3 evidence outcomes.
 //! Delay = t(INDEX certificate) − t(commitment certificate) (certificate-pair separation; S12).
 
-/// Outer portable package name (spec §14.1).
-pub const PORTABLE_PACKAGE_V2_NAME: &str = "PortablePackageV2";
+/// Outer portable package name (R-6).
+pub const PORTABLE_PACKAGE_V3_NAME: &str = "PortablePackageV3";
 
 /// Portable package schema id (spec §14.1).
 pub const PORTABLE_PACKAGE_SCHEMA: &str = "openchatzd.cvdr.portable_package";
 
-/// Portable package version (spec §14.1). Exact `version == 2` on the wire.
-pub const PORTABLE_PACKAGE_VERSION: u32 = 2;
+/// Portable package version (R-6). Exact `version == 3` on the wire; verifiers fail closed on any other.
+pub const PORTABLE_PACKAGE_VERSION: u32 = 3;
 
 /// V3 code-identity outcomes (spec §17.1). V3-A is retired and must not reappear.
 pub const INDEX_HASH_MATCH_AT_CERT_TIME: &str = "INDEX_HASH_MATCH_AT_CERT_TIME";
@@ -152,9 +152,17 @@ mod tests {
 
     #[test]
     fn portable_package_identity_is_pinned() {
-        assert_eq!(PORTABLE_PACKAGE_V2_NAME, "PortablePackageV2");
+        assert_eq!(PORTABLE_PACKAGE_V3_NAME, "PortablePackageV3");
         assert_eq!(PORTABLE_PACKAGE_SCHEMA, "openchatzd.cvdr.portable_package");
-        assert_eq!(PORTABLE_PACKAGE_VERSION, 2);
+        assert_eq!(PORTABLE_PACKAGE_VERSION, 3);
+        assert_eq!(
+            PORTABLE_PACKAGE_VERSION,
+            local_user_index_canister::get_cvdr::PORTABLE_VERSION
+        );
+        assert_eq!(
+            PORTABLE_PACKAGE_SCHEMA,
+            local_user_index_canister::get_cvdr::PORTABLE_SCHEMA_ID
+        );
     }
 
     #[test]
@@ -223,8 +231,8 @@ mod tests {
 
     #[test]
     fn serving_shapes_remain_independent_labels() {
-        // Commitment Available (FrozenWire) vs INDEX Available (PortablePackageV2) are distinct.
-        assert_ne!(PORTABLE_PACKAGE_V2_NAME, "FrozenWire");
+        // Commitment Available (FrozenWire) vs INDEX Available (PortablePackageV3) are distinct.
+        assert_ne!(PORTABLE_PACKAGE_V3_NAME, "FrozenWire");
         assert_eq!(
             INDEX_ATTESTATION_UNAVAILABLE, "INDEX_ATTESTATION_UNAVAILABLE",
             "FrozenWire-only Available must map to UNAVAILABLE, not MATCH"

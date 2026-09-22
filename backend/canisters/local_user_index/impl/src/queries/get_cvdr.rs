@@ -1,12 +1,12 @@
 use crate::model::cvdr::CvdrStore;
 use crate::{RuntimeState, read_state};
 use ic_cdk::query;
-use local_user_index_canister::get_cvdr::{AvailablePackage, FrozenWire, PendingInfo, PortablePackageV2Wire, Response::*, *};
+use local_user_index_canister::get_cvdr::{AvailablePackage, FrozenWire, PendingInfo, PortablePackageV3Wire, Response::*, *};
 
 /// Public fetch by the unguessable bearer `receipt_id` (spec §11.1/§11.2).
 ///
 /// Serves FACTS, NOT VERDICTS: no `VerifiedFinal` / `LateFinalized` / V3 INDEX outcomes.
-/// Dual Available: FrozenWire (commitment-only) or PortablePackageV2 (when INDEX evidence stored).
+/// Dual Available: FrozenWire (commitment-only) or PortablePackageV3 (when INDEX evidence stored).
 #[query]
 fn get_cvdr(args: Args) -> Response {
     read_state(|state| get_cvdr_impl(args, state))
@@ -20,11 +20,22 @@ pub(crate) fn get_cvdr_impl(args: Args, state: &RuntimeState) -> Response {
 pub(crate) fn get_cvdr_from_store(receipt_id: &[u8; 32], cvdr: &CvdrStore) -> Response {
     if let Some(package) = cvdr.get_frozen_package(receipt_id) {
         let frozen_wire = FrozenWire::from(&package);
-        if let Some(evidence) = cvdr.get_index_evidence(receipt_id) {
+        // Fail closed (R-6): evidence stored by a pre-step-4 wasm (no extracted hash / no trust-root
+        // id) is never projected into a V3 package with fields invented at serve time — the receipt
+        // is served as FrozenWire (V3A-unavailable) instead.
+        if let Some((evidence, index_module_hash, trust_root_key_id)) = cvdr.get_index_evidence(receipt_id).and_then(|e| {
+            Some((
+                e.certificate_bytes.clone(),
+                e.index_module_hash.clone()?,
+                e.trust_root_key_id.clone()?,
+            ))
+        }) {
             let frozen_bytes = frozen_wire.to_canonical_json();
-            Available(AvailablePackage::PortablePackageV2(PortablePackageV2Wire::new(
+            Available(AvailablePackage::PortablePackageV3(PortablePackageV3Wire::new(
                 frozen_bytes,
-                evidence.certificate_bytes,
+                evidence,
+                index_module_hash,
+                trust_root_key_id,
             )))
         } else {
             Available(AvailablePackage::FrozenWire(frozen_wire))
@@ -76,19 +87,22 @@ mod tests {
         let receipt_id = receipt_id_for(&record_id, 2, &[9u8; 32]);
         assert!(cvdr.insert_frozen_package(receipt_id, record_id, 2, sample_pkg()).is_ok());
         assert!(
-            cvdr.insert_index_evidence(receipt_id, IndexCodeIdentityEvidence::new(vec![0xde, 0xad], vec![0x1d; 32]))
-                .is_ok()
+            cvdr.insert_index_evidence(
+                receipt_id,
+                IndexCodeIdentityEvidence::new(vec![0xde, 0xad], vec![0x1d; 32], "mainnet".to_string())
+            )
+            .is_ok()
         );
 
         match get_cvdr_from_store(&receipt_id, &cvdr) {
-            Response::Available(AvailablePackage::PortablePackageV2(v2)) => {
+            Response::Available(AvailablePackage::PortablePackageV3(v2)) => {
                 let gate_a = FrozenWire::from(&sample_pkg()).to_canonical_json();
                 assert_eq!(v2.frozen, gate_a, "Gate B nested frozen must equal Gate A bytes");
                 assert_eq!(v2.index_code_identity_evidence.certificate_bytes, vec![0xde, 0xad]);
-                let http_body = AvailablePackage::PortablePackageV2(v2.clone()).to_canonical_json();
+                let http_body = AvailablePackage::PortablePackageV3(v2.clone()).to_canonical_json();
                 assert_eq!(http_body, v2.to_canonical_json());
             }
-            other => panic!("expected PortablePackageV2, got {other:?}"),
+            other => panic!("expected PortablePackageV3, got {other:?}"),
         }
     }
 

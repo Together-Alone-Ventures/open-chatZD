@@ -401,6 +401,18 @@ pub(crate) fn check_index_cert_not_before_uninstall(
     }
 }
 
+/// R-6: the trust-root id a certificate verified under the Index's configured root key is stamped
+/// with. Decided from CONFIGURATION (the replica-provided root key this Index verifies against),
+/// never from the certificate being stored and never from a caller.
+pub fn trust_root_key_id_for(configured_ic_root_key: &[u8]) -> &'static str {
+    use local_user_index_canister::get_cvdr::{TRUST_ROOT_MAINNET, TRUST_ROOT_NON_PRODUCTION};
+    if configured_ic_root_key == constants::IC_ROOT_KEY {
+        TRUST_ROOT_MAINNET
+    } else {
+        TRUST_ROOT_NON_PRODUCTION
+    }
+}
+
 /// How long after the uninstall index evidence may still be captured (and therefore how long a
 /// receipt without evidence can block an upgrade). Past it the receipt is permanently
 /// V3A-UNAVAILABLE, so blocking longer would protect nothing.
@@ -1602,7 +1614,7 @@ mod tests {
         let mut s = CvdrStore::default();
         let record_id = record_id_for(p(1).into());
         let receipt_id = receipt_id_for(&record_id, 1, &[3u8; 32]);
-        let evidence = IndexCodeIdentityEvidence::new(vec![0xaa, 0xbb], vec![0x1d; 32]);
+        let evidence = IndexCodeIdentityEvidence::new(vec![0xaa, 0xbb], vec![0x1d; 32], "mainnet".to_string());
         assert_eq!(
             s.insert_index_evidence(receipt_id, evidence.clone()),
             Err(IndexEvidenceInsertError::ReceiptMissing)
@@ -1621,7 +1633,10 @@ mod tests {
         assert!(s.has_index_evidence(&receipt_id));
         assert_eq!(s.index_evidence_count(), 1);
         assert_eq!(
-            s.insert_index_evidence(receipt_id, IndexCodeIdentityEvidence::new(vec![0xff], vec![0x1d; 32])),
+            s.insert_index_evidence(
+                receipt_id,
+                IndexCodeIdentityEvidence::new(vec![0xff], vec![0x1d; 32], "mainnet".to_string())
+            ),
             Err(IndexEvidenceInsertError::AlreadyExists)
         );
         assert_eq!(s.get_index_evidence(&receipt_id), Some(evidence));
@@ -1664,7 +1679,10 @@ mod tests {
         };
         assert_eq!(s.insert_frozen_package(receipt_a, record_a, 1, pkg), Ok(()));
         assert_eq!(
-            s.insert_index_evidence(receipt_b, IndexCodeIdentityEvidence::new(vec![0x11], vec![0x1d; 32])),
+            s.insert_index_evidence(
+                receipt_b,
+                IndexCodeIdentityEvidence::new(vec![0x11], vec![0x1d; 32], "mainnet".to_string())
+            ),
             Err(IndexEvidenceInsertError::ReceiptMissing)
         );
         assert!(!s.has_index_evidence(&receipt_a));
@@ -1688,7 +1706,10 @@ mod tests {
         };
         assert_eq!(s.insert_frozen_package(receipt_id, record_id, 1, pkg), Ok(()));
         assert_eq!(
-            s.insert_index_evidence(receipt_id, IndexCodeIdentityEvidence::new(vec![], vec![0x1d; 32])),
+            s.insert_index_evidence(
+                receipt_id,
+                IndexCodeIdentityEvidence::new(vec![], vec![0x1d; 32], "mainnet".to_string())
+            ),
             Err(IndexEvidenceInsertError::EmptyCertificate)
         );
         assert!(!s.has_index_evidence(&receipt_id));
@@ -1735,14 +1756,20 @@ mod tests {
         );
         // evidence stored for a DRAFT-only receipt (no frozen package needed any more) => unblocks it
         assert_eq!(
-            s.insert_index_evidence([4; 32], IndexCodeIdentityEvidence::new(vec![0xaa], vec![0x1d; 32])),
+            s.insert_index_evidence(
+                [4; 32],
+                IndexCodeIdentityEvidence::new(vec![0xaa], vec![0x1d; 32], "mainnet".to_string())
+            ),
             Ok(())
         );
         assert_eq!(ids(s.evidence_pending(T0 + 1)), vec![3, 5, 6, 7]);
         // ... but never for a receipt that has not uninstalled, or an unknown one
         for unknown in [[1u8; 32], [2u8; 32], [0xEE; 32]] {
             assert_eq!(
-                s.insert_index_evidence(unknown, IndexCodeIdentityEvidence::new(vec![0xaa], vec![0x1d; 32])),
+                s.insert_index_evidence(
+                    unknown,
+                    IndexCodeIdentityEvidence::new(vec![0xaa], vec![0x1d; 32], "mainnet".to_string())
+                ),
                 Err(crate::model::cvdr_index_evidence::IndexEvidenceInsertError::ReceiptMissing)
             );
         }
@@ -2337,6 +2364,18 @@ mod tests {
         }
         let many: Vec<_> = (0..25).map(|i| (format!("{i:08x}"), DraftStage::Prepared)).collect();
         assert!(pre_v2_upgrade_refusal(&many).unwrap().contains("(+5 more)"));
+    }
+
+    /// R-6: `trust_root_key_id` comes from the configured root key only — mainnet for the IC NNS
+    /// key, a self-labelled non-production id for anything else (never an empty/unknown id).
+    #[test]
+    fn trust_root_key_id_is_decided_by_configuration() {
+        assert_eq!(trust_root_key_id_for(constants::IC_ROOT_KEY), "mainnet");
+        assert_eq!(trust_root_key_id_for(&[1, 2, 3]), "non-production-test-root");
+        assert_eq!(trust_root_key_id_for(&[]), "non-production-test-root");
+        let mut almost = constants::IC_ROOT_KEY.to_vec();
+        almost[10] ^= 1;
+        assert_eq!(trust_root_key_id_for(&almost), "non-production-test-root");
     }
 
     #[test]

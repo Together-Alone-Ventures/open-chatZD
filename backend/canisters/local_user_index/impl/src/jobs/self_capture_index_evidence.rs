@@ -170,7 +170,11 @@ fn store_verified_evidence(
                     "certified Index module hash differs from the deploy-supplied expectation"
                 );
             }
-            let evidence = IndexCodeIdentityEvidence::new(certificate.to_vec(), verified.module_hash);
+            let evidence = IndexCodeIdentityEvidence::new(
+                certificate.to_vec(),
+                verified.module_hash,
+                cvdr::trust_root_key_id_for(ic_root_key).to_string(),
+            );
             match state.data.cvdr.insert_index_evidence(receipt_id, evidence) {
                 Ok(()) | Err(IndexEvidenceInsertError::AlreadyExists) => {
                     trace!(receipt_prefix = %cvdr::receipt_id_prefix(&receipt_id), "INDEX module hash evidence stored");
@@ -333,11 +337,17 @@ mod tests {
         };
         assert_eq!(s.insert_frozen_package(receipt_id, record_id, 1, pkg), Ok(()));
         assert_eq!(
-            s.insert_index_evidence(receipt_id, IndexCodeIdentityEvidence::new(vec![0xaa], vec![0x1d; 32])),
+            s.insert_index_evidence(
+                receipt_id,
+                IndexCodeIdentityEvidence::new(vec![0xaa], vec![0x1d; 32], "mainnet".to_string())
+            ),
             Ok(())
         );
         assert_eq!(
-            s.insert_index_evidence(receipt_id, IndexCodeIdentityEvidence::new(vec![0xbb], vec![0x1d; 32])),
+            s.insert_index_evidence(
+                receipt_id,
+                IndexCodeIdentityEvidence::new(vec![0xbb], vec![0x1d; 32], "mainnet".to_string())
+            ),
             Err(IndexEvidenceInsertError::AlreadyExists)
         );
         assert_eq!(s.get_index_evidence(&receipt_id).unwrap().certificate_bytes, vec![0xaa]);

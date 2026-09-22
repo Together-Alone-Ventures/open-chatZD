@@ -2,7 +2,7 @@
 //!
 //! Spec §8/§8b: delete completes cert-absent (uninstall + cleanup); certificate capture is
 //! self-finalization (§6) / backstop (§7). Public serving is dual Available (§11.2):
-//! FrozenWire commitment-only or PortablePackageV2 when INDEX evidence is stored.
+//! FrozenWire commitment-only or PortablePackageV3 when INDEX evidence is stored.
 //! Obsolete `cvdr_data_certificate` removed (§11.5).
 
 use crate::client::register_user_and_include_auth;

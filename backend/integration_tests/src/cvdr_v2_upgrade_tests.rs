@@ -525,11 +525,40 @@ fn stored_index_evidence_unblocks_upgrade_and_draft_finalises() {
         finalize(env, lui, receipt_id, certificate, witness),
         finalize_cvdr::Response::Captured
     ));
+    let get_cvdr::Response::Available(get_cvdr::AvailablePackage::PortablePackageV3(v3)) = fetch_cvdr(env, lui, receipt_id)
+    else {
+        panic!("finalised receipt must be served as PortablePackageV3 with its index evidence");
+    };
+    // R-6: version 3, trust root stamped from Index config (PocketIC root != IC NNS key), the
+    // extracted hash equals the Index's live module hash, and Gate B holds — candid and HTTP bodies
+    // are byte-identical, with the exact FrozenWire bytes nested.
+    assert_eq!(v3.version, 3);
+    assert_eq!(v3.trust_root_key_id, get_cvdr::TRUST_ROOT_NON_PRODUCTION);
+    let live_module_hash = env
+        .canister_status(lui, Some(canister_ids.user_index))
+        .unwrap()
+        .module_hash
+        .unwrap();
+    assert_eq!(
+        v3.index_code_identity_evidence.index_module_hash, live_module_hash,
+        "extracted index_module_hash is the certified module hash of the Index"
+    );
+    assert!(!v3.index_code_identity_evidence.certificate_bytes.is_empty());
+    let http = http_text(env, lui, &format!("/cvdr/{}", hex::encode(receipt_id)));
+    assert_eq!(
+        http.as_bytes(),
+        v3.to_canonical_json().as_slice(),
+        "Gate B: HTTP /cvdr body == candid PortablePackageV3 canonical JSON"
+    );
+    let http_json: serde_json::Value = serde_json::from_str(&http).unwrap();
+    assert_eq!(http_json["version"], 3);
+    assert_eq!(http_json["trust_root_key_id"], get_cvdr::TRUST_ROOT_NON_PRODUCTION);
+    let nested = hex::decode(http_json["frozen"].as_str().unwrap()).unwrap();
+    let frozen: serde_json::Value = serde_json::from_slice(&nested).unwrap();
+    assert_eq!(frozen["schema"], "openchatzd.cvdr.frozen_package");
     assert!(
-        matches!(
-            fetch_cvdr(env, lui, receipt_id),
-            get_cvdr::Response::Available(get_cvdr::AvailablePackage::PortablePackageV2(_))
-        ),
-        "finalised receipt is served with its authenticated index module-hash evidence"
+        hex::decode(frozen["receipt_body"].as_str().unwrap())
+            .unwrap()
+            .starts_with(b"OPENCHATZD_RECEIPT_BODY_V2")
     );
 }
