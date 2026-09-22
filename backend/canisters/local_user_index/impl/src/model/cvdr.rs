@@ -413,10 +413,70 @@ pub fn trust_root_key_id_for(configured_ic_root_key: &[u8]) -> &'static str {
     }
 }
 
-/// How long after the uninstall index evidence may still be captured (and therefore how long a
-/// receipt without evidence can block an upgrade). Past it the receipt is permanently
-/// V3A-UNAVAILABLE, so blocking longer would protect nothing.
+/// The protected evidence window, measured on CERTIFIED time (C2, G ruling): a module-hash
+/// certificate qualifies for a receipt iff `uninstall_completed_at ≤ cert /time ≤
+/// uninstall_completed_at + 24 h`. The same constant, applied to the wall clock, bounds how long a
+/// receipt without evidence blocks an upgrade (the sweep stops scheduling and the interlock
+/// releases once wall-clock 24 h have passed) — but wall-clock time never decides what is STORED:
+/// a capture still in flight at that moment is accepted iff its certificate qualifies.
 pub const INDEX_EVIDENCE_WINDOW_NS: u64 = 24 * 60 * 60 * 1_000_000_000;
+
+/// Why the post-await store-gate discarded a verified certificate (C2). Discard, never store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvidenceGateReject {
+    /// The code epoch changed between capture and callback: the certificate names a different wasm.
+    EpochChanged,
+    /// Certified `/time` is after `uninstall_completed_at + 24 h` — no qualifying evidence exists.
+    CertTimeAfterWindow,
+    /// Certified `/time` predates the uninstall.
+    CertTimeBeforeUninstall,
+    /// Evidence for this receipt is already stored (first-wins).
+    AlreadyStored,
+}
+
+impl EvidenceGateReject {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EvidenceGateReject::EpochChanged => "index_evidence_epoch_changed",
+            EvidenceGateReject::CertTimeAfterWindow => "index_cert_time_after_window",
+            EvidenceGateReject::CertTimeBeforeUninstall => "index_cert_time_before_uninstall",
+            EvidenceGateReject::AlreadyStored => "index_evidence_already_stored",
+        }
+    }
+}
+
+/// C2 invariant (Stef 2026-09-22): "V3A evidence is admissible only if the authenticated certificate
+/// /time is ≤ uninstall_completed_at + 24 h, the receipt's captured code epoch is still current, and
+/// no evidence has already been stored. Once the epoch changes, or the certificate time is outside
+/// that window, V3A is permanently unavailable."
+///
+/// Store-gate (G ruling; CD B+C finding 1) — re-evaluated AFTER the async `read_state`, right
+/// before insert, from the certificate's AUTHENTICATED `/time`, never from the wall clock:
+/// (a) the code epoch captured when the outcall was issued equals the current epoch;
+/// (b) `uninstall_completed_at ≤ cert /time ≤ uninstall_completed_at + 24 h`;
+/// (c) no evidence is stored yet.
+/// Pure; the wall-clock `now` is deliberately NOT an input.
+pub fn evidence_store_gate(
+    captured_epoch_ns: u64,
+    current_epoch_ns: u64,
+    cert_time_ns: u64,
+    uninstall_completed_at_ns: u64,
+    already_stored: bool,
+) -> Result<(), EvidenceGateReject> {
+    if already_stored {
+        return Err(EvidenceGateReject::AlreadyStored);
+    }
+    if captured_epoch_ns != current_epoch_ns {
+        return Err(EvidenceGateReject::EpochChanged);
+    }
+    if uninstall_completed_at_ns == 0 || cert_time_ns < uninstall_completed_at_ns {
+        return Err(EvidenceGateReject::CertTimeBeforeUninstall);
+    }
+    if cert_time_ns - uninstall_completed_at_ns > INDEX_EVIDENCE_WINDOW_NS {
+        return Err(EvidenceGateReject::CertTimeAfterWindow);
+    }
+    Ok(())
+}
 
 /// A receipt that still NEEDS index evidence and can still GET it (R-2 interlock predicate input).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1173,10 +1233,11 @@ impl CvdrStore {
         self.frozen.receipt_leaves()
     }
 
-    /// Receipts past their uninstall, without stored index evidence, whose evidence window is still
-    /// open at `now_ns`. This ONE predicate drives both the upgrade interlock (`pre_upgrade` and
-    /// `post_upgrade`) and — filtered by the code epoch — the evidence sweep. Computed from durable
-    /// draft fields only (drafts are retained after terminal capture), never from heap state.
+    /// Receipts past their uninstall, without stored index evidence, whose wall-clock window is
+    /// still open at `now_ns`. This ONE predicate drives both the upgrade interlock (`pre_upgrade`
+    /// and `post_upgrade`) and — filtered by the code epoch — the evidence sweep's SCHEDULING.
+    /// It never decides what is stored: acceptance is [`evidence_store_gate`], on certified time.
+    /// Computed from durable draft fields only, never from heap state.
     pub fn evidence_pending(&self, now_ns: u64) -> Vec<EvidencePending> {
         self.drafts
             .iter()
@@ -1787,6 +1848,56 @@ mod tests {
             "uninstalled at epoch start counts"
         );
         assert!(s.evidence_capturable(T0 + 2, T0 + 1).is_empty());
+    }
+
+    /// C2 (G ruling; CD B+C finding 1): the store-gate decides on CERTIFIED time, epoch and absence —
+    /// never on the wall clock. (1) freezes the semantic: a callback landing after wall-clock 24 h
+    /// with a certificate whose /time is inside the window and an unchanged epoch is STORED.
+    #[test]
+    fn evidence_store_gate_is_certified_time_epoch_and_absence_only() {
+        const U: u64 = 1_000_000_000_000_000_000; // uninstall_completed_at (ns)
+        const EPOCH: u64 = 900_000_000_000_000_000;
+        let inside = U + 10 * 60 * 1_000_000_000; // cert /time 10 min after uninstall
+        // (1) wall clock is 25 h past the uninstall — irrelevant: the gate has no `now` input.
+        let _wall_clock_now = U + INDEX_EVIDENCE_WINDOW_NS + 60 * 60 * 1_000_000_000;
+        assert_eq!(evidence_store_gate(EPOCH, EPOCH, inside, U, false), Ok(()), "(1) stored");
+        assert_eq!(
+            evidence_store_gate(EPOCH, EPOCH, U, U, false),
+            Ok(()),
+            "cert at the uninstall instant qualifies"
+        );
+        assert_eq!(
+            evidence_store_gate(EPOCH, EPOCH, U + INDEX_EVIDENCE_WINDOW_NS, U, false),
+            Ok(()),
+            "window is inclusive"
+        );
+        // (2) certificate /time outside the window → discarded
+        assert_eq!(
+            evidence_store_gate(EPOCH, EPOCH, U + INDEX_EVIDENCE_WINDOW_NS + 1, U, false),
+            Err(EvidenceGateReject::CertTimeAfterWindow)
+        );
+        assert_eq!(
+            evidence_store_gate(EPOCH, EPOCH, U - 1, U, false),
+            Err(EvidenceGateReject::CertTimeBeforeUninstall)
+        );
+        assert_eq!(
+            evidence_store_gate(EPOCH, EPOCH, inside, 0, false),
+            Err(EvidenceGateReject::CertTimeBeforeUninstall)
+        );
+        // (3) epoch changed between capture and callback → discarded
+        assert_eq!(
+            evidence_store_gate(EPOCH, EPOCH + 1, inside, U, false),
+            Err(EvidenceGateReject::EpochChanged)
+        );
+        // (4) evidence already present → discarded (checked first: first-wins)
+        assert_eq!(
+            evidence_store_gate(EPOCH, EPOCH, inside, U, true),
+            Err(EvidenceGateReject::AlreadyStored)
+        );
+        assert_eq!(
+            evidence_store_gate(EPOCH, EPOCH + 1, U + INDEX_EVIDENCE_WINDOW_NS + 1, U, true),
+            Err(EvidenceGateReject::AlreadyStored)
+        );
     }
 
     /// The interlock refusal names each blocker (prefix + stage) and the operator path.

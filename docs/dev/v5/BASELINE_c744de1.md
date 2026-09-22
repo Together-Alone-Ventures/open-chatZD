@@ -184,14 +184,38 @@ with an open call context (e.g. the self-finalisation HTTP outcall) does not fin
 no hook — old or new — runs until its outcalls resolve. The interlock therefore must not depend on
 the stop path, and no test may treat "still Stopping" as "refused".
 
+**Invariant (C2, Stef 2026-09-22 — verbatim, governs everything below):**
+
+> V3A evidence is admissible only if the authenticated certificate /time is ≤ uninstall_completed_at
+> + 24 h, the receipt's captured code epoch is still current, and no evidence has already been
+> stored. Once the epoch changes, or the certificate time is outside that window, V3A is permanently
+> unavailable.
+
+**The model (C2, G ruling — supersedes any wall-clock reading of "unavailable").** Two clocks,
+two roles:
+- *Certified time* decides what is **stored**. A `/canister/<LUI>/module_hash` certificate
+  qualifies for a receipt iff, on its BLS-authenticated `/time` `t`:
+  `uninstall_completed_at ≤ t ≤ uninstall_completed_at + 24 h`. The store-gate re-checks, **after**
+  the async `read_state` returns and **before** insert: (a) the code epoch captured when the outcall
+  was issued equals the current epoch; (b) that certified-time bound; (c) no evidence is stored yet.
+  Any failure → discard, never store (`cvdr::evidence_store_gate`; discards are logged as
+  `cvdr_index_evidence_discarded` with the reason). The wall clock is not an input.
+- *Wall-clock time* decides only **scheduling and the upgrade block**: the sweep stops issuing
+  outcalls and the interlock releases once `now − uninstall_completed_at > 24 h`. A capture still
+  in flight at that moment is still accepted iff its certificate qualifies (an upgrade's stop phase
+  drains in-flight outcalls under the old epoch, so release-at-24 h and (a) are consistent).
+- **"Permanently V3A-unavailable"** means *no qualifying certificate can now be accepted*: every
+  certificate the Index could still obtain would carry `/time > uninstall + 24 h`, or the epoch has
+  changed. It is never asserted merely because wall-clock 24 h passed while a capture was in flight.
+
 **Blocking set.** A draft blocks an upgrade iff all of:
 1. stage ∈ {`Uninstalled`, `AwaitingCertificate`, `FailedStuck`} (`Prepared` has no receipt and no
    uninstall — it never blocks; it is resumed or TTL-purged as today);
 2. no index evidence is stored for its `receipt_id`;
-3. its evidence window is still open: `now − anchor ≤ 24 h`, anchor = `uninstall_completed_at`
-   (falling back to `receipt_committed_at`). After the existing 24 h give-up the receipt is
-   permanently V3A-UNAVAILABLE whatever happens next, so blocking longer protects nothing and
-   would make the Index un-upgradable for ever. Computed from durable draft fields, not heap state.
+3. its wall-clock window is still open: `now − uninstall_completed_at ≤ 24 h`. Past that no
+   certificate the Index could still obtain would qualify (certified time would exceed the bound),
+   so blocking longer protects nothing and would make the Index un-upgradable for ever. Computed
+   from durable draft fields, not heap state.
 
 **Two checks, same predicate (`CvdrStore::upgrade_blockers(now_ns)`), both before any state change.**
 - `pre_upgrade` (running wasm): first statement, before `take_state()`/serialisation — trap with the
@@ -240,16 +264,24 @@ for now (upgrade tooling retries; the per-draft block lasts seconds), and add an
    wasm that predates the interlock) is treated conservatively — every pending receipt counts.
    Consequence for the one-time transition: a receipt finalised under a pre-interlock wasm blocks
    the upgrade until it has evidence or its 24 h window lapses (shown in `cvdr_v2_upgrade_tests`).
-3. *Give-up is now implicit.* A receipt leaves the sweep's work list when its window lapses; the
-   heap-only `INDEX_GIVEN_UP` set and its warning were removed (`cvdr_upgrade_blockers` and
-   `cvdr_index_evidence_count` in `/metrics` carry the signal).
+3. *Give-up is now implicit.* A receipt leaves the sweep's work list when its wall-clock window
+   lapses; the heap-only `INDEX_GIVEN_UP` set and its warning were removed (`cvdr_upgrade_blockers`
+   and `cvdr_index_evidence_count` in `/metrics` carry the signal).
+4. *C2 (G, 2026-09-22; CD B+C finding 1).* The post-await store-gate above replaced the earlier
+   "not-before only" check: the 24 h bound is now enforced on certified time at insert, with the
+   epoch and absence re-checks. Tests: `cvdr::tests::evidence_store_gate_is_certified_time_epoch_and_absence_only`
+   (gate cases 1–4) and `cvdr_evidence_gate_tests` under PocketIC — (1) a certificate minted inside
+   the window and delivered after wall-clock 25 h is STORED (the semantic freeze); (2) a certificate
+   minted after the window is discarded. The verifier's V3A window check (§7) is the same
+   certified-time comparison.
 
 **§5 rulings at point C (Stef, 2026-09-22).**
 - Amendments 1–3 above are adopted as the normative interlock.
-- **24 h rule.** A receipt that reaches 24 h after `uninstall_completed_at` without stored index
-  evidence is **permanently V3A-unavailable**: the Index never captures evidence for it afterwards
-  (window closed; and, after any upgrade, the code-epoch rule forbids it), it stops blocking
-  upgrades, and the verifier reports it as V3A-unavailable — never as failed, never as passed.
+- **24 h rule (as amended by C2 above).** A receipt for which no qualifying certificate can now be
+  accepted — every obtainable certificate would carry `/time > uninstall_completed_at + 24 h`, or the
+  epoch has changed — is **permanently V3A-unavailable**: it stops blocking upgrades, and the verifier
+  reports it as V3A-unavailable — never as failed, never as passed. A capture in flight at wall-clock
+  24 h is still stored if its certificate qualifies.
 - **Claim wording (applied at step 5 together with the verifier labels, the cross-repo wording guard
   and the RTS).** `OCZD_SUPPORTED_CLAIM` uses the suite's ratified phrase: OpenChatZD carries
   "subnet-attested installed module identity during the finalization/certification window"; a second

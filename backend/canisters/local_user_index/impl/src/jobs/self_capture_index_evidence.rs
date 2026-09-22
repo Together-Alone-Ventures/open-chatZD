@@ -3,10 +3,15 @@
 //! From the moment a deletion's `uninstall_code` completes, periodically fetch a subnet
 //! system-state `read_state` certificate for `/canister/<self>/module_hash`, verify it on-chain,
 //! extract the module hash, and insert-only store certificate + hash for every receipt it
-//! post-dates. One fetched certificate serves all due receipts. Never stores on verify fail; never
-//! stores a deployer-supplied value. Only receipts uninstalled under the CURRENTLY installed code
-//! are served (`CvdrStore::evidence_capturable`) — the upgrade interlock keeps that code installed
-//! until they are.
+//! qualifies for. One fetched certificate serves all due receipts. Never stores on verify fail;
+//! never stores a deployer-supplied value. Only receipts uninstalled under the CURRENTLY installed
+//! code are served (`CvdrStore::evidence_capturable`) — the upgrade interlock keeps that code
+//! installed until they are.
+//!
+//! C2 (G ruling): what is STORED is decided after the await by [`cvdr::evidence_store_gate`] on the
+//! certificate's authenticated `/time` (`uninstall ≤ /time ≤ uninstall + 24 h`), the code epoch
+//! captured when the outcall was issued, and absence of prior evidence — never on the wall clock.
+//! A callback landing after wall-clock 24 h still stores a qualifying certificate.
 
 use crate::model::cvdr::EvidencePending;
 use crate::model::cvdr::{self, Hash};
@@ -112,8 +117,10 @@ fn run_sweep() {
                 entry.last_attempt_at_ns = now_ns;
             }
         });
-        // ONE certificate serves every due receipt it post-dates.
-        ic_cdk::futures::spawn(attempt_capture(due));
+        // The epoch under which this capture is issued travels with the task (C2 gate (a)).
+        let captured_epoch_ns = read_state(|state| state.data.cvdr_code_epoch_started_at_ns);
+        // ONE certificate serves every due receipt it qualifies for.
+        ic_cdk::futures::spawn(attempt_capture(due, captured_epoch_ns));
     }
 
     mutate_state(|state| {
@@ -121,7 +128,7 @@ fn run_sweep() {
     });
 }
 
-async fn attempt_capture(due: Vec<EvidencePending>) {
+async fn attempt_capture(due: Vec<EvidencePending>, captured_epoch_ns: u64) {
     let self_id = read_state(|state| state.env.canister_id());
     let certificate = match fetch_module_hash_certificate(self_id, MAX_RESPONSE_BYTES).await {
         Some(c) => Some(c),
@@ -136,11 +143,12 @@ async fn attempt_capture(due: Vec<EvidencePending>) {
         let now = state.env.now();
         let ic_root_key = state.env.ic_root_key();
         for pending in due {
-            store_verified_evidence(state, &pending, &certificate, self_id, &ic_root_key, now);
+            store_verified_evidence(state, &pending, &certificate, self_id, &ic_root_key, now, captured_epoch_ns);
         }
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn store_verified_evidence(
     state: &mut RuntimeState,
     pending: &EvidencePending,
@@ -148,15 +156,33 @@ fn store_verified_evidence(
     self_id: CanisterId,
     ic_root_key: &[u8],
     now: types::TimestampMillis,
+    captured_epoch_ns: u64,
 ) {
     let receipt_id = pending.receipt_id;
-    if state.data.cvdr.has_index_evidence(&receipt_id) {
-        return;
-    }
-    // Not-before = this receipt's uninstall (hash-bound in RECEIPT_BODY_V2).
-    match cvdr::verify_index_module_hash_evidence(certificate, self_id, ic_root_key, now, Some(pending.uninstall_completed_at))
-    {
+    // Authenticate first (BLS → NNS → range → exact /module_hash path → /time); the not-before is
+    // re-checked by the gate below from the same authenticated time.
+    match cvdr::verify_index_module_hash_evidence(certificate, self_id, ic_root_key, now, None) {
         Ok(verified) => {
+            // C2 store-gate, post-await, before insert: epoch / certified window / absence.
+            if let Err(reject) = cvdr::evidence_store_gate(
+                captured_epoch_ns,
+                state.data.cvdr_code_epoch_started_at_ns,
+                verified.cert_time_ns,
+                pending.uninstall_completed_at,
+                state.data.cvdr.has_index_evidence(&receipt_id),
+            ) {
+                if reject != cvdr::EvidenceGateReject::AlreadyStored {
+                    warn!(
+                        event = "cvdr_index_evidence_discarded",
+                        receipt_prefix = %cvdr::receipt_id_prefix(&receipt_id),
+                        reason = reject.as_str(),
+                        cert_time_ns = verified.cert_time_ns,
+                        uninstall_completed_at_ns = pending.uninstall_completed_at,
+                        "verified INDEX certificate does not qualify for this receipt; discarded, not stored"
+                    );
+                }
+                return;
+            }
             // Ops-integrity guard ONLY (R-2): the deployer's expectation is compared, logged and
             // counted — it is never stored as evidence and never decides what is stored.
             if let Some(expected) = state.data.expected_index_module_hash

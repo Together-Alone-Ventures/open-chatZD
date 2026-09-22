@@ -15,6 +15,7 @@ mod change_group_role_tests;
 mod chit_tests;
 mod client;
 mod communities;
+mod cvdr_evidence_gate_tests;
 mod cvdr_tests;
 mod cvdr_v2_upgrade_tests;
 mod cycles_dispenser_tests;
