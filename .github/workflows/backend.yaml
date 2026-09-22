@@ -62,9 +62,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Together-Alone-Ventures/CVDR-Verify
-          # Do not use the future release tag for CI. Pin the gated sibling tip until
-          # v0.7.0 is minted once at the final release commit (Stef standing rule).
-          ref: ac64c1b881b46cda8ef909c4a23ae008f863536d
+          # Immutable SHA of CVDR-Verify branch `openchatzd-v5` (560e483 mktd02-v5 merged with the
+          # OpenChat line ac64c1b, plus the suite-v5 OpenChat verifier — Brief B1 step 5). This pin
+          # resolves only once `openchatzd-v5` is pushed to Together-Alone-Ventures/CVDR-Verify; until
+          # then the checkout fails (intended: no fallback to a stale tip). Release tags are minted
+          # once, at the final release commit (Stef standing rule) — never used for CI pins.
+          ref: 37411f5809cf8d16990f93663e59e394c648750e
           path: CVDR-Verify
           token: ${{ secrets.CVDR_VERIFY_READ_TOKEN }}
       - name: Require sibling OpenChatZD attestation module
