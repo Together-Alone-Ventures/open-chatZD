@@ -29,3 +29,4 @@ frontend/app/src/stores/timeline.ts
 claude.md
 GEMINI.md
 backend/integration_tests/fixtures/pocketic_e2e_cvdr.json
+backend/integration_tests/fixtures/pocketic_e2e_portable_v3.*

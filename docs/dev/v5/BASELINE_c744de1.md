@@ -325,3 +325,54 @@ index_code_identity_evidence { certificate_bytes, index_module_hash }
   never projected into V3 with serve-time values — such a receipt is served as `FrozenWire`.
 - **Fail closed (verifier side, step 5):** unknown keys, `version ≠ 3`, unknown `trust_root_key_id`
   → reject. FrozenWire/V2 remain historical decoders only; V2 is never emitted (zero mainnet packages).
+
+## 7. Step 5 — OpenChat verifier (CVDR-Verify `openchatzd-v5`; point E)
+
+Branch `openchatzd-v5` in `~/tav/CVDR-Verify` = `560e483` (mktd02-v5) merged with `ac64c1b` (the
+OpenChat line, current CI pin); all work inside `mktd02/mktd02-verify/`. Grade vocabulary aligned with
+the suite: `validity: PASS | INCOMPLETE | FAIL`, exit `0 | 4 | 1` (the OpenChat-only
+`VerifiedFinal / LateFinalized / Reject`, exit 3, is retired).
+
+- **V1** — exact dispatch on the RECEIPT_BODY tag (`_V2` live, `_V1` historical) **and** the package
+  version (3 live, 2 historical): V3 ⇔ body V2, V2 ⇔ body V1, bare FrozenWire either; any other
+  pairing or tag is malformed (`v1:version-tag-mismatch` / `v1:body-malformed`). `receipt_id`
+  recomputed from the displayed fields (R-5); leaf == `receipt_hash`; RevealWire v2 re-derives
+  `targets_commitment` and the non-identifying `record_id` (R-1; user principal = body
+  `user_canister_id`).
+- **V2** — unchanged BLS→NNS→delegation→range path, under the SELECTED root.
+- **Trust root = selector (G rule 1).** `trust_root_key_id` picks a verifier-configured root:
+  `mainnet` → built-in NNS key; `non-production-test-root` → only with `--allow-fixture-root-key`
+  and root material supplied out of band (`--fixture-root-key-hex`, since a V3 package carries no
+  root; or a FrozenWire fixture's `root_key_hex`); unknown ids and a conflicting
+  `--trust-root-key-id` fail closed before anything is verified; a non-production root is announced
+  in the verdict (`TEST VERDICT ONLY`).
+- **V3A — exactly three outcomes (G rule 2):** `V3A_PASS` (certificate authenticated under the
+  selected root, `/time` ∈ [`uninstall_completed_at`, +24 h], displayed `index_module_hash` ==
+  certified), `V3A_PENDING_IN_PROTECTED_WINDOW` (no evidence, window open at the verifier clock
+  `--now-ns`, default system time), `V3A_PERMANENTLY_UNAVAILABLE` (no evidence, window lapsed).
+  `INDEX_ATTESTATION_INVALID` / `INDEX_HASH_MISMATCH` are named failures, never outcomes.
+  Validity: PASS ⇔ V1 ∧ V2 ∧ V3A_PASS; INCOMPLETE ⇔ V1 ∧ V2 and V3A pending
+  (`v3a-pending-in-protected-window`) or permanently unavailable (`v3a-permanently-unavailable`);
+  FAIL otherwise. The finalization-window tier and the timing axis are reported, non-gating; the
+  live read (`--corroborate-h-index`) is a diagnostic block, never validity. `--expect-module-hash`
+  gates against the V3A-certified hash (V2 body) / `h_index` (V1 body).
+- **Fail closed:** PortablePackageV3 exact key set at both levels, `version == 3`, 32-byte
+  `index_module_hash`, known selector; RevealWire v2 must carry `record_salt`, v1 must not.
+- **Claim wording** (ratified, Stef 2026-09-22) applied in both repos: OpenChatZD
+  `cvdr_index_attestation.rs` and the verifier's `index_attestation.rs`; the bidirectional label
+  drift guards now pin the three outcomes, the two named failures, the timing axis, the schema id
+  and the ratified fragment, and reject the retired four-outcome vocabulary.
+- **Evidence:** the real CLI over a genuine PocketIC `PortablePackageV3` (exact `/cvdr` bytes,
+  `tests/fixtures/v5-openchatzd/pocketic-v3/`, provenance recorded): `validity: PASS`,
+  `V3A_PASS`, certified module hash `1494dc66…` = the point-D Docker `local_user_index.wasm.gz`
+  hash; FAIL without the fixture flag / root / with a conflicting selector; `INDEX_HASH_MISMATCH` on
+  a tampered displayed hash; unknown key / version 4 / unknown selector malformed. `ci.sh` now
+  requires clean fmt and clippy for the whole crate (the accepted OpenChatZD fmt/clippy baseline
+  from 25c2945 is retired) and passes end to end (148 tests, audit clean).
+- **Evidence-binding rule (Stef, 2026-09-22, verbatim):** Index module-hash evidence is bound by (index_canister_id, certified /time within the receipt's window), not by receipt identity; one certificate may serve every receipt it qualifies for; a different Index canister, subnet, path or root fails.
+- **C2 alignment:** the verifier's V3A window check is the same certified-time comparison as the
+  Index's store-gate (`uninstall_completed_at ≤ cert /time ≤ uninstall_completed_at + 24 h`); the
+  epoch and first-wins conditions are enforced by the Index at store time and are observable offline
+  only as evidence that never arrives (pending → permanently unavailable).
+- **CI pin:** `backend.yaml` moves from `ac64c1b` to the `openchatzd-v5` commit once it exists
+  (second half of point E, after the CVDR-Verify commit word).

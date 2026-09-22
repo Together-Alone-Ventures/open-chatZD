@@ -550,6 +550,31 @@ fn stored_index_evidence_unblocks_upgrade_and_draft_finalises() {
         v3.to_canonical_json().as_slice(),
         "Gate B: HTTP /cvdr body == candid PortablePackageV3 canonical JSON"
     );
+    // Export the EXACT served bytes + PocketIC NNS root (out of band: a V3 package carries no root
+    // material) as the CVDR-Verify end-to-end fixture for the OpenChat V3 path.
+    let dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("fixtures");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("pocketic_e2e_portable_v3.json"), http.as_bytes()).unwrap();
+    std::fs::write(
+        dir.join("pocketic_e2e_portable_v3.root_key.hex"),
+        hex::encode(env.root_key().expect("PocketIC NNS root key")),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("pocketic_e2e_portable_v3.PROVENANCE.txt"),
+        format!(
+            "PocketIC end-to-end PortablePackageV3 for CVDR-Verify (OpenChatZD suite-v5 V1/V2/V3A).\n\
+             Exact bytes of GET /cvdr/{} served by local_user_index {} in\n\
+             cvdr_v2_upgrade_tests::stored_index_evidence_unblocks_upgrade_and_draft_finalises.\n\
+             Genuine PocketIC certificates (commitment + /module_hash); trust_root_key_id = {}.\n\
+             Verify: mktd02-verify --package pocketic_e2e_portable_v3.json --allow-fixture-root-key \\\n\
+               --fixture-root-key-hex $(cat pocketic_e2e_portable_v3.root_key.hex)   => validity: PASS\n",
+            hex::encode(receipt_id),
+            lui,
+            get_cvdr::TRUST_ROOT_NON_PRODUCTION
+        ),
+    )
+    .unwrap();
     let http_json: serde_json::Value = serde_json::from_str(&http).unwrap();
     assert_eq!(http_json["version"], 3);
     assert_eq!(http_json["trust_root_key_id"], get_cvdr::TRUST_ROOT_NON_PRODUCTION);
