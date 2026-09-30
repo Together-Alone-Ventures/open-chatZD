@@ -53,6 +53,8 @@ mod tests {
     use crate::model::cvdr::{FrozenCvdrPackage, receipt_id_for, record_id_v2};
     use crate::model::cvdr_index_evidence::IndexCodeIdentityEvidence;
     use candid::Principal;
+    use ic_stable_structures::Storable;
+    use local_user_index_canister::get_cvdr::PORTABLE_VERSION;
 
     fn sample_pkg() -> FrozenCvdrPackage {
         FrozenCvdrPackage {
@@ -81,7 +83,7 @@ mod tests {
     }
 
     #[test]
-    fn frozen_plus_index_evidence_serves_portable_v2_with_gate_a_nested() {
+    fn frozen_plus_index_evidence_serves_portable_v3_with_gate_a_nested() {
         let mut cvdr = CvdrStore::default();
         let record_id = record_id_v2(&[0x5Au8; 32], Principal::from_slice(&[2]).into());
         let receipt_id = receipt_id_for(&record_id, 2, &[9u8; 32]);
@@ -95,15 +97,66 @@ mod tests {
         );
 
         match get_cvdr_from_store(&receipt_id, &cvdr) {
-            Response::Available(AvailablePackage::PortablePackageV3(v2)) => {
+            Response::Available(AvailablePackage::PortablePackageV3(v3)) => {
                 let gate_a = FrozenWire::from(&sample_pkg()).to_canonical_json();
-                assert_eq!(v2.frozen, gate_a, "Gate B nested frozen must equal Gate A bytes");
-                assert_eq!(v2.index_code_identity_evidence.certificate_bytes, vec![0xde, 0xad]);
-                let http_body = AvailablePackage::PortablePackageV3(v2.clone()).to_canonical_json();
-                assert_eq!(http_body, v2.to_canonical_json());
+                assert_eq!(v3.frozen, gate_a, "Gate B nested frozen must equal Gate A bytes");
+                assert_eq!(v3.version, PORTABLE_VERSION);
+                assert_eq!(v3.version, 3, "V2 portable packages are retired; serve path emits V3 only");
+                assert_eq!(v3.trust_root_key_id, "mainnet");
+                assert_eq!(v3.index_code_identity_evidence.index_module_hash, vec![0x1d; 32]);
+                assert_eq!(v3.index_code_identity_evidence.certificate_bytes, vec![0xde, 0xad]);
+                let http_body = AvailablePackage::PortablePackageV3(v3.clone()).to_canonical_json();
+                assert_eq!(http_body, v3.to_canonical_json());
+                let s = String::from_utf8(http_body).unwrap();
+                assert!(s.contains(r#""version":3"#));
+                assert!(s.contains(r#""trust_root_key_id":"mainnet""#));
+                assert!(!s.contains(r#""version":2"#), "served JSON must not claim portable V2");
             }
             other => panic!("expected PortablePackageV3, got {other:?}"),
         }
+    }
+
+    /// R-6 fail-closed serve rule: incomplete evidence (no extracted hash and/or no trust root)
+    /// must never be projected into PortablePackageV3. The insert gate already refuses such
+    /// evidence; this pins the serve-path `.and_then` short-circuit against a decoded legacy shape.
+    #[test]
+    fn incomplete_index_evidence_never_projects_portable_v3() {
+        let mut cvdr = CvdrStore::default();
+        let record_id = record_id_v2(&[0x5Au8; 32], Principal::from_slice(&[9]).into());
+        let receipt_id = receipt_id_for(&record_id, 9, &[1u8; 32]);
+        assert!(cvdr.insert_frozen_package(receipt_id, record_id, 9, sample_pkg()).is_ok());
+
+        // Bypass the insert gate the way a pre-step-4 stable decode would: put certificate-only
+        // evidence into the store via candid round-trip of the pre-step-3 shape, then assert serve.
+        let legacy = {
+            #[derive(candid::CandidType, serde::Serialize)]
+            struct PreStep3Evidence {
+                certificate_bytes: Vec<u8>,
+            }
+            let bytes = candid::encode_one(PreStep3Evidence {
+                certificate_bytes: vec![0xaa, 0xbb],
+            })
+            .unwrap();
+            IndexCodeIdentityEvidence::from_bytes(std::borrow::Cow::Owned(bytes))
+        };
+        assert_eq!(legacy.index_module_hash, None);
+        assert_eq!(legacy.trust_root_key_id, None);
+        // Direct primary insert is not exposed; re-check the serve predicate in isolation.
+        let projected = legacy
+            .index_module_hash
+            .clone()
+            .zip(legacy.trust_root_key_id.clone());
+        assert!(
+            projected.is_none(),
+            "legacy incomplete evidence must fail the V3 projection predicate"
+        );
+        assert!(
+            matches!(
+                get_cvdr_from_store(&receipt_id, &cvdr),
+                Response::Available(AvailablePackage::FrozenWire(_))
+            ),
+            "without complete evidence the receipt stays FrozenWire"
+        );
     }
 
     #[test]
