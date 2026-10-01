@@ -121,8 +121,6 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build current wasms (canonical recipe at this commit)
-        env:
-          GH_TOKEN: ${{ secrets.CVDR_VERIFY_READ_TOKEN }}
         run: ./scripts/docker-build-all-wasms.sh
       - name: Build c744de1 baseline wasms (canonical recipe at c744de1)
         env:

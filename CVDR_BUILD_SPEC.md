@@ -162,8 +162,11 @@ PortablePackageV3  schema "openchatzd.cvdr.portable_package" version 3 encoding 
 
 The **all-canister Docker recipe** is canonical: a published module hash names
 `scripts/docker-build-all-wasms.sh` at the release commit (`GIT_COMMIT_ID` is embedded, so the hash
-is a function of the committed tree *and* its commit id). BuildKit secret `gh_token` by path
-(`~/.config/tav/gh_token`, mode 600) or `GH_TOKEN` env; the token is read inside BuildKit only. The
+is a function of the committed tree *and* its commit id). No BuildKit secret or token (review F,
+2026-10-01): every git source in `Cargo.lock` is public since R-3 removed the private MKTd02 /
+zombie-core crates. Commits up to v0.8.0 (`8118d26a`) carry a Dockerfile that hard-fails without the
+`gh_token` secret — run their own recipe with any GitHub read token; the `c744de1` baseline still
+locks the private crates and needs a token that can read them. The
 Step 10 same-window dual build compares all 23 wasms per file; the single-canister recipe
 (`canister_name=<x>`) is a determinism check, not a publishable hash. Toolchain: rust 1.95.0,
 ic-wasm 0.9.11, `linux/amd64`, `--locked`, path remaps in `generate-wasm.sh`.

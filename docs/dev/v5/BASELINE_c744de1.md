@@ -495,3 +495,11 @@ the suite: `validity: PASS | INCOMPLETE | FAIL`, exit `0 | 4 | 1` (the OpenChat-
   same labels and corpus mirror. Every guard failure names the pin, the sibling path and its HEAD.
   To test against the pin without moving a working sibling:
   `git -C ../CVDR-Verify archive <pin> | tar -x -C <dir>` then `CVDR_VERIFY_SIBLING=<dir> cargo test …`.
+- **Docker secret removed (F).** After R-3 `Cargo.lock` has no private git source (public only:
+  `hpeebles/{aws-sign-v4,msgpack-rust,response-verification,ts-rs}`, `open-chat-labs/event-store`,
+  `ivan-jukic/fcm-service`), so the `gh_token` BuildKit secret is gone from `Dockerfile`,
+  `scripts/docker-build-all-wasms.sh` and `scripts/m2-repro-local-user-index.sh`. It never entered the
+  output: the `8118d26a` tree built with the secret-free Dockerfile and no token reproduces the Step 10
+  set under `f314663c5…-step10-worktree` (LUI `1ea8f3cd…`) and the published v0.8.0 set under
+  `8118d26a` (LUI `6cfdb4ac…`), 23/23 each. §1, §3 and §9 describe the recipe as it was then; the
+  `c744de1` baseline still locks the private crates and needs a token (`upgrade-baseline` job).
