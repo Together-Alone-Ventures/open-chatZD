@@ -469,3 +469,13 @@ the suite: `validity: PASS | INCOMPLETE | FAIL`, exit `0 | 4 | 1` (the OpenChat-
 - **Observation (not fixed, pre-existing at c744de1):** `cargo check -p local_user_index_canister_impl`
   ICEs in rustc 1.95.0 while emitting dead-code warnings for the cdylib (`slice/index.rs:1031`);
   `cargo build`, `clippy --tests` and Docker are unaffected; `RUSTFLAGS=-Adead_code` works around it.
+
+## 10. Review follow-ups (Antoine, 2026-09-30) — 2026-10-01
+
+- **Ignored baseline upgrade tests (F2).** `r3_upgrade_tests::r3_upgrade_from_c744de1_keeps_state_and_function`
+  and `cvdr_v2_upgrade_tests::v1_in_flight_draft_blocks_upgrade_then_terminal_draft_survives_it` stay
+  `#[ignore]`: they need the §3.2 baseline wasms in `wasms/baseline_c744de1/`, which
+  `wasms::baseline_c744de1` hash-checks on load. The manual `upgrade-baseline` job
+  (`workflow_dispatch`, `.github/workflows/backend.yaml`) builds the current wasms and the baseline
+  with the canonical recipe AT `c744de1` (the baseline locks the private MKTd02 / zombie-core crates,
+  so the job reads `CVDR_VERIFY_READ_TOKEN`) and runs both tests with `--ignored --test-threads 1`.

@@ -30,6 +30,11 @@ fn bumped(wasm: &CanisterWasm, version: BuildVersion) -> CanisterWasm {
     wasm
 }
 
+/// Precondition: `wasms/baseline_c744de1/{openchat_installer,user_index,local_user_index,user}.wasm.gz`
+/// — the c744de1 all-canister Docker artefacts, checked on load against the SHA-256 recorded in
+/// docs/dev/v5/BASELINE_c744de1.md §3.2 (`wasms::baseline_c744de1`) — plus the current wasms in
+/// `wasms/`. CI: the manual `upgrade-baseline` job (`workflow_dispatch`) in
+/// `.github/workflows/backend.yaml` builds both sets and runs this test with `--ignored`.
 #[test]
 #[ignore = "needs wasms/baseline_c744de1/{openchat_installer,user_index,local_user_index,user}.wasm.gz \
             (Docker-built at c744de1; docs/dev/v5/BASELINE_c744de1.md §3.2). Run with --ignored."]

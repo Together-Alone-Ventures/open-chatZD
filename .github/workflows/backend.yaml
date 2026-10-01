@@ -2,6 +2,7 @@ on:
   pull_request:
     branches:
       - master
+  workflow_dispatch:
 
 name: Backend linting and unit tests
 
@@ -81,3 +82,75 @@ jobs:
         with:
           command: test
           args: --workspace --exclude integration_tests
+
+  # The two `#[ignore]`d PocketIC upgrade tests (`r3_upgrade_from_c744de1_keeps_state_and_function`,
+  # `v1_in_flight_draft_blocks_upgrade_then_terminal_draft_survives_it`) upgrade a deployment
+  # installed from the c744de1 baseline wasms to the current wasms. Manual only: two all-canister
+  # Docker builds. The baseline is built here with the canonical recipe AT c744de1; that tree still
+  # locks the private MKTd02 / zombie-core crates, hence the read token. `wasms::baseline_c744de1`
+  # checks every baseline wasm against the SHA-256 recorded in docs/dev/v5/BASELINE_c744de1.md §3.2.
+  upgrade-baseline:
+    name: baseline upgrade tests (c744de1 -> current, ignored)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on:
+      - runs-on
+      - cpu=16
+      - image=ubuntu24-full-x64
+      - family=m7i
+      - run-id=${{ github.run_id }}
+    timeout-minutes: 240
+    env:
+      BASELINE_COMMIT: c744de1a1124f9320354946d83cfc3da68133967
+    steps:
+      - name: Install Rustup
+        run: |
+          curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused -fsSL "https://sh.rustup.rs" | sh -s -- --default-toolchain none -y
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require CVDR_VERIFY_READ_TOKEN
+        env:
+          CVDR_VERIFY_READ_TOKEN: ${{ secrets.CVDR_VERIFY_READ_TOKEN }}
+        run: |
+          if [ -z "${CVDR_VERIFY_READ_TOKEN}" ]; then
+            echo "::error::CVDR_VERIFY_READ_TOKEN is required (the c744de1 baseline locks private git deps: ICP-Delete-Leaf, zombie-core)."
+            exit 1
+          fi
+      - uses: ./.github/workflows/setup-rust
+      - uses: arduino/setup-protoc@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build current wasms (canonical recipe at this commit)
+        env:
+          GH_TOKEN: ${{ secrets.CVDR_VERIFY_READ_TOKEN }}
+        run: ./scripts/docker-build-all-wasms.sh
+      - name: Build c744de1 baseline wasms (canonical recipe at c744de1)
+        env:
+          GH_TOKEN: ${{ secrets.CVDR_VERIFY_READ_TOKEN }}
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/baseline" "$BASELINE_COMMIT"
+          cd "$RUNNER_TEMP/baseline"
+          # c744de1's Dockerfile needs the gh_token secret and an explicit empty canister_name.
+          DOCKER_BUILDKIT=1 docker build -t oczd-baseline-c744de1 --secret id=gh_token,env=GH_TOKEN \
+            --build-arg git_commit_id="$BASELINE_COMMIT" --build-arg canister_name= --platform linux/amd64 .
+          mkdir -p "$GITHUB_WORKSPACE/wasms/baseline_c744de1"
+          cid=$(docker create oczd-baseline-c744de1)
+          for c in openchat_installer user_index local_user_index user; do
+            docker cp "$cid:/build/wasms/$c.wasm.gz" "$GITHUB_WORKSPACE/wasms/baseline_c744de1/"
+          done
+          docker rm --volumes "$cid"
+          (cd "$GITHUB_WORKSPACE/wasms/baseline_c744de1" && sha256sum *.wasm.gz)
+      - name: PocketIC server and NNS / event_store wasms
+        run: |
+          POCKET_IC_SERVER_VERSION=$(sed -n 's/^POCKET_IC_SERVER_VERSION="\(.*\)"$/\1/p' scripts/run-integration-tests.sh)
+          curl -Ls "https://github.com/dfinity/pocketic/releases/download/${POCKET_IC_SERVER_VERSION}/pocket-ic-x86_64-linux.gz" -o backend/integration_tests/pocket-ic.gz
+          gzip -df backend/integration_tests/pocket-ic.gz
+          chmod +x backend/integration_tests/pocket-ic
+          ./scripts/download-nns-canister-wasm.sh icp_ledger ledger-canister_notify-method
+          ./scripts/download-nns-canister-wasm.sh sns_wasm sns-wasm-canister
+          ./scripts/download-nns-canister-wasm.sh icrc_ledger ic-icrc1-ledger
+          ./scripts/download-canister-wasm-dfx.sh event_store
+      - name: Run the ignored baseline upgrade tests
+        run: |
+          cargo test --locked -p integration_tests -- --ignored --test-threads 1 --nocapture \
+            r3_upgrade v1_in_flight_draft_blocks_upgrade

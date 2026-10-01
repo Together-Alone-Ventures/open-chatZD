@@ -31,8 +31,10 @@ lazy_static! {
     pub static ref USER_INDEX: CanisterWasm = get_canister_wasm("user_index");
 }
 
-/// Docker-built wasms of the pre-R-3 baseline (`c744de1`), used only by `r3_upgrade_tests`.
-/// Not committed: copy them to `wasms/baseline_c744de1/` (docs/dev/v5/BASELINE_c744de1.md §3.2).
+/// Docker-built wasms of the pre-R-3 baseline (`c744de1`), used only by the two `#[ignore]`d upgrade
+/// tests (`r3_upgrade_tests`, `cvdr_v2_upgrade_tests`). Not committed: copy them to
+/// `wasms/baseline_c744de1/` (docs/dev/v5/BASELINE_c744de1.md §3.2), or run the manual
+/// `upgrade-baseline` job in `.github/workflows/backend.yaml`, which builds them at c744de1.
 ///
 /// Every load is checked against the SHA-256 recorded in that document, so the upgrade test can
 /// only ever start from the exact `c744de1` all-canister-recipe artefacts.

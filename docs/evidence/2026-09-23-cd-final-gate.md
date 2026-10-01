@@ -70,3 +70,14 @@ hashes do not depend on the commit id.
 ## Result
 
 CD: PASS, no release-blocking finding. All runs in detached/disposable worktrees and `/tmp`.
+
+## Re-run 2026-10-01 — ignored baseline upgrade tests (review follow-up B)
+
+| Item | Value |
+|---|---|
+| Source | `b4088c135` (`v5-retrofit`; integration-test code as at `8118d26a`) |
+| Current wasms | `8118d26a` tree, all-canister recipe, `git_commit_id` = `f314663c5945b699cee50250514a5a1e4dce935d-step10-worktree` — the Step 10 set, LUI `1ea8f3cd…` (no LUI/user_index/user code change since) |
+| Baseline wasms | `wasms/baseline_c744de1/` from CD's 2026-09-22 copy; SHA-256 = BASELINE §3.2 (checked on load by `wasms::baseline_c744de1`) |
+| PocketIC | server 11.0.0 |
+| Command | `cargo test --locked -p integration_tests -- --ignored --test-threads 1 --nocapture r3_upgrade v1_in_flight_draft_blocks_upgrade` |
+| Result | exit 0 — 2 passed, 0 failed (`r3_upgrade_from_c744de1_keeps_state_and_function`, `v1_in_flight_draft_blocks_upgrade_then_terminal_draft_survives_it`), 219.85 s |
