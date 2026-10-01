@@ -135,10 +135,103 @@ fn sibling_source_matches_openchatzd_labels(src: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Resolve CVDR-Verify root: prefer a checkout that actually contains the OpenChatZD
-/// attestation module (Together-alone sibling or nested CI path).
+/// Explicit CVDR-Verify location for the cross-repo guards (a checkout, or a `git archive` export,
+/// of the CI pin). When set it is the only candidate, and a missing path fails rather than skips.
+#[cfg(test)]
+pub(crate) const CVDR_VERIFY_SIBLING_ENV: &str = "CVDR_VERIFY_SIBLING";
+
+/// The CVDR-Verify commit CI checks out as the sibling: the `ref:` of the CVDR-Verify checkout step
+/// in `.github/workflows/backend.yaml`. Read from the workflow, never hard-coded, so the guards
+/// always name the live pin.
+#[cfg(test)]
+pub(crate) fn required_cvdr_verify_pin() -> String {
+    let workflow = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../.github/workflows/backend.yaml");
+    let src = std::fs::read_to_string(&workflow).unwrap_or_else(|e| panic!("read {}: {e}", workflow.display()));
+    cvdr_verify_pin_from_workflow(&src).unwrap_or_else(|| {
+        panic!(
+            "{}: no CVDR-Verify checkout pinned to an immutable 40-hex `ref:`",
+            workflow.display()
+        )
+    })
+}
+
+/// `ref:` of the step whose `repository:` is `…/CVDR-Verify`; `None` unless it is a 40-hex SHA.
+#[cfg(test)]
+fn cvdr_verify_pin_from_workflow(src: &str) -> Option<String> {
+    let mut in_step = false;
+    for line in src.lines().map(str::trim) {
+        if let Some(repo) = line.strip_prefix("repository:") {
+            in_step = repo.trim().ends_with("/CVDR-Verify");
+        } else if line.starts_with("- ") {
+            in_step = false;
+        } else if let Some(pin) = line.strip_prefix("ref:").filter(|_| in_step) {
+            let pin = pin.trim();
+            return (pin.len() == 40 && pin.bytes().all(|b| b.is_ascii_hexdigit())).then(|| pin.to_string());
+        }
+    }
+    None
+}
+
+/// `git -C <root> <args>` stdout, only when `root` is itself the top of a git checkout (an export
+/// nested inside another repository must not report that repository's HEAD).
+#[cfg(test)]
+fn sibling_git(root: &std::path::Path, args: &[&str]) -> Option<String> {
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    };
+    let top = git(&["rev-parse", "--show-toplevel"])?;
+    if std::fs::canonicalize(&top).ok()? != std::fs::canonicalize(root).ok()? {
+        return None;
+    }
+    git(args)
+}
+
+/// The sibling precondition, named in every cross-repo guard failure: which checkout was read, at
+/// which commit, and the pin it must be at (or descend from without drifting).
+#[cfg(test)]
+pub(crate) fn sibling_precondition(root: &std::path::Path) -> String {
+    let pin = required_cvdr_verify_pin();
+    let head = match sibling_git(root, &["rev-parse", "HEAD"]) {
+        None => "unknown (not a git checkout)".to_string(),
+        Some(head) if head == pin => format!("{head} (= the pin)"),
+        Some(head) => {
+            let ancestry = match sibling_git(root, &["merge-base", "--is-ancestor", &pin, "HEAD"]) {
+                Some(_) => "the pin is an ancestor",
+                None => "the pin is NOT an ancestor, or is not in this clone",
+            };
+            format!("{head} ({ancestry})")
+        }
+    };
+    format!(
+        "Precondition: the CVDR-Verify sibling at {} must be the CI pin {pin} \
+         (.github/workflows/backend.yaml) or a descendant carrying the same OpenChatZD labels and \
+         corpus mirror; its HEAD is {head}. Check the pin out there, or set \
+         {CVDR_VERIFY_SIBLING_ENV}=<checkout or `git archive` export of {pin}>.",
+        root.display()
+    )
+}
+
+/// Resolve CVDR-Verify root: `CVDR_VERIFY_SIBLING` when set; otherwise prefer a checkout that
+/// actually contains the OpenChatZD attestation module (Together-alone sibling or nested CI path).
 #[cfg(test)]
 pub(crate) fn resolve_cvdr_verify_root() -> Option<std::path::PathBuf> {
+    if let Some(root) = std::env::var_os(CVDR_VERIFY_SIBLING_ENV).filter(|v| !v.is_empty()) {
+        let root = std::path::PathBuf::from(root);
+        assert!(
+            root.exists(),
+            "{CVDR_VERIFY_SIBLING_ENV}={} does not exist. {}",
+            root.display(),
+            sibling_precondition(&root)
+        );
+        return Some(root);
+    }
     let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let candidates = [
         manifest.join("../../../../../CVDR-Verify"), // Together-alone/<repos>
@@ -365,7 +458,10 @@ mod tests {
     #[test]
     fn labels_match_sibling_cvdr_verify_when_present() {
         let Some(verify_root) = resolve_cvdr_verify_root() else {
-            eprintln!("skip cross-repo labels: CVDR-Verify sibling not checked out");
+            eprintln!(
+                "skip cross-repo labels: CVDR-Verify sibling not checked out (CI pin {}; set {CVDR_VERIFY_SIBLING_ENV} to run)",
+                required_cvdr_verify_pin()
+            );
             return;
         };
         let path = verify_root.join(SIBLING_OPENCHATZD_ATTESTATION_REL);
@@ -374,18 +470,59 @@ mod tests {
             SiblingLabelGuard::FailMissingModule => {
                 panic!(
                     "CVDR-Verify is present at {} but {} is missing. \
-                     Pin gap or moved path: amended OpenChatZD INDEX labels are not in this checkout. \
-                     Amend CVDR-Verify or check out a tip that includes openchatzd/index_attestation.rs.",
+                     Pin gap or moved path: amended OpenChatZD INDEX labels are not in this checkout. {}",
                     verify_root.display(),
-                    path.display()
+                    path.display(),
+                    sibling_precondition(&verify_root)
                 );
             }
             SiblingLabelGuard::RequireLabelMatch => {
                 let src = fs::read_to_string(&path).expect("read CVDR-Verify index_attestation");
                 sibling_source_matches_openchatzd_labels(&src).unwrap_or_else(|e| {
-                    panic!("CVDR-Verify OpenChatZD label drift: {e}");
+                    panic!(
+                        "CVDR-Verify OpenChatZD label drift: {e}. {}",
+                        sibling_precondition(&verify_root)
+                    );
                 });
             }
         }
+    }
+
+    #[test]
+    fn cvdr_verify_pin_is_read_from_the_backend_workflow() {
+        let pin = required_cvdr_verify_pin();
+        assert_eq!(pin.len(), 40);
+        assert!(pin.bytes().all(|b| b.is_ascii_hexdigit()));
+
+        let step = |reference: &str| {
+            format!(
+                "      - uses: actions/checkout@v4\n        with:\n          repository: Org/CVDR-Verify\n          \
+                 # comment\n          ref: {reference}\n          path: CVDR-Verify\n"
+            )
+        };
+        let sha = "8b0d835057a3c4987a99a1f18c6e4e364733d2ef";
+        assert_eq!(cvdr_verify_pin_from_workflow(&step(sha)).as_deref(), Some(sha));
+        assert_eq!(
+            cvdr_verify_pin_from_workflow(&step("openchatzd-v5")),
+            None,
+            "branch names are not pins"
+        );
+        let other_repo = format!(
+            "      - uses: actions/checkout@v4\n        with:\n          repository: Org/Other\n          ref: {sha}\n"
+        );
+        assert_eq!(cvdr_verify_pin_from_workflow(&other_repo), None);
+    }
+
+    #[test]
+    fn sibling_precondition_names_the_pin_and_the_path() {
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).expect("clock").as_nanos();
+        let root: PathBuf = std::env::temp_dir().join(format!("oczd-cvdr-verify-export-{stamp}"));
+        fs::create_dir_all(&root).expect("mkdir export root");
+        let msg = sibling_precondition(&root);
+        assert!(msg.contains(&required_cvdr_verify_pin()), "{msg}");
+        assert!(msg.contains(&root.display().to_string()), "{msg}");
+        assert!(msg.contains("unknown (not a git checkout)"), "{msg}");
+        assert!(msg.contains(CVDR_VERIFY_SIBLING_ENV), "{msg}");
+        let _ = fs::remove_dir_all(&root);
     }
 }

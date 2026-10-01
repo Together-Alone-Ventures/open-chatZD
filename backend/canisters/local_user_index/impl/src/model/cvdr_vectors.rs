@@ -326,24 +326,35 @@ fn corpus_matches_committed_files_byte_for_byte() {
 /// Cross-repo mirror guard: CVDR-Verify consumes a byte-identical mirror of this corpus
 /// (`tests/fixtures/v5-openchatzd/corpus/`, driven through its CLI by `tests/openchatzd_v5_corpus.rs`).
 /// Same resolution / skip semantics as the attestation label drift guard: absent sibling => skip;
-/// present sibling without the mirror, or a differing manifest => fail loudly.
+/// present sibling without the mirror, or a differing manifest => fail loudly, naming the CI pin and
+/// the sibling path (`sibling_precondition`).
 #[test]
 fn corpus_mirror_in_cvdr_verify_is_byte_identical() {
-    let Some(root) = super::cvdr_index_attestation::resolve_cvdr_verify_root() else {
-        eprintln!("CVDR-Verify sibling absent: corpus mirror guard skipped");
+    use super::cvdr_index_attestation::{required_cvdr_verify_pin, resolve_cvdr_verify_root, sibling_precondition};
+    let Some(root) = resolve_cvdr_verify_root() else {
+        eprintln!(
+            "CVDR-Verify sibling absent: corpus mirror guard skipped (CI pin {})",
+            required_cvdr_verify_pin()
+        );
         return;
     };
     let mirror = root.join("mktd02/mktd02-verify/tests/fixtures/v5-openchatzd/corpus");
     assert!(
         mirror.exists(),
-        "CVDR-Verify present but the openchatzd-v5 corpus mirror is missing: {}",
-        mirror.display()
+        "CVDR-Verify present but the openchatzd-v5 corpus mirror is missing: {}. {}",
+        mirror.display(),
+        sibling_precondition(&root)
     );
     let dir = corpus_dir();
     for name in std::iter::once("manifest.json".to_string()).chain(vectors().into_iter().map(|(n, _)| n.to_string())) {
         let ours = std::fs::read(dir.join(&name)).unwrap();
-        let theirs = std::fs::read(mirror.join(&name)).unwrap_or_else(|e| panic!("mirror missing {name}: {e}"));
-        assert_eq!(ours, theirs, "CVDR-Verify corpus mirror drifted: {name}");
+        let theirs = std::fs::read(mirror.join(&name))
+            .unwrap_or_else(|e| panic!("mirror missing {name}: {e}. {}", sibling_precondition(&root)));
+        assert!(
+            ours == theirs,
+            "CVDR-Verify corpus mirror drifted: {name}. {}",
+            sibling_precondition(&root)
+        );
     }
 }
 

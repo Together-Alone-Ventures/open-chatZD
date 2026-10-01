@@ -479,3 +479,13 @@ the suite: `validity: PASS | INCOMPLETE | FAIL`, exit `0 | 4 | 1` (the OpenChat-
   (`workflow_dispatch`, `.github/workflows/backend.yaml`) builds the current wasms and the baseline
   with the canonical recipe AT `c744de1` (the baseline locks the private MKTd02 / zombie-core crates,
   so the job reads `CVDR_VERIFY_READ_TOKEN`) and runs both tests with `--ignored --test-threads 1`.
+- **CVDR-Verify sibling precondition (adversarial pass).** The LUI label drift guard
+  (`labels_match_sibling_cvdr_verify_when_present`) and corpus mirror guard
+  (`corpus_mirror_in_cvdr_verify_is_byte_identical`) read a CVDR-Verify checkout:
+  `$CVDR_VERIFY_SIBLING` when set (a set-but-missing path fails), else `../CVDR-Verify` (Together-alone
+  layout) or `./CVDR-Verify` (CI). Absent → skipped, as before; present → the checks are unchanged.
+  **Required:** the sibling is the CI pin — the `ref:` of the CVDR-Verify checkout in
+  `.github/workflows/backend.yaml`, read by the tests, never hard-coded — or a descendant carrying the
+  same labels and corpus mirror. Every guard failure names the pin, the sibling path and its HEAD.
+  To test against the pin without moving a working sibling:
+  `git -C ../CVDR-Verify archive <pin> | tar -x -C <dir>` then `CVDR_VERIFY_SIBLING=<dir> cargo test …`.
