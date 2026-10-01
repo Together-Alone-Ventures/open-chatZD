@@ -901,7 +901,9 @@ impl ReceiptTree {
 /// self-finalization store path (Slice 2) / backstop (Slice 3); Slice 1 builds the storage layer.
 #[derive(CandidType, Serialize, Deserialize, Clone, Debug)]
 pub struct FrozenCvdrPackage {
-    /// `RECEIPT_BODY_V1` fixed-width concatenation (spec §2).
+    /// The exact body bytes the leaf commits to: `RECEIPT_BODY_V2` ([`receipt_body_v2`]) for every
+    /// package this wasm stores. A package stored by a pre-V2 wasm keeps its historical
+    /// `RECEIPT_BODY_V1` bytes (with `h_index ‖ commitment`) verbatim — never re-encoded.
     pub receipt_body: Vec<u8>,
     /// `SHA-256(RECEIPT_LEAF_TAG ‖ receipt_body)` — the tree leaf.
     pub receipt_hash: [u8; 32],
