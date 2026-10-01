@@ -335,6 +335,12 @@ index_code_identity_evidence { certificate_bytes, index_module_hash }
   `PortablePackageV3` are distinct Candid arms; a V3 package cannot omit the certificate, the
   extracted hash or the trust-root id. Evidence stored by a pre-step-4 wasm (no hash / no id) is
   never projected into V3 with serve-time values — such a receipt is served as `FrozenWire`.
+- **Pre-R-2 evidence rows are never presented as portable V3A** (2026-10-01, review F4):
+  `post_upgrade` leaves a row stored before the R-2 store-gate (certificate only) untouched and
+  `get_cvdr` serves its receipt as `FrozenWire` (`get_cvdr.rs:26-41`; verifier: `INCOMPLETE`,
+  `V3A_PERMANENTLY_UNAVAILABLE` once the 24 h window has lapsed), because that certificate was
+  captured with no upgrade interlock, no code epoch and no 24 h certified-time bound, so it does
+  not establish the deleting Index's code identity.
 - **Fail closed (verifier side, step 5):** unknown keys, `version ≠ 3`, unknown `trust_root_key_id`
   → reject. FrozenWire/V2 remain historical decoders only; V2 is never emitted (zero mainnet packages).
 
