@@ -142,10 +142,7 @@ mod tests {
         assert_eq!(legacy.index_module_hash, None);
         assert_eq!(legacy.trust_root_key_id, None);
         // Direct primary insert is not exposed; re-check the serve predicate in isolation.
-        let projected = legacy
-            .index_module_hash
-            .clone()
-            .zip(legacy.trust_root_key_id.clone());
+        let projected = legacy.index_module_hash.clone().zip(legacy.trust_root_key_id.clone());
         assert!(
             projected.is_none(),
             "legacy incomplete evidence must fail the V3 projection predicate"
