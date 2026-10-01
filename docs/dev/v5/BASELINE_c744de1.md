@@ -8,6 +8,15 @@ baseline for commit point A.)
 Recorded by C, 2026-09-21. Pre-change means: `open-chatZD` `origin/antek` @
 `c744de1a1124f9320354946d83cfc3da68133967`, nothing modified.
 
+**Hash provenance rule (2026-10-01; Antoine review F1).** Every wasm embeds `GIT_COMMIT_ID` (the
+`git_commit_id` build-arg), so a module hash is a function of the tree *and* of the id passed at
+build time: the same tree built under two ids gives two hashes. The **published** hash of a release
+is the canonical all-canister recipe run AT the commit `RELEASES.md` names (`git_commit_id` = that
+full SHA); reproduce it with `git checkout <commit> && bash scripts/docker-build-all-wasms.sh`
+(the script passes `git rev-parse HEAD`). Every other hash in this record is labelled **built at:**
+with its tree and `git_commit_id`; an id ending `-<point>-worktree` marks a build of an uncommitted
+working tree, which no commit reproduces under the canonical recipe.
+
 ## 1. Source and environment
 
 | Item | Value |
@@ -50,6 +59,7 @@ The `gh_token` BuildKit secret is read from `~/.config/tav/gh_token` (mode 600, 
 
 **3.1 Same-window dual build** — `scripts/m2-repro-local-user-index.sh`, unmodified
 (2026-09-21T09:28Z–09:40Z; rust 1.95.0, ic-wasm 0.9.11, linux/amd64, `--locked`, `build_nonce` 1 then 2).
+**Built at:** `c744de1` (`git_commit_id` = `c744de1a1124f9320354946d83cfc3da68133967`), single-canister recipe.
 
 | Build | `local_user_index.wasm.gz` SHA-256 (= on-chain module hash for a gzip install) | bytes |
 | --- | --- | --- |
@@ -58,12 +68,14 @@ The `gh_token` BuildKit secret is read from `~/.config/tav/gh_token` (mode 600, 
 
 Verdict: **PASS — byte-identical.** SHA-256 of the gunzipped wasm:
 `0839d0758d997accaccd75abe940f95f4244db741da4a74b8d1a679067a8d878`. (The M2 evidence hash `4d4a4128…`
-was for `5b2077c`; `c744de1` contains later code, so a different value is expected.)
+is **built at:** `5b2077c` (`docs/evidence/OpenChatZD_M2_Evidence_2026-08-06.md`); `c744de1` contains
+later code, so a different value is expected.)
 Artefacts: `~/tav/_oczd_step0/artifacts/m2-repro/`; log `logs/m2_dual.log`.
 
 **3.2 All-canister Docker build** (2026-09-21T09:44Z–09:54Z), invoked directly:
 `docker build --secret id=gh_token,src=~/.config/tav/gh_token --build-arg git_commit_id=c744de1… --build-arg canister_name= --platform linux/amd64 .`
-Exit 0, 24 wasms. SHA-256 of each `.wasm.gz`:
+Exit 0, 24 wasms. **Built at:** `c744de1` (`git_commit_id` = `c744de1a1124f9320354946d83cfc3da68133967`),
+all-canister recipe — the hashes `wasms::baseline_c744de1` pins. SHA-256 of each `.wasm.gz`:
 
 ```
 24c87ebf74e99449989b9c9eca0628e6aa12dd69eebf9a11293a869b8fd7d8c3  airdrop_bot
@@ -365,7 +377,8 @@ the suite: `validity: PASS | INCOMPLETE | FAIL`, exit `0 | 4 | 1` (the OpenChat-
 - **Evidence:** the real CLI over a genuine PocketIC `PortablePackageV3` (exact `/cvdr` bytes,
   `tests/fixtures/v5-openchatzd/pocketic-v3/`, provenance recorded): `validity: PASS`,
   `V3A_PASS`, certified module hash `1494dc66…` = the point-D Docker `local_user_index.wasm.gz`
-  hash; FAIL without the fixture flag / root / with a conflicting selector; `INDEX_HASH_MISMATCH` on
+  hash (**built at:** the point-D working tree before commit `5e85b4d30`, HEAD `d74d238ef`,
+  `git_commit_id` = `d74d238ef65f281f8886b76f251c21d0969deead-d-worktree`; no commit reproduces it); FAIL without the fixture flag / root / with a conflicting selector; `INDEX_HASH_MISMATCH` on
   a tampered displayed hash; unknown key / version 4 / unknown selector malformed. `ci.sh` now
   requires clean fmt and clippy for the whole crate (the accepted OpenChatZD fmt/clippy baseline
   from 25c2945 is retired) and passes end to end (148 tests, audit clean).
@@ -424,15 +437,25 @@ the suite: `validity: PASS | INCOMPLETE | FAIL`, exit `0 | 4 | 1` (the OpenChat-
   `cargo fmt --all -- --check` reports nothing.
 - **C2 cross-check.** `86ddca205` rebuilt from a clean worktree with the canonical recipe
   (`git_commit_id` = the full commit SHA, `canister_name=` because that tree predates the fix):
-  `local_user_index.wasm.gz` = `d1e0c496…5945e5`, **equal to CD's independent build**. The point-C2
-  working-tree build (`845716ce…`) differed only by its embedded `<sha>-c2-worktree` commit id.
+  `local_user_index.wasm.gz` = `d1e0c496…5945e5` (**built at:** `86ddca205`, `git_commit_id` =
+  `86ddca205d76932df6f175007e653dd5c0872943`), **equal to CD's independent build**. The point-C2
+  working-tree build (`845716ce…`; **built at:** the C2 working tree before commit `86ddca205`, HEAD
+  `5e85b4d30`, `git_commit_id` = `5e85b4d30ca39464f421b284f4f27f6c350e05c2-c2-worktree`) differed only
+  by its embedded commit id.
 - **Same-window dual build.** Step 10 tree, two all-canister builds with distinct `build_nonce`
-  (12:27Z and 12:37Z): all 23 hashes identical (`RELEASES.md`); LUI `1ea8f3cd…dcfd2`.
+  (12:27Z and 12:37Z): all 23 hashes identical (`RELEASES.md`); LUI `1ea8f3cd…dcfd2` (**built at:**
+  the Step 10 working tree before commit `8118d26a`, HEAD `f314663c5`, `git_commit_id` =
+  `f314663c5945b699cee50250514a5a1e4dce935d-step10-worktree`; determinism evidence, **not** the
+  published hash — the canonical recipe AT `8118d26a` gives LUI `6cfdb4ac…`, `RELEASES.md`). Confirmed
+  2026-10-01: the `8118d26a` tree (`git archive`) built under that same id reproduces all 23 Step 10
+  hashes, LUI `1ea8f3cd…` included — that working tree was the `8118d26a` tree.
 - **Fresh end-to-end package.** `stored_index_evidence_unblocks_upgrade_and_draft_finalises` on the
   Step 10 wasms exported the exact served `PortablePackageV3`; the pinned verifier (export of
   CVDR-Verify `8b0d835`, `--locked --release`) reports `validity: PASS`, `V3A_PASS`, certified
-  module hash `1ea8f3cd…` = the dual-build LUI hash; without the fixture flag `FAIL` naming the
-  selector. Binary output captured verbatim in `docs/dev/v5/STEP10_E2E_VERIFY.txt`.
+  module hash `1ea8f3cd…` = the dual-build LUI hash (built at the Step 10 working tree, above); without
+  the fixture flag `FAIL` naming the selector. Binary output captured verbatim in
+  `docs/dev/v5/STEP10_E2E_VERIFY.txt`. The same check on wasms built AT `8118d26a` (certified module
+  hash `6cfdb4ac…`) is in `docs/evidence/2026-09-23-cd-final-gate.md`.
 - **Docs.** `CVDR_BUILD_SPEC.md` (suite v5, v2) supersedes `CVDR_BUILD_SPEC_V1.md` (banner,
   historical); `PROJECT_STATE` retired to a stub; the June 2026 packet docs carry a HISTORICAL
   banner; `OpenChatZD_RTS_draft.md` rewritten for suite v5 (RT-OCZD-1…6) with the ratified claim

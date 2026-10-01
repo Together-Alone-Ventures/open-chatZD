@@ -3,6 +3,10 @@
 # package : backend/integration_tests/fixtures/pocketic_e2e_portable_v3.json (exact GET /cvdr bytes)
 # package sha256: a43157cc3e3382f2381f75512a2229edf8443ee1349f12f71409662811a2f58b
 # local_user_index.wasm.gz sha256 (Step 10 tip build): 1ea8f3cdad74c40661ced89c8823dae6817b50689cfd32741f285d96136dcfd2
+#   built at: the Step 10 working tree before commit 8118d26a (HEAD f314663c5), git_commit_id =
+#   f314663c5945b699cee50250514a5a1e4dce935d-step10-worktree. NOT the published hash: the canonical recipe AT
+#   8118d26aae9c4194b4bc3ded0e58be578648474a gives 6cfdb4ac075c601e8dd09104af7dbadde7f92108477228b9846e9999c03690c7
+#   (RELEASES.md); the fresh package on those wasms: docs/evidence/2026-09-23-cd-final-gate.md. (annotation 2026-10-01)
 # command : mktd02-verify --package <pkg> --allow-fixture-root-key --fixture-root-key-hex <PocketIC root>
 # captured: 2026-09-22T12:48:15Z
 
