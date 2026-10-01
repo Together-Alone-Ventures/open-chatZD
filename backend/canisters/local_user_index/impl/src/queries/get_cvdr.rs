@@ -156,6 +156,41 @@ mod tests {
         );
     }
 
+    /// The serve path itself, not only its predicate: an evidence row STORED without the extracted
+    /// hash and/or the trust-root id (pre-R-2 / pre-R-6 shapes, inserted past the gate) leaves the
+    /// receipt served as the same FrozenWire bytes as no evidence at all — never PortablePackageV3.
+    #[test]
+    fn stored_incomplete_index_evidence_is_served_as_frozen_wire() {
+        let mut cvdr = CvdrStore::default();
+        let cases = [
+            (None, None),
+            (Some(vec![0x1d; 32]), None),
+            (None, Some("mainnet".to_string())),
+        ];
+        for (seq, (index_module_hash, trust_root_key_id)) in (20u64..).zip(cases) {
+            let record_id = record_id_v2(&[0x5Au8; 32], Principal::from_slice(&[seq as u8]).into());
+            let receipt_id = receipt_id_for(&record_id, seq, &[1u8; 32]);
+            assert!(cvdr.insert_frozen_package(receipt_id, record_id, seq, sample_pkg()).is_ok());
+            cvdr.insert_index_evidence_ungated_for_test(
+                receipt_id,
+                IndexCodeIdentityEvidence {
+                    certificate_bytes: vec![0xaa, 0xbb],
+                    index_module_hash,
+                    trust_root_key_id,
+                },
+            );
+            assert!(cvdr.has_index_evidence(&receipt_id), "case {seq}: the row is stored");
+            match get_cvdr_from_store(&receipt_id, &cvdr) {
+                Response::Available(AvailablePackage::FrozenWire(w)) => assert_eq!(
+                    w.to_canonical_json(),
+                    FrozenWire::from(&sample_pkg()).to_canonical_json(),
+                    "case {seq}: FrozenWire bytes unchanged by the incomplete row"
+                ),
+                other => panic!("case {seq}: incomplete evidence must serve FrozenWire, got {other:?}"),
+            }
+        }
+    }
+
     #[test]
     fn unknown_receipt_is_not_found() {
         let cvdr = CvdrStore::default();

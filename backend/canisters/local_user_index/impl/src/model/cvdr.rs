@@ -1285,6 +1285,19 @@ impl CvdrStore {
         self.index_evidence.insert(receipt_id, evidence)
     }
 
+    /// Test seam over [`IndexCodeIdentityStore::insert_ungated_for_test`]: an evidence row as an
+    /// earlier wasm left it, without the R-2 / R-6 insert gate.
+    ///
+    /// [`IndexCodeIdentityStore::insert_ungated_for_test`]: crate::model::cvdr_index_evidence::IndexCodeIdentityStore::insert_ungated_for_test
+    #[cfg(test)]
+    pub(crate) fn insert_index_evidence_ungated_for_test(
+        &mut self,
+        receipt_id: Hash,
+        evidence: crate::model::cvdr_index_evidence::IndexCodeIdentityEvidence,
+    ) {
+        self.index_evidence.insert_ungated_for_test(receipt_id, evidence);
+    }
+
     pub fn get_index_evidence(
         &self,
         receipt_id: &Hash,

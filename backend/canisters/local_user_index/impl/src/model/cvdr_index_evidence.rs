@@ -126,6 +126,14 @@ impl IndexCodeIdentityStore {
         Ok(())
     }
 
+    /// Test seam: store `evidence` past the insert gate, as a row written by an earlier wasm is found
+    /// after an upgrade (pre-R-2: certificate only; pre-R-6: no trust-root id). Never in a wasm.
+    #[cfg(test)]
+    pub(crate) fn insert_ungated_for_test(&mut self, receipt_id: Hash, evidence: IndexCodeIdentityEvidence) {
+        let offset = self.log.append(&evidence).expect("evidence log append");
+        self.primary.insert(ReceiptKey(receipt_id), offset);
+    }
+
     pub fn get(&self, receipt_id: &Hash) -> Option<IndexCodeIdentityEvidence> {
         let offset = self.primary.get(&ReceiptKey(*receipt_id))?;
         self.log.get(offset)
