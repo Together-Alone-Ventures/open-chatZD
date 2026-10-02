@@ -64,12 +64,13 @@ jobs:
         with:
           repository: Together-Alone-Ventures/CVDR-Verify
           # Immutable SHA of CVDR-Verify branch `openchatzd-v5` (560e483 mktd02-v5 merged with the
-          # OpenChat line ac64c1b, the suite-v5 OpenChat verifier — Brief B1 step 5 — and the Step 9
-          # corpus mirror, which the LUI mirror guard requires in the sibling checkout). This pin
-          # resolves only once `openchatzd-v5` is pushed to Together-Alone-Ventures/CVDR-Verify; until
-          # then the checkout fails (intended: no fallback to a stale tip). Release tags are minted
-          # once, at the final release commit (Stef standing rule) — never used for CI pins.
-          ref: 8b0d835057a3c4987a99a1f18c6e4e364733d2ef
+          # OpenChat line ac64c1b, the suite-v5 OpenChat verifier — Brief B1 step 5 — the Step 9
+          # corpus mirror, which the LUI mirror guard requires in the sibling checkout, and the
+          # 2026-10-01 G decisions: timing label BEFORE_COMMITMENT_CERTIFICATE, historical
+          # PortablePackageV2 -> NOT_ATTESTED). The LUI label guard requires those definitions.
+          # Release tags are minted once, at freeze (Stef standing rule: `openchatzd-v0.8.0` on this
+          # commit) — never used for CI pins.
+          ref: b2547880c1dfda6304a097e97fb74fb640002f9f
           path: CVDR-Verify
           token: ${{ secrets.CVDR_VERIFY_READ_TOKEN }}
       - name: Require sibling OpenChatZD attestation module
