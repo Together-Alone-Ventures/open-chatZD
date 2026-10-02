@@ -81,3 +81,118 @@ CD: PASS, no release-blocking finding. All runs in detached/disposable worktrees
 | PocketIC | server 11.0.0 |
 | Command | `cargo test --locked -p integration_tests -- --ignored --test-threads 1 --nocapture r3_upgrade v1_in_flight_draft_blocks_upgrade` |
 | Result | exit 0 — 2 passed, 0 failed (`r3_upgrade_from_c744de1_keeps_state_and_function`, `v1_in_flight_draft_blocks_upgrade_then_terminal_draft_survives_it`), 219.85 s |
+
+## Superseded 2026-10-02 — build AT `0740610b8fda284624566d492ce62ec9821e454f` (2026-10-01)
+
+Published in `RELEASES.md` from `dbbcb15a0` until the G-decision commits; same-window dual build,
+23/23 identical.
+
+```
+f8207677404e448dec8ad80a160431c7c55cde74196fc0285ce055e474684d0a  airdrop_bot.wasm.gz
+c118e5fd104461cf3bfb06b6f12174350c51351b1b46e3ca50097301b2624b09  community.wasm.gz
+f7b301b8d4263436dd168ebd52666526950e6a8580ff24a1d5ab399267e727fc  cycles_dispenser.wasm.gz
+c4c73bb5ddc31cfe509fb3686e6bbfa7488880945b6a8bd35535b0031b6b69a0  escrow.wasm.gz
+ec1b661388d3ac720141120fe0f3cd127a92a8496d54ed0214648af07e541572  event_relay.wasm.gz
+d0c3190684c4ed2068cf9be07717aa5f2b2c42eb774ec32758f7f51d15102fd0  group.wasm.gz
+f8d833d2310b08817577bbac8bf6b9cd7cc69e87267e5778a2f6b2ac5976e40a  group_index.wasm.gz
+695be1cccc26664b31232b6bb7e19b215b5bd1f1c5d61dff1ae31b7e0ec364b3  identity.wasm.gz
+2d2210d8028ac06cb85bba71aa094081a741863a8708ce691c77cbfd02bfc416  local_user_index.wasm.gz
+8b820c99b25ff57619332f60880f5acc8bc9b2cbb0f23f7d4aeaba3cc3cfc0eb  market_maker.wasm.gz
+b2c8fe1b169deef17a7682c9874b706dfeab6a59bb2b60dae71f70bc143672eb  neuron_controller.wasm.gz
+d19d17f5b17c00a61ca36cd46cb4a15718fc80bd5ae37ad932e5f38d9292a61b  notifications_index.wasm.gz
+363967cc6b1e0b6ee22100a650382860a96e34e519357d4b5cd358a68c53e661  online_users.wasm.gz
+1bce70d92f21593685adf4540a5288f2855f49c67d879ad7cac78ea4bb580dc4  openchat_installer.wasm.gz
+418a4117e905a9e4bae8aaed8d0ed689c9cc03001ff12fde174b74ca85e83f8e  proposal_validation.wasm.gz
+5ab1ba9a8286a07cd91e1ccd105443e0d451136237ac69115da317db1b7bb163  proposals_bot.wasm.gz
+18fe15d281c0a220b0ce957020fe4ee82928ed84a2bc3e16768b541f73610d27  registry.wasm.gz
+c2b82a8be4045de96a64ae54d37fe5c379b1014cd970233896fbb7de928c8d95  sign_in_with_email.wasm.gz
+678825ed75fd00594be3a57d14e4199554141173e9df8c653fbd07a71498c3b1  storage_bucket.wasm.gz
+8a7e2845e603fd8fa669ae4415781aaa0ec1a6fa9cb7514d42516467910a18c2  storage_index.wasm.gz
+63ae0bcff754b00055154b5760f99ed4fb0988ea106ac02a2bf76ba2b3bb8c97  translations.wasm.gz
+e15bf18a218a16e5fef408770222454b433c7ce6bb9fb6d27367a6a98184fcff  user.wasm.gz
+4b8280a4d21dba0a4125e36c1e7010110f5ccd3d0cef385f764267017e5622a7  user_index.wasm.gz
+```
+
+## Release build 2026-10-02 — AT `84b2ba866a60ca929905eed364b207544da92385`
+
+| Item | Value |
+|---|---|
+| open-chatZD release | `84b2ba866a60ca929905eed364b207544da92385` — tag `v0.8.0`, applied by Stef at freeze |
+| CVDR-Verify | `b2547880c1dfda6304a097e97fb74fb640002f9f` (`openchatzd-v5`; `700a4bd1` label rename, `b2547880` historical V2 → `NOT_ATTESTED`) — tag `openchatzd-v0.8.0`, applied by Stef at freeze; = the `backend.yaml` pin |
+| Recipe | `scripts/docker-build-all-wasms.sh` in a clean worktree AT the release commit (no token), then the same recipe with a busted `build_nonce` — 23/23 identical |
+| `local_user_index.wasm.gz` | `00b09636e1ac27cd4fc281cfb0e862ad8fc507733bca0e72ea3ed2e9d81b40e4` |
+
+```
+139f553429b474dd762ea13eed8fdc79c8d819c82aaa7ee670d22e4fa7393e49  airdrop_bot.wasm.gz
+bd604332ac8374806a8e6be3e265515ab4df029f2d97b9dc8e5ab0a6ac9ba8ed  community.wasm.gz
+51454e4f87fe6c3733b31566fb2bb4236c6f31b7248f4e22229514569de01715  cycles_dispenser.wasm.gz
+dc2aa416c18640328b75ff5e52807981fe27a38ad5251a861dd7aea2dafe55ac  escrow.wasm.gz
+92800ceb17c9fa7c7d4898ed1ba99217372db56f3ab270373d16ef14b40c8f2b  event_relay.wasm.gz
+a9d53f391f980e123e8034640e61b5cc0d24bd7f7bf9e04adf52ded2c8f2bdf1  group.wasm.gz
+de3ec201ad3b57ae7f6af0c3600d10dff32d080fd984ce08943a70d8c601fac3  group_index.wasm.gz
+acfe5ae355c6fad351141a56a0dabe406a5a193ee0fffdfe0b509eac2d92710b  identity.wasm.gz
+00b09636e1ac27cd4fc281cfb0e862ad8fc507733bca0e72ea3ed2e9d81b40e4  local_user_index.wasm.gz
+7f6f022f002bd44fc84143ff1829ac68e0ef763108e55dcf16eaf40cbe75d974  market_maker.wasm.gz
+6666e358eab7b1ce8f74e9f86a1ca327b9cb9f8d622971f360af21e48f1e0c2f  neuron_controller.wasm.gz
+cf8c4c9f261671b98c655f4733cabffeade378fd8f3cd886738f3b7f303f9cf0  notifications_index.wasm.gz
+f45b87678275fd0499ea50bbbbe6f5165e027a111393999e111cbd1dd64d2b61  online_users.wasm.gz
+e9764f32be44bbe604fb4e70276e39d2290e49aeff2f4e02bcf25a7756885205  openchat_installer.wasm.gz
+418a4117e905a9e4bae8aaed8d0ed689c9cc03001ff12fde174b74ca85e83f8e  proposal_validation.wasm.gz
+08a8a48bbfe3181af330f4313962ce1bbbf1e64a89f2611ff72163ddf281502d  proposals_bot.wasm.gz
+32a0b92ce522dd0331e0aba5e7909ea972940bf733b55eeda462fb08afe2305b  registry.wasm.gz
+c2b82a8be4045de96a64ae54d37fe5c379b1014cd970233896fbb7de928c8d95  sign_in_with_email.wasm.gz
+7ccd61a64079fd63d9cf830514c5cee802252f1acabc16d5d8fd244d63a3caee  storage_bucket.wasm.gz
+c93fd8e6a5fc9db2414410142c6175ae595d093e442b3da9cb41a13152ea1ca7  storage_index.wasm.gz
+4f05ea81ed5c963aa2203fcf566f406feb577a2867e5a9e6f59a1b95b12fb6a3  translations.wasm.gz
+95485245466efc100ad4dfb64762ae166a661bf8ed5e61ca725599d42a0632de  user.wasm.gz
+92f9e93c20021147e8eacaa1441b983ee533cd1eaabd518051ec3a954cfd8150  user_index.wasm.gz
+```
+
+| Surface | Command | Result |
+|---|---|---|
+| fmt | `cargo fmt --all -- --check` | clean |
+| Clippy | `cargo clippy --locked --workspace --exclude open-chat --exclude tauri-plugin-oc --tests -- -D warnings` | exit 0 |
+| Workspace units | `cargo test --locked --workspace --exclude open-chat --exclude tauri-plugin-oc --exclude integration_tests`, `CVDR_VERIFY_SIBLING` = CVDR-Verify at X | exit 0 — 339 passed, 0 failed, 0 ignored (per package below) |
+| LUI units | `cargo test --locked -p local_user_index_canister_impl`, sibling at X | exit 0 — 101 passed, 0 failed (label + corpus-mirror guards ran against X) |
+| PocketIC `cvdr_` suites | `./scripts/run-integration-tests.sh local 1 'cvdr_'` | 20 passed, 0 failed, 5 ignored |
+| Ignored upgrade tests | `cargo test --locked -p integration_tests -- --ignored --test-threads 1 r3_upgrade v1_in_flight_draft_blocks_upgrade` (baseline wasms = BASELINE §3.2 hashes) | exit 0 — 2 passed, 0 failed (128.97 s) |
+| `cvdr.spec.ts` | `npx vitest --run src/domain/cvdr.spec.ts` (`frontend/openchat-shared`) | 22 passed, 0 failed |
+| CVDR-Verify CI at X | `bash ./ci.sh` (clone at X; open-chatZD visible as its sibling, so its reverse label guard ran) | exit 0 — fmt, clippy clean; audit zero vulnerabilities; 157 passed, 0 failed (148 + the 9-test corpus acceptance re-run) |
+| CVDR-Verify corpus consumer | `cargo test --locked --test openchatzd_v5_corpus` at X | 7 passed, 0 failed |
+| Fresh `PortablePackageV3` | from the `cvdr_` run (`stored_index_evidence_unblocks_upgrade_and_draft_finalises`), sha256 `d7ab1a720fc99208872fcb41491eedb6023d7cb04690f73d3ace616ffe100300`, verified with X `--allow-fixture-root-key` | exit 0 — `validity: PASS`, `V3A_PASS`, timing `BEFORE_COMMITMENT_CERTIFICATE`, certified module_hash `00b09636…` = built `local_user_index`; without the flag `validity: FAIL` (exit 1) |
+
+Workspace units per package (passed/failed/ignored; packages with no tests omitted). The non-LUI
+packages total 238; between `8118d26a` and this build the only Rust changes outside
+`local_user_index` are doc comments in `integration_tests` (not in this run), and LUI went 95 → 101 —
+so the same command at `8118d26a` counts 95 + 238 = 333.
+
+| Package | p/f/i |
+|---|---|
+| `local_user_index_canister_impl` | 101/0/0 |
+| `chat_events` | 50/0/0 |
+| `utils` | 29/0/0 |
+| `user_index_canister_impl` | 26/0/0 |
+| `market_maker_canister_impl` | 21/0/0 |
+| `user_canister_impl` | 15/0/0 |
+| `translations_canister_impl` | 14/0/0 |
+| `stable_memory_map` | 13/0/0 |
+| `constants` | 9/0/0 |
+| `storage_bucket_canister_impl` | 9/0/0 |
+| `gated_groups` | 8/0/0 |
+| `http_request` | 7/0/0 |
+| `search` | 7/0/0 |
+| `community_canister_impl` | 4/0/0 |
+| `group_index_canister_impl` | 4/0/0 |
+| `ledger_utils` | 4/0/0 |
+| `group_chat_core` | 3/0/0 |
+| `storage_index_canister_impl` | 3/0/0 |
+| `ckbtc_minter_canister` | 2/0/0 |
+| `local_user_index_canister` | 2/0/0 |
+| `airdrop_bot_canister_impl` | 1/0/0 |
+| `email_magic_links` | 1/0/0 |
+| `instruction_counts_log` | 1/0/0 |
+| `jwt` | 1/0/0 |
+| `notification_pusher_core` | 1/0/0 |
+| `proof_of_unique_personhood` | 1/0/0 |
+| `sign_in_with_email_canister_impl` | 1/0/0 |
+| `types` | 1/0/0 |
