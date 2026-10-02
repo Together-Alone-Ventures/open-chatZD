@@ -89,58 +89,58 @@ jobs:
   # The two `#[ignore]`d PocketIC upgrade tests (`r3_upgrade_from_c744de1_keeps_state_and_function`,
   # `v1_in_flight_draft_blocks_upgrade_then_terminal_draft_survives_it`) upgrade a deployment
   # installed from the c744de1 baseline wasms to the current wasms. Manual (workflow_dispatch) or on
-  # a PR labelled `run-upgrade-baseline`: two all-canister Docker builds. The baseline is built here with the canonical recipe AT c744de1; that tree still
-  # locks the private MKTd02 / zombie-core crates, hence the read token. `wasms::baseline_c744de1`
-  # checks every baseline wasm against the SHA-256 recorded in docs/dev/v5/BASELINE_c744de1.md §3.2.
+  # a PR labelled `run-upgrade-baseline`, on a stock 2-core runner.
+  # Baseline = release asset, not a build: the loader (`wasms::baseline_c744de1`) needs only
+  # openchat_installer, user_index, local_user_index and user, but pins their ALL-CANISTER-recipe
+  # hashes (BASELINE_c744de1.md §3.2) — a subset build unifies features differently (§3: the
+  # single-canister LUI differs) and the full c744de1 build does not fit this runner. The four files
+  # are attached once to the release `baseline-c744de1-wasms` (target c744de1):
+  #   gh release create baseline-c744de1-wasms --target c744de1a1124f9320354946d83cfc3da68133967 \
+  #     --prerelease --title "c744de1 baseline wasms" --notes "BASELINE_c744de1.md §3.2" \
+  #     wasms/baseline_c744de1/{openchat_installer,user_index,local_user_index,user}.wasm.gz
+  # Each download must equal a pinned hash in backend/integration_tests/src/wasms.rs, and the test
+  # checks it again on load. Current wasms are built on the runner (no token, no Docker).
   upgrade-baseline:
     name: baseline upgrade tests (c744de1 -> current, ignored)
     if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-upgrade-baseline')
-    runs-on:
-      - runs-on
-      - cpu=16
-      - image=ubuntu24-full-x64
-      - family=m7i
-      - run-id=${{ github.run_id }}
-    timeout-minutes: 240
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    permissions:
+      contents: read
     env:
-      BASELINE_COMMIT: c744de1a1124f9320354946d83cfc3da68133967
+      BASELINE_RELEASE_TAG: baseline-c744de1-wasms
     steps:
-      - name: Install Rustup
+      - name: Free disk space
         run: |
-          curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused -fsSL "https://sh.rustup.rs" | sh -s -- --default-toolchain none -y
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Require CVDR_VERIFY_READ_TOKEN
+      - name: Download c744de1 baseline wasms (release asset, hash-pinned)
         env:
-          CVDR_VERIFY_READ_TOKEN: ${{ secrets.CVDR_VERIFY_READ_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ -z "${CVDR_VERIFY_READ_TOKEN}" ]; then
-            echo "::error::CVDR_VERIFY_READ_TOKEN is required (the c744de1 baseline locks private git deps: ICP-Delete-Leaf, zombie-core)."
+          dir=wasms/baseline_c744de1
+          mkdir -p "$dir"
+          gh release download "$BASELINE_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.wasm.gz' --dir "$dir" || {
+            echo "::error::release '$BASELINE_RELEASE_TAG' with the four c744de1 baseline wasms is missing (see the job comment)"
             exit 1
-          fi
+          }
+          for c in openchat_installer user_index local_user_index user; do
+            f="$dir/$c.wasm.gz"
+            [ -f "$f" ] || { echo "::error::$f missing from release '$BASELINE_RELEASE_TAG'"; exit 1; }
+            h=$(sha256sum "$f" | cut -d' ' -f1)
+            grep -q "\"$h\"" backend/integration_tests/src/wasms.rs || {
+              echo "::error::$f sha256 $h is not a pinned c744de1 baseline hash (wasms.rs / BASELINE §3.2)"
+              exit 1
+            }
+            echo "$h  $f"
+          done
       - uses: ./.github/workflows/setup-rust
       - uses: arduino/setup-protoc@v1
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build current wasms (canonical recipe at this commit)
-        run: ./scripts/docker-build-all-wasms.sh
-      - name: Build c744de1 baseline wasms (canonical recipe at c744de1)
-        env:
-          GH_TOKEN: ${{ secrets.CVDR_VERIFY_READ_TOKEN }}
-        run: |
-          git worktree add --detach "$RUNNER_TEMP/baseline" "$BASELINE_COMMIT"
-          cd "$RUNNER_TEMP/baseline"
-          # c744de1's Dockerfile needs the gh_token secret and an explicit empty canister_name.
-          DOCKER_BUILDKIT=1 docker build -t oczd-baseline-c744de1 --secret id=gh_token,env=GH_TOKEN \
-            --build-arg git_commit_id="$BASELINE_COMMIT" --build-arg canister_name= --platform linux/amd64 .
-          mkdir -p "$GITHUB_WORKSPACE/wasms/baseline_c744de1"
-          cid=$(docker create oczd-baseline-c744de1)
-          for c in openchat_installer user_index local_user_index user; do
-            docker cp "$cid:/build/wasms/$c.wasm.gz" "$GITHUB_WORKSPACE/wasms/baseline_c744de1/"
-          done
-          docker rm --volumes "$cid"
-          (cd "$GITHUB_WORKSPACE/wasms/baseline_c744de1" && sha256sum *.wasm.gz)
+      - name: Build current wasms (all-canister script, on the runner)
+        run: ./scripts/generate-all-canister-wasms.sh
       - name: PocketIC server and NNS / event_store wasms
         run: |
           POCKET_IC_SERVER_VERSION=$(sed -n 's/^POCKET_IC_SERVER_VERSION="\(.*\)"$/\1/p' scripts/run-integration-tests.sh)
