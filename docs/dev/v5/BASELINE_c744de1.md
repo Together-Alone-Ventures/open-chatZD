@@ -335,7 +335,7 @@ index_code_identity_evidence { certificate_bytes, index_module_hash }
   `PortablePackageV3` are distinct Candid arms; a V3 package cannot omit the certificate, the
   extracted hash or the trust-root id. Evidence stored by a pre-step-4 wasm (no hash / no id) is
   never projected into V3 with serve-time values — such a receipt is served as `FrozenWire`. A
-  placeholder row (empty hash or empty id, `Some(empty)` / `Some("")`) is served the same way
+  placeholder row (empty certificate bytes, empty hash or empty id) is served the same way
   (2026-10-02, G decision B).
 - **Pre-R-2 evidence rows are never presented as portable V3A** (2026-10-01, review F4):
   `post_upgrade` leaves a row stored before the R-2 store-gate (certificate only) untouched and
@@ -520,7 +520,7 @@ the suite: `validity: PASS | INCOMPLETE | FAIL`, exit `0 | 4 | 1` (the OpenChat-
   retired / forbidden tokens are still refused anywhere in the attestation module. Precondition
   message unchanged.
 - **Serve path fails closed on placeholder evidence (G decision B).** `get_cvdr` treats an evidence
-  row whose `index_module_hash` or `trust_root_key_id` is present but empty exactly like an absent
-  one: `FrozenWire`, never a `PortablePackageV3` with empty fields. The insert gate already refused
-  such rows; the serve rule no longer depends on it. Pinned by
-  `stored_incomplete_index_evidence_is_served_as_frozen_wire` (five stored shapes).
+  row whose `certificate_bytes` is empty, or whose `index_module_hash` or `trust_root_key_id` is
+  present but empty, exactly like an absent one: `FrozenWire`, never a `PortablePackageV3` with an
+  empty field. The insert gate already refused such rows; the serve rule no longer depends on it.
+  Pinned by `stored_incomplete_index_evidence_is_served_as_frozen_wire` (six stored shapes).
