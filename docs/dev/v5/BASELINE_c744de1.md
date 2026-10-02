@@ -511,3 +511,9 @@ the suite: `validity: PASS | INCOMPLETE | FAIL`, exit `0 | 4 | 1` (the OpenChat-
   and the CD final-gate re-verification row keep the old label as captured verifier output.
   `HISTORICAL_V2_NOT_ATTESTED = "NOT_ATTESTED"` — what the verifier reports for a historical
   PortablePackageV2 — is pinned and required in the sibling, outside the three V3 outcomes.
+- **Label guard matches definitions (CVDR-Verify review finding).** The sibling must *define* each
+  wire label — a `const …: &str = "LABEL"` in `mktd02/mktd02-verify/src/openchatzd/*.rs` (the schema
+  id lives in `package.rs`) — and a defined string must carry the ratified claim fragment (`\`-newline
+  continuations joined). A label only mentioned in a comment, test literal or `let` no longer passes;
+  retired / forbidden tokens are still refused anywhere in the attestation module. Precondition
+  message unchanged.

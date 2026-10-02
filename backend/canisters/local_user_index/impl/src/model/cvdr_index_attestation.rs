@@ -59,10 +59,14 @@ pub const OCZD_INTERNAL_ONLY_FRAGMENT: &str = "protected deletion→evidence int
 /// Relative path from the Together-alone `CVDR-Verify` root to the OpenChatZD attestation module.
 #[cfg(test)]
 const SIBLING_OPENCHATZD_ATTESTATION_REL: &str = "mktd02/mktd02-verify/src/openchatzd/index_attestation.rs";
-
-/// Labels that must appear verbatim in the sibling offline verifier when that module exists.
+/// The sibling's OpenChatZD module directory, whose `const …: &str` definitions the guard reads (the
+/// schema id lives in `package.rs`, the labels and claim in `index_attestation.rs`).
 #[cfg(test)]
-fn required_sibling_attestation_labels() -> &'static [&'static str] {
+const SIBLING_OPENCHATZD_MODULE_DIR_REL: &str = "mktd02/mktd02-verify/src/openchatzd";
+
+/// Wire labels the sibling verifier must DEFINE with exactly these values.
+#[cfg(test)]
+fn required_sibling_wire_labels() -> &'static [&'static str] {
     &[
         V3A_PASS,
         V3A_PENDING_IN_PROTECTED_WINDOW,
@@ -76,8 +80,74 @@ fn required_sibling_attestation_labels() -> &'static [&'static str] {
         TIMING_OUTSIDE_COMPLETION_WINDOW,
         TIMING_NOT_APPLICABLE,
         PORTABLE_PACKAGE_SCHEMA,
-        OCZD_CLAIM_FRAGMENT,
     ]
+}
+
+/// String values of the `const NAME: &str = "…";` definitions in Rust source. `//` comment lines are
+/// dropped and `\`-newline continuations are joined as rustc joins them, so a label that only
+/// appears in a comment or a test literal is never a definition.
+#[cfg(test)]
+fn str_const_definitions(src: &str) -> Vec<String> {
+    let code = src
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    const DECL: &str = ": &str =";
+    let mut values = Vec::new();
+    let mut from = 0;
+    while let Some(pos) = code[from..].find(DECL) {
+        let at = from + pos;
+        from = at + DECL.len();
+        let line_start = code[..at].rfind('\n').map_or(0, |i| i + 1);
+        let decl = code[line_start..at].trim_start();
+        if ["const ", "pub const ", "pub(crate) const "]
+            .iter()
+            .any(|p| decl.starts_with(p))
+            && let Some(value) = parse_str_literal(code[from..].trim_start())
+        {
+            values.push(value);
+        }
+    }
+    values
+}
+
+/// The leading Rust string literal of `s` (escapes and `\`-newline continuations resolved).
+#[cfg(test)]
+fn parse_str_literal(s: &str) -> Option<String> {
+    let mut chars = s.strip_prefix('"')?.chars().peekable();
+    let mut value = String::new();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => return Some(value),
+            '\\' => match chars.next()? {
+                '\n' => while chars.next_if(|c| c.is_whitespace()).is_some() {},
+                'n' => value.push('\n'),
+                't' => value.push('\t'),
+                escaped => value.push(escaped),
+            },
+            c => value.push(c),
+        }
+    }
+    None
+}
+
+/// Every `const …: &str` definition in the sibling's OpenChatZD module (all `.rs` files).
+#[cfg(test)]
+fn sibling_label_definitions(verify_root: &std::path::Path) -> Result<Vec<String>, String> {
+    let dir = verify_root.join(SIBLING_OPENCHATZD_MODULE_DIR_REL);
+    let mut files: Vec<_> = std::fs::read_dir(&dir)
+        .map_err(|e| format!("read {}: {e}", dir.display()))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+        .collect();
+    files.sort();
+    let mut definitions = Vec::new();
+    for file in files {
+        let src = std::fs::read_to_string(&file).map_err(|e| format!("read {}: {e}", file.display()))?;
+        definitions.extend(str_const_definitions(&src));
+    }
+    Ok(definitions)
 }
 
 /// Retired outcome tokens that must not be reintroduced as live labels: the pre-v5 four-outcome
@@ -122,13 +192,18 @@ fn sibling_label_guard(verify_root: &std::path::Path, module_path: &std::path::P
     }
 }
 
-/// Returns `Ok(())` when `src` carries every required amended label and no retired tokens.
+/// `Ok(())` when the sibling DEFINES every required wire label (a `const …: &str` whose value equals
+/// it), defines a string carrying the ratified claim fragment, and its attestation module `src`
+/// holds no forbidden or retired token. Mentions in comments or test literals satisfy nothing.
 #[cfg(test)]
-fn sibling_source_matches_openchatzd_labels(src: &str) -> Result<(), String> {
-    for label in required_sibling_attestation_labels() {
-        if !src.contains(label) {
-            return Err(format!("missing required label `{label}`"));
+fn sibling_source_matches_openchatzd_labels(src: &str, definitions: &[String]) -> Result<(), String> {
+    for label in required_sibling_wire_labels() {
+        if !definitions.iter().any(|v| v == label) {
+            return Err(format!("missing required label `{label}` (no `const …: &str = \"{label}\"`)"));
         }
+    }
+    if !definitions.iter().any(|v| v.contains(OCZD_CLAIM_FRAGMENT)) {
+        return Err("missing the ratified claim fragment in a `const …: &str` definition".into());
     }
     if src.contains(OCZD_FORBIDDEN_OVERCLAIM_FRAGMENT) {
         return Err("forbidden overclaim fragment present".into());
@@ -423,52 +498,89 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+    /// A sibling module that DEFINES every required label, the claim split over a `\`-newline
+    /// continuation as the verifier writes it.
+    fn defining_source() -> String {
+        let mut src = wire_label_definitions();
+        let (head, tail) = OCZD_SUPPORTED_CLAIM.split_at(OCZD_SUPPORTED_CLAIM.find(" during").expect("split"));
+        src.push_str(&format!("pub const CLAIM: &str = \"{head} \\\n{}\";\n", tail.trim_start()));
+        src
+    }
+
+    /// `pub const L<i>: &str = "<label>";` for every required wire label (no claim).
+    fn wire_label_definitions() -> String {
+        required_sibling_wire_labels()
+            .iter()
+            .enumerate()
+            .map(|(i, label)| format!("pub const L{i}: &str = \"{label}\";\n"))
+            .collect()
+    }
+
+    fn matches(src: &str) -> Result<(), String> {
+        sibling_source_matches_openchatzd_labels(src, &str_const_definitions(src))
+    }
+
     #[test]
     fn sibling_source_matcher_accepts_complete_amended_labels() {
-        let mut src = String::new();
-        for label in required_sibling_attestation_labels() {
-            src.push_str(label);
-            src.push('\n');
-        }
-        assert!(sibling_source_matches_openchatzd_labels(&src).is_ok());
+        assert_eq!(matches(&defining_source()), Ok(()));
     }
 
     #[test]
     fn sibling_source_matcher_rejects_missing_label() {
-        let src = format!("{}\n{}\n", V3A_PASS, INDEX_HASH_MISMATCH);
-        let err = sibling_source_matches_openchatzd_labels(&src).unwrap_err();
-        assert!(err.contains("missing required label"));
+        let src = format!("pub const A: &str = \"{V3A_PASS}\";\npub const B: &str = \"{INDEX_HASH_MISMATCH}\";\n");
+        assert!(matches(&src).unwrap_err().contains("missing required label"));
+    }
+
+    /// The false pass this guard used to allow: a label merely MENTIONED — in a comment, a test
+    /// literal, a `let` binding — is not a definition and satisfies nothing.
+    #[test]
+    fn label_mentions_outside_definitions_do_not_satisfy_the_guard() {
+        let mut src = String::new();
+        for label in required_sibling_wire_labels() {
+            src.push_str(&format!("// pub const OLD: &str = \"{label}\"; (renamed)\n"));
+            src.push_str(&format!("    assert_eq!(timing, \"{label}\");\n"));
+            src.push_str(&format!("    let x: &str = \"{label}\";\n"));
+        }
+        src.push_str(&format!("    assert!(c.contains(\"{OCZD_CLAIM_FRAGMENT}\"));\n"));
+        assert!(str_const_definitions(&src).is_empty(), "{:?}", str_const_definitions(&src));
+        assert!(matches(&src).unwrap_err().contains("missing required label"));
+
+        // every label defined, but the claim fragment only in a test literal
+        let mut src = wire_label_definitions();
+        src.push_str(&format!("    assert!(c.contains(\"{OCZD_CLAIM_FRAGMENT}\"));\n"));
+        assert!(matches(&src).unwrap_err().contains("claim fragment"));
+    }
+
+    #[test]
+    fn str_const_definitions_reads_rust_string_definitions_only() {
+        let src = "pub const A: &str = \"V3A_PASS\";\n\
+                   pub(crate) const B: &str =\n    \"split \\\n     across\";\n\
+                   const C: &str = \"q\\\"uote\";\n\
+                   pub const N: u64 = 3;\n\
+                   pub const BYTES: &[u8] = b\"raw\";\n\
+                   // pub const D: &str = \"comment\";\n";
+        assert_eq!(str_const_definitions(src), vec!["V3A_PASS", "split across", "q\"uote"]);
     }
 
     #[test]
     fn sibling_source_matcher_rejects_retired_v3a_token() {
-        let mut src = String::new();
-        for label in required_sibling_attestation_labels() {
-            src.push_str(label);
-            src.push('\n');
-        }
+        let mut src = defining_source();
         src.push_str("outcome = \"V3-A\"\n");
-        let err = sibling_source_matches_openchatzd_labels(&src).unwrap_err();
-        assert!(err.contains("retired V3-A"));
+        assert!(matches(&src).unwrap_err().contains("retired V3-A"));
     }
 
     #[test]
     fn sibling_source_matcher_rejects_retired_timing_wire() {
-        let mut src = String::new();
-        for label in required_sibling_attestation_labels() {
-            src.push_str(label);
-            src.push('\n');
-        }
+        let mut src = defining_source();
         // Build without embedding the retired wire literally in this file's source
         // (keeps cross-repo scanners clean).
         let retired = format!("pub const TIMING_{}: &str = \"{}{}\";\n", "LATE_PATH", "late", "_path");
         src.push_str(&retired);
-        let err = sibling_source_matches_openchatzd_labels(&src).unwrap_err();
-        assert!(err.contains("retired timing"));
+        assert!(matches(&src).unwrap_err().contains("retired timing"));
     }
 
-    /// Drift guard: when the sibling `CVDR-Verify` repo is checked out, OpenChatZD labels
-    /// must appear verbatim in the offline verifier.
+    /// Drift guard: when the sibling `CVDR-Verify` repo is checked out, the offline verifier must
+    /// DEFINE every OpenChatZD label (`const …: &str = "LABEL"` in its `openchatzd` module).
     #[test]
     fn labels_match_sibling_cvdr_verify_when_present() {
         let Some(verify_root) = resolve_cvdr_verify_root() else {
@@ -492,7 +604,9 @@ mod tests {
             }
             SiblingLabelGuard::RequireLabelMatch => {
                 let src = fs::read_to_string(&path).expect("read CVDR-Verify index_attestation");
-                sibling_source_matches_openchatzd_labels(&src).unwrap_or_else(|e| {
+                let definitions = sibling_label_definitions(&verify_root)
+                    .unwrap_or_else(|e| panic!("{e}. {}", sibling_precondition(&verify_root)));
+                sibling_source_matches_openchatzd_labels(&src, &definitions).unwrap_or_else(|e| {
                     panic!(
                         "CVDR-Verify OpenChatZD label drift: {e}. {}",
                         sibling_precondition(&verify_root)
