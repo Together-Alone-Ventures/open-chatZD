@@ -20,14 +20,15 @@ pub(crate) fn get_cvdr_impl(args: Args, state: &RuntimeState) -> Response {
 pub(crate) fn get_cvdr_from_store(receipt_id: &[u8; 32], cvdr: &CvdrStore) -> Response {
     if let Some(package) = cvdr.get_frozen_package(receipt_id) {
         let frozen_wire = FrozenWire::from(&package);
-        // Fail closed (R-6): evidence stored by a pre-step-4 wasm (no extracted hash / no trust-root
-        // id) is never projected into a V3 package with fields invented at serve time — the receipt
-        // is served as FrozenWire (V3A-unavailable) instead.
+        // Fail closed (R-6): evidence without an extracted hash or a trust-root id — absent (stored by
+        // a pre-step-4 wasm) or a placeholder (`Some(empty)` / `Some("")`) — is never projected into a
+        // V3 package, with fields invented or left empty at serve time; the receipt is served as
+        // FrozenWire (V3A-unavailable) instead.
         if let Some((evidence, index_module_hash, trust_root_key_id)) = cvdr.get_index_evidence(receipt_id).and_then(|e| {
             Some((
                 e.certificate_bytes.clone(),
-                e.index_module_hash.clone()?,
-                e.trust_root_key_id.clone()?,
+                e.index_module_hash.clone().filter(|h| !h.is_empty())?,
+                e.trust_root_key_id.clone().filter(|id| !id.is_empty())?,
             ))
         }) {
             let frozen_bytes = frozen_wire.to_canonical_json();
@@ -157,8 +158,9 @@ mod tests {
     }
 
     /// The serve path itself, not only its predicate: an evidence row STORED without the extracted
-    /// hash and/or the trust-root id (pre-R-2 / pre-R-6 shapes, inserted past the gate) leaves the
-    /// receipt served as the same FrozenWire bytes as no evidence at all — never PortablePackageV3.
+    /// hash and/or the trust-root id (pre-R-2 / pre-R-6 shapes), or with a placeholder in either
+    /// (`Some(empty)` / `Some("")`), inserted past the gate, leaves the receipt served as the same
+    /// FrozenWire bytes as no evidence at all — never PortablePackageV3.
     #[test]
     fn stored_incomplete_index_evidence_is_served_as_frozen_wire() {
         let mut cvdr = CvdrStore::default();
@@ -166,6 +168,8 @@ mod tests {
             (None, None),
             (Some(vec![0x1d; 32]), None),
             (None, Some("mainnet".to_string())),
+            (Some(vec![]), Some("mainnet".to_string())),
+            (Some(vec![0x1d; 32]), Some(String::new())),
         ];
         for (seq, (index_module_hash, trust_root_key_id)) in (20u64..).zip(cases) {
             let record_id = record_id_v2(&[0x5Au8; 32], Principal::from_slice(&[seq as u8]).into());
