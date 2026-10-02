@@ -113,11 +113,13 @@ e15bf18a218a16e5fef408770222454b433c7ce6bb9fb6d27367a6a98184fcff  user.wasm.gz
 4b8280a4d21dba0a4125e36c1e7010110f5ccd3d0cef385f764267017e5622a7  user_index.wasm.gz
 ```
 
-## Release build 2026-10-02 — AT `84b2ba866a60ca929905eed364b207544da92385`
+## Superseded 2026-10-02 — build AT `84b2ba866a60ca929905eed364b207544da92385`
+
+Published in `RELEASES.md` from `d7fd34c70` until the empty-certificate fail-closed commit (R below).
 
 | Item | Value |
 |---|---|
-| open-chatZD release | `84b2ba866a60ca929905eed364b207544da92385` — tag `v0.8.0`, applied by Stef at freeze |
+| open-chatZD | `84b2ba866a60ca929905eed364b207544da92385` (release candidate until R) |
 | CVDR-Verify | `b2547880c1dfda6304a097e97fb74fb640002f9f` (`openchatzd-v5`; `700a4bd1` label rename, `b2547880` historical V2 → `NOT_ATTESTED`) — tag `openchatzd-v0.8.0`, applied by Stef at freeze; = the `backend.yaml` pin |
 | Recipe | `scripts/docker-build-all-wasms.sh` in a clean worktree AT the release commit (no token), then the same recipe with a busted `build_nonce` — 23/23 identical |
 | `local_user_index.wasm.gz` | `00b09636e1ac27cd4fc281cfb0e862ad8fc507733bca0e72ea3ed2e9d81b40e4` |
@@ -196,3 +198,52 @@ so the same command at `8118d26a` counts 95 + 238 = 333.
 | `proof_of_unique_personhood` | 1/0/0 |
 | `sign_in_with_email_canister_impl` | 1/0/0 |
 | `types` | 1/0/0 |
+
+## Release build 2026-10-02 — AT R `9c77719dd378826c96586649c79ae42828480037`
+
+| Identifier | Value |
+|---|---|
+| R (open-chatZD release; tag `v0.8.0` at freeze) | `9c77719dd378826c96586649c79ae42828480037` — the hashes below reproduce only when built AT R |
+| Y (records commit) | the immediate child of R on `v5-retrofit`, docs-only (`RELEASES.md` and this file); `git diff --stat v0.8.0 HEAD` from it shows only those two files. Its SHA is recorded outside the tree (release ledger, tag annotation); R and X are the authoritative pins |
+| X (CVDR-Verify; tag `openchatzd-v0.8.0` at freeze) | `b2547880c1dfda6304a097e97fb74fb640002f9f` = the `backend.yaml` pin |
+| Recipe | `scripts/docker-build-all-wasms.sh` in a clean worktree AT R (no token), then the same recipe with a busted `build_nonce` — 23/23 identical |
+| `local_user_index.wasm.gz` | `bfcc1346b46604b18405afdd5ff0b7c4b4ee743cde882dd963d8f3c0053d48bb` |
+
+```
+462d5c4b6f932b160efef6e408ccbf45d78eadb8066ec1afedbb27285c47e23c  airdrop_bot.wasm.gz
+e4c9f5c6acd2d24a4b5858ecb6e65611b34d0f82bbf334e4268b6f8d559f086b  community.wasm.gz
+3a5a983c25812ded47879926488fe3866a699ff137cd90cb7d0c6524ced918d0  cycles_dispenser.wasm.gz
+62a1962934d4c18f8037bc5f3be38381b52985a433f643b2fd64256ec9599f40  escrow.wasm.gz
+aeb57927bacbd1f8fbe301f2bfe14a0d877d33578e1415fe4374d73b3d756f73  event_relay.wasm.gz
+ad9a691583280c1950e373312b11bc335e856f272552b6ffca26657329b758b3  group.wasm.gz
+87010b83ec0b48acec088a88cac787dc31a3fcc0e3f5ed815badc82672b623c6  group_index.wasm.gz
+d091e87cf1581d41dcfbfbb0688f789592eaec27db31b85ef5a6a22cdcc79db7  identity.wasm.gz
+bfcc1346b46604b18405afdd5ff0b7c4b4ee743cde882dd963d8f3c0053d48bb  local_user_index.wasm.gz
+ae9e3c7e3b10e88488a0ea4457bb706c23197f64cd643095482c01720c9df9e8  market_maker.wasm.gz
+4c38f78dc3a6f0374154a9755106ef52f95079c8fae0bff41a460decfdcde6a2  neuron_controller.wasm.gz
+590f30feac6f045dfdb51295e44e2d3a77b081c34e7e0adc4cea8829497e44f8  notifications_index.wasm.gz
+ed9142b64c55b34278cd8e56594b541a25265e794b9438e13c280d72ae5f8fa0  online_users.wasm.gz
+bd8e69d742723f6f04de145e2f3d22dbcd5a93c24b0851e8b266f81b36bda463  openchat_installer.wasm.gz
+418a4117e905a9e4bae8aaed8d0ed689c9cc03001ff12fde174b74ca85e83f8e  proposal_validation.wasm.gz
+9bbcb2ea3a305d41fe5f6b798963d0f389233de293ee00fbe6f0ab400798ff65  proposals_bot.wasm.gz
+dd8995f896fc20d4066ea487c527d909a3195c16209f078d5864d29f633c7a83  registry.wasm.gz
+c2b82a8be4045de96a64ae54d37fe5c379b1014cd970233896fbb7de928c8d95  sign_in_with_email.wasm.gz
+119999a4f8d5831bdd7f59beff8da95e7109e7a067a83f1ccd2e808aa1f9642b  storage_bucket.wasm.gz
+398670fa243e6b4e9fa2d423201c173907f394ea9d0f3445acf2b875d8eecb86  storage_index.wasm.gz
+592c0d2f3acc20295b83d9d495d0addbf8aecd2c9ec8155b5c05c0219f2e3039  translations.wasm.gz
+8c7dca35af2d9b54ca81f889b245cbb2ff377010f46cf347b355144895d488c2  user.wasm.gz
+ed846b5bfb1ce5054f5eb383cbb54339d35ad8afad705969befbe27f1178e4d2  user_index.wasm.gz
+```
+
+| Surface | Command | Result |
+|---|---|---|
+| fmt | `cargo fmt --all -- --check` | clean |
+| Clippy | `cargo clippy --locked --workspace --exclude open-chat --exclude tauri-plugin-oc --tests -- -D warnings` | exit 0 |
+| Workspace units | `cargo test --locked --workspace --exclude open-chat --exclude tauri-plugin-oc --exclude integration_tests`, sibling at X | exit 0 — 339 passed, 0 failed, 0 ignored — per package identical to the `84b2ba866` table above |
+| LUI units | `cargo test --locked -p local_user_index_canister_impl`, sibling at X | exit 0 — 101 passed, 0 failed (label + corpus-mirror guards ran against X) |
+| PocketIC `cvdr_` suites | `./scripts/run-integration-tests.sh local 1 'cvdr_'` | 20 passed, 0 failed, 5 ignored |
+| Ignored upgrade tests | both, `--ignored --test-threads 1`, baseline wasms = BASELINE §3.2 hashes | exit 0 — 2 passed, 0 failed (128.82 s) |
+| `cvdr.spec.ts` | `npx vitest --run src/domain/cvdr.spec.ts` | 22 passed, 0 failed |
+| CVDR-Verify CI at X | `bash ./ci.sh` (open-chatZD visible as its sibling) | exit 0 — fmt, clippy clean; audit zero vulnerabilities; 157 passed, 0 failed (148 + the 9-test corpus acceptance re-run); reverse label guard ran against open-chatZD |
+| CVDR-Verify corpus consumer | `cargo test --locked --test openchatzd_v5_corpus` at X | 7 passed, 0 failed |
+| Fresh `PortablePackageV3` | from the `cvdr_` run, sha256 `4a3fe8749f914a0f900a827b35c323c5f21de8e7135098e0d5a409214b75b2be`, verified with X `--allow-fixture-root-key` | exit 0 — `validity: PASS`, `V3A_PASS`, timing `BEFORE_COMMITMENT_CERTIFICATE`, certified module_hash `bfcc1346…` = built `local_user_index`; without the flag `validity: FAIL` (exit 1) |
