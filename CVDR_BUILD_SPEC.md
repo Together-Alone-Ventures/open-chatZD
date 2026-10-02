@@ -135,10 +135,15 @@ PortablePackageV3  schema "openchatzd.cvdr.portable_package" version 3 encoding 
   `V3A_PERMANENTLY_UNAVAILABLE`. `INDEX_ATTESTATION_INVALID` / `INDEX_HASH_MISMATCH` are named
   failures. PENDING / PERMANENTLY_UNAVAILABLE are as-of-verification-time classifications: the
   report prints the evaluation time and its source (`--now-ns` | system clock) with the frozen
-  statement.
+  statement. A historical `PortablePackageV2` (never emitted) has one more outcome, `NOT_ATTESTED`
+  (CVDR-Verify `b2547880`, G 2026-10-01): an Index observation (`h_index`), not subnet-attested —
+  validity `INCOMPLETE`, reason `v3a-not-attested`, exit 4. It is not part of the V3 outcome set.
 - **Validity:** `PASS | INCOMPLETE | FAIL`, exit `0 | 4 | 1`. Timing axis (`ROUTINE`,
-  `DELAY_EXCEEDED`, `PREDATES_COMMITMENT`, `OUTSIDE_COMPLETION_WINDOW`, `NOT_APPLICABLE`) and the
-  finalization-window tier are reported, non-gating.
+  `DELAY_EXCEEDED`, `BEFORE_COMMITMENT_CERTIFICATE`, `OUTSIDE_COMPLETION_WINDOW`, `NOT_APPLICABLE`)
+  and the finalization-window tier are reported, non-gating. `BEFORE_COMMITMENT_CERTIFICATE`
+  (renamed from `PREDATES_COMMITMENT`, G 2026-10-01) is the routine ordering on the v5 path:
+  evidence capture starts at `Uninstalled`, so the INDEX certificate normally precedes the
+  commitment certificate.
 - **Evidence-binding rule (Stef, 2026-09-22):** Index module-hash evidence is bound by
   (`index_canister_id`, certified `/time` within the receipt's window), not by receipt identity.
 - **Corpus:** `docs/test-vectors/openchatzd-v5/` mirrored byte-identically at

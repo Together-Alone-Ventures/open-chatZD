@@ -60,8 +60,9 @@ apart the two certificates are, not how long a receipt sat pending. The gating *
 is now anchored to `uninstall_completed_at` (hash-bound in `RECEIPT_BODY_V2`) and enforced on
 certified time by the Index store-gate and the verifier alike; evidence outside it is never stored.
 The timing axis stays non-gating and descriptive: because capture now starts at uninstall, an
-INDEX certificate may legitimately **predate** the commitment certificate
-(`PREDATES_COMMITMENT`), and `OUTSIDE_COMPLETION_WINDOW` (INDEX certificate more than 24 h after
+INDEX certificate normally **precedes** the commitment certificate
+(`BEFORE_COMMITMENT_CERTIFICATE`, the routine order; named `PREDATES_COMMITMENT` until
+2026-10-01), and `OUTSIDE_COMPLETION_WINDOW` (INDEX certificate more than 24 h after
 `receipt_committed_at`) can only appear on evidence stored by a pre-C2 wasm.
 
 **Not claimed:** that a small delay proves timely operator behaviour in wall-clock terms, or that

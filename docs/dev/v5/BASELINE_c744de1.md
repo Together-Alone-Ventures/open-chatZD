@@ -369,6 +369,8 @@ the suite: `validity: PASS | INCOMPLETE | FAIL`, exit `0 | 4 | 1` (the OpenChat-
   certified), `V3A_PENDING_IN_PROTECTED_WINDOW` (no evidence, window open at the verifier clock
   `--now-ns`, default system time), `V3A_PERMANENTLY_UNAVAILABLE` (no evidence, window lapsed).
   `INDEX_ATTESTATION_INVALID` / `INDEX_HASH_MISMATCH` are named failures, never outcomes.
+  (2026-10-02: a historical `PortablePackageV2` reports `NOT_ATTESTED` instead — CVDR-Verify
+  `b2547880`; validity INCOMPLETE, `v3a-not-attested`, exit 4; not a V3 outcome. §10.)
   Validity: PASS ⇔ V1 ∧ V2 ∧ V3A_PASS; INCOMPLETE ⇔ V1 ∧ V2 and V3A pending
   (`v3a-pending-in-protected-window`) or permanently unavailable (`v3a-permanently-unavailable`);
   FAIL otherwise. The finalization-window tier and the timing axis are reported, non-gating; the
@@ -503,3 +505,9 @@ the suite: `validity: PASS | INCOMPLETE | FAIL`, exit `0 | 4 | 1` (the OpenChat-
   set under `f314663c5…-step10-worktree` (LUI `1ea8f3cd…`) and the published v0.8.0 set under
   `8118d26a` (LUI `6cfdb4ac…`), 23/23 each. §1, §3 and §9 describe the recipe as it was then; the
   `c744de1` baseline still locks the private crates and needs a token (`upgrade-baseline` job).
+- **Timing label rename + historical `NOT_ATTESTED` (G 2026-10-01; CVDR-Verify `b2547880`).** The
+  pinned label is `TIMING_BEFORE_COMMITMENT_CERTIFICATE = "BEFORE_COMMITMENT_CERTIFICATE"` (was
+  `PREDATES_COMMITMENT`), in the label module, both build specs and the RTS; `STEP10_E2E_VERIFY.txt`
+  and the CD final-gate re-verification row keep the old label as captured verifier output.
+  `HISTORICAL_V2_NOT_ATTESTED = "NOT_ATTESTED"` — what the verifier reports for a historical
+  PortablePackageV2 — is pinned and required in the sibling, outside the three V3 outcomes.

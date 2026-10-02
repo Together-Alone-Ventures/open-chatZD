@@ -161,7 +161,8 @@ pub struct FrozenCvdrPackage {
 2. **Attestation delay (1 hour) — certificate-pair separation (S12):** delay is
    `t(INDEX certificate) − t(commitment certificate)`. It bounds **certificate separation**,
    not how long a receipt sat pending. If INDEX `/time` < commitment `/time` → timing
-   `PREDATES_COMMITMENT` (orthogonal to evidence outcome). If the delta is ≤ 1 hour →
+   `BEFORE_COMMITMENT_CERTIFICATE` (named `PREDATES_COMMITMENT` until 2026-10-01; orthogonal to
+   evidence outcome). If the delta is ≤ 1 hour →
    `ROUTINE`. If the delta is > 1 hour but still within the completion window →
    `DELAY_EXCEEDED` (never a silent pass). Frontend wall clocks are never used.
 3. **Completion expiry (24 hours):** all required finalisation evidence (commitment cert +
@@ -650,7 +651,7 @@ implementation nicknames):
 |---|---|
 | `ROUTINE` | INDEX−commitment certificate delta ≤ 1 hour, and INDEX cert within the 24h completion window from `receipt_committed_at` |
 | `DELAY_EXCEEDED` | Certificate-pair delay > 1 hour, still within the 24h completion window |
-| `PREDATES_COMMITMENT` | INDEX certificate `/time` < commitment certificate `/time` |
+| `BEFORE_COMMITMENT_CERTIFICATE` (formerly `PREDATES_COMMITMENT`) | INDEX certificate `/time` < commitment certificate `/time` |
 | `OUTSIDE_COMPLETION_WINDOW` | INDEX certificate `/time` is more than 24 hours after `receipt_committed_at` |
 | `NOT_APPLICABLE` | Timing not assessed (e.g. FrozenWire-only → `UNAVAILABLE`, or evidence `INVALID`) |
 

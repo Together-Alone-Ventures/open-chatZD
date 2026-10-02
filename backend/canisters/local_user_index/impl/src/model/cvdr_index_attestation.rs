@@ -3,9 +3,13 @@
 //! These strings are the wire/doc contract for CVDR-Verify OpenChatZD output (V3A). They are
 //! pinned here and drift-guarded against the sibling verifier in both directions.
 //!
-//! V3A has EXACTLY three outcomes (G rule 2): PASS, PENDING-IN-PROTECTED-WINDOW,
-//! PERMANENTLY-UNAVAILABLE. Anything else is a NAMED FAILURE, never an outcome. Code identity is
-//! never inferred from the absence of evidence; pending is never collapsed into unavailable.
+//! V3A has EXACTLY three outcomes for a live PortablePackageV3 (G rule 2): PASS,
+//! PENDING-IN-PROTECTED-WINDOW, PERMANENTLY-UNAVAILABLE. A historical PortablePackageV2 — never
+//! emitted by this Index — has one more, NOT_ATTESTED (CVDR-Verify `b2547880`, G 2026-10-01): an
+//! Index observation (`h_index`), not subnet-attested; validity INCOMPLETE, reason
+//! `v3a-not-attested`, exit 4. It is not a V3 outcome. Anything else is a NAMED FAILURE, never an
+//! outcome. Code identity is never inferred from the absence of evidence; pending is never
+//! collapsed into unavailable.
 //!
 //! Timing labels are the five-value axis orthogonal to (and never gating) V3A.
 
@@ -22,6 +26,8 @@ pub const PORTABLE_PACKAGE_VERSION: u32 = 3;
 pub const V3A_PASS: &str = "V3A_PASS";
 pub const V3A_PENDING_IN_PROTECTED_WINDOW: &str = "V3A_PENDING_IN_PROTECTED_WINDOW";
 pub const V3A_PERMANENTLY_UNAVAILABLE: &str = "V3A_PERMANENTLY_UNAVAILABLE";
+/// Historical PortablePackageV2 only — exact wire string; never one of the three V3 outcomes.
+pub const HISTORICAL_V2_NOT_ATTESTED: &str = "NOT_ATTESTED";
 /// Named V3A failures (validity FAIL) — exact wire strings. Never outcomes.
 pub const INDEX_HASH_MISMATCH: &str = "INDEX_HASH_MISMATCH";
 pub const INDEX_ATTESTATION_INVALID: &str = "INDEX_ATTESTATION_INVALID";
@@ -29,7 +35,9 @@ pub const INDEX_ATTESTATION_INVALID: &str = "INDEX_ATTESTATION_INVALID";
 /// Orthogonal timing qualifiers (spec §17.2 / G v0.7.0). Exact wire strings.
 pub const TIMING_ROUTINE: &str = "ROUTINE";
 pub const TIMING_DELAY_EXCEEDED: &str = "DELAY_EXCEEDED";
-pub const TIMING_PREDATES_COMMITMENT: &str = "PREDATES_COMMITMENT";
+/// INDEX certificate `/time` before the commitment certificate `/time`: the routine order on the v5
+/// path, where evidence capture starts at `Uninstalled` (CVDR-Verify rename, G 2026-10-01).
+pub const TIMING_BEFORE_COMMITMENT_CERTIFICATE: &str = "BEFORE_COMMITMENT_CERTIFICATE";
 pub const TIMING_OUTSIDE_COMPLETION_WINDOW: &str = "OUTSIDE_COMPLETION_WINDOW";
 pub const TIMING_NOT_APPLICABLE: &str = "NOT_APPLICABLE";
 
@@ -59,11 +67,12 @@ fn required_sibling_attestation_labels() -> &'static [&'static str] {
         V3A_PASS,
         V3A_PENDING_IN_PROTECTED_WINDOW,
         V3A_PERMANENTLY_UNAVAILABLE,
+        HISTORICAL_V2_NOT_ATTESTED,
         INDEX_HASH_MISMATCH,
         INDEX_ATTESTATION_INVALID,
         TIMING_ROUTINE,
         TIMING_DELAY_EXCEEDED,
-        TIMING_PREDATES_COMMITMENT,
+        TIMING_BEFORE_COMMITMENT_CERTIFICATE,
         TIMING_OUTSIDE_COMPLETION_WINDOW,
         TIMING_NOT_APPLICABLE,
         PORTABLE_PACKAGE_SCHEMA,
@@ -300,6 +309,10 @@ mod tests {
         assert!(!all.iter().any(|o| o.contains("V3-A")));
         // pending and permanently-unavailable are never one label
         assert_ne!(V3A_PENDING_IN_PROTECTED_WINDOW, V3A_PERMANENTLY_UNAVAILABLE);
+        // The historical-V2 outcome is outside the V3 set: distinct, unprefixed, never a pass.
+        assert_eq!(HISTORICAL_V2_NOT_ATTESTED, "NOT_ATTESTED");
+        assert!(!all.contains(&HISTORICAL_V2_NOT_ATTESTED));
+        assert!(!HISTORICAL_V2_NOT_ATTESTED.starts_with("V3A_"));
     }
 
     #[test]
@@ -307,11 +320,12 @@ mod tests {
         let timing = [
             TIMING_ROUTINE,
             TIMING_DELAY_EXCEEDED,
-            TIMING_PREDATES_COMMITMENT,
+            TIMING_BEFORE_COMMITMENT_CERTIFICATE,
             TIMING_OUTSIDE_COMPLETION_WINDOW,
             TIMING_NOT_APPLICABLE,
         ];
         assert_eq!(timing.len(), 5);
+        assert_eq!(TIMING_BEFORE_COMMITMENT_CERTIFICATE, "BEFORE_COMMITMENT_CERTIFICATE");
         for (i, a) in timing.iter().enumerate() {
             for (j, b) in timing.iter().enumerate() {
                 if i != j {
