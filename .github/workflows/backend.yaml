@@ -140,17 +140,17 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build current wasms (all-canister script, on the runner)
-        run: ./scripts/generate-all-canister-wasms.sh
+        run: bash ./scripts/generate-all-canister-wasms.sh
       - name: PocketIC server and NNS / event_store wasms
         run: |
           POCKET_IC_SERVER_VERSION=$(sed -n 's/^POCKET_IC_SERVER_VERSION="\(.*\)"$/\1/p' scripts/run-integration-tests.sh)
           curl -Ls "https://github.com/dfinity/pocketic/releases/download/${POCKET_IC_SERVER_VERSION}/pocket-ic-x86_64-linux.gz" -o backend/integration_tests/pocket-ic.gz
           gzip -df backend/integration_tests/pocket-ic.gz
           chmod +x backend/integration_tests/pocket-ic
-          ./scripts/download-nns-canister-wasm.sh icp_ledger ledger-canister_notify-method
-          ./scripts/download-nns-canister-wasm.sh sns_wasm sns-wasm-canister
-          ./scripts/download-nns-canister-wasm.sh icrc_ledger ic-icrc1-ledger
-          ./scripts/download-canister-wasm-dfx.sh event_store
+          bash ./scripts/download-nns-canister-wasm.sh icp_ledger ledger-canister_notify-method
+          bash ./scripts/download-nns-canister-wasm.sh sns_wasm sns-wasm-canister
+          bash ./scripts/download-nns-canister-wasm.sh icrc_ledger ic-icrc1-ledger
+          bash ./scripts/download-canister-wasm-dfx.sh event_store
       - name: Run the ignored baseline upgrade tests
         run: |
           cargo test --locked -p integration_tests -- --ignored --test-threads 1 --nocapture \
