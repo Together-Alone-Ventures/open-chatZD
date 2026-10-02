@@ -26,10 +26,9 @@ amendment (2026-09-22). Governing spec `CVDR_BUILD_SPEC.md`; record `docs/dev/v5
 **Release identifiers** (tags applied by Stef at freeze):
 - **R** = `9c77719dd378826c96586649c79ae42828480037` — the open-chatZD release commit. Tag `v0.8.0` goes
   here: the hashes below reproduce only when built AT R.
-- **Y** — the records commit is the immediate child of R on `v5-retrofit` and is docs-only
-  (`RELEASES.md` and the evidence file `docs/evidence/2026-09-23-cd-final-gate.md`); R and X are the
-  authoritative pins (full SHAs). `git diff --stat v0.8.0 HEAD` from that commit shows only those two
-  files. The SHA of Y itself is recorded outside the tree (release ledger, tag annotation).
+- **Y** — the records commit on `v5-retrofit`: R..tip touches only `RELEASES.md`, the evidence file
+  (`docs/evidence/2026-09-23-cd-final-gate.md`) and `.github/workflows/*` — no build input; R and X
+  are the authoritative pins (full SHAs). `git diff --stat v0.8.0 HEAD` shows only those files. The SHA of Y itself is recorded outside the tree (release ledger, tag annotation).
 - **X** = `b2547880c1dfda6304a097e97fb74fb640002f9f` — CVDR-Verify `openchatzd-v5`, tag `openchatzd-v0.8.0`;
   the `.github/workflows/backend.yaml` pin.
 

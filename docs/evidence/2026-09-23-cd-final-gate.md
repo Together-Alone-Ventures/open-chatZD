@@ -204,7 +204,7 @@ so the same command at `8118d26a` counts 95 + 238 = 333.
 | Identifier | Value |
 |---|---|
 | R (open-chatZD release; tag `v0.8.0` at freeze) | `9c77719dd378826c96586649c79ae42828480037` — the hashes below reproduce only when built AT R |
-| Y (records commit) | the immediate child of R on `v5-retrofit`, docs-only (`RELEASES.md` and this file); `git diff --stat v0.8.0 HEAD` from it shows only those two files. Its SHA is recorded outside the tree (release ledger, tag annotation); R and X are the authoritative pins |
+| Y (records commit) | on `v5-retrofit`, R..tip touches only `RELEASES.md`, the evidence file (this file) and `.github/workflows/*` — no build input; `git diff --stat v0.8.0 HEAD` shows only those files. Its SHA is recorded outside the tree (release ledger, tag annotation); R and X are the authoritative pins |
 | X (CVDR-Verify; tag `openchatzd-v0.8.0` at freeze) | `b2547880c1dfda6304a097e97fb74fb640002f9f` = the `backend.yaml` pin |
 | Recipe | `scripts/docker-build-all-wasms.sh` in a clean worktree AT R (no token), then the same recipe with a busted `build_nonce` — 23/23 identical |
 | `local_user_index.wasm.gz` | `bfcc1346b46604b18405afdd5ff0b7c4b4ee743cde882dd963d8f3c0053d48bb` |

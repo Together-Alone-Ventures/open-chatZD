@@ -2,6 +2,8 @@ on:
   pull_request:
     branches:
       - master
+      - antek
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
 
 name: Backend linting and unit tests
@@ -86,13 +88,13 @@ jobs:
 
   # The two `#[ignore]`d PocketIC upgrade tests (`r3_upgrade_from_c744de1_keeps_state_and_function`,
   # `v1_in_flight_draft_blocks_upgrade_then_terminal_draft_survives_it`) upgrade a deployment
-  # installed from the c744de1 baseline wasms to the current wasms. Manual only: two all-canister
-  # Docker builds. The baseline is built here with the canonical recipe AT c744de1; that tree still
+  # installed from the c744de1 baseline wasms to the current wasms. Manual (workflow_dispatch) or on
+  # a PR labelled `run-upgrade-baseline`: two all-canister Docker builds. The baseline is built here with the canonical recipe AT c744de1; that tree still
   # locks the private MKTd02 / zombie-core crates, hence the read token. `wasms::baseline_c744de1`
   # checks every baseline wasm against the SHA-256 recorded in docs/dev/v5/BASELINE_c744de1.md §3.2.
   upgrade-baseline:
     name: baseline upgrade tests (c744de1 -> current, ignored)
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-upgrade-baseline')
     runs-on:
       - runs-on
       - cpu=16

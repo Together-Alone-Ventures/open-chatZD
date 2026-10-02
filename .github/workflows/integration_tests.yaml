@@ -2,6 +2,7 @@ on:
   pull_request:
     branches:
       - master
+      - antek
     paths:
       - "**.rs"
       - "**.toml"
