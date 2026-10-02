@@ -1,4 +1,8 @@
-# OpenChatZD CVDR Build Spec — v1 (ADOPTED baseline)
+# OpenChatZD CVDR Build Spec — v1 (historical; superseded by CVDR_BUILD_SPEC.md)
+
+> **SUPERSEDED (2026-09-22): governing spec is now `CVDR_BUILD_SPEC.md` (suite v5, Brief B1 R-1…R-6 + C2).**
+> This V1 text is the historical M1–M4 record (PortablePackageV2, RECEIPT_BODY_V1, `h_index` in the preimage,
+> "no demonstrated interlock"). §2–§11 and §13–§16 remain in force where the v5 spec is silent.
 
 **Status:** governing build spec for the CVDR finalization rework. Derived from Master
 Implementation Plan v4 (ADOPTED) + Finalization Baseline v1. On conflict, Master Plan v4 wins.
@@ -157,7 +161,8 @@ pub struct FrozenCvdrPackage {
 2. **Attestation delay (1 hour) — certificate-pair separation (S12):** delay is
    `t(INDEX certificate) − t(commitment certificate)`. It bounds **certificate separation**,
    not how long a receipt sat pending. If INDEX `/time` < commitment `/time` → timing
-   `PREDATES_COMMITMENT` (orthogonal to evidence outcome). If the delta is ≤ 1 hour →
+   `BEFORE_COMMITMENT_CERTIFICATE` (named `PREDATES_COMMITMENT` until 2026-10-01; orthogonal to
+   evidence outcome). If the delta is ≤ 1 hour →
    `ROUTINE`. If the delta is > 1 hour but still within the completion window →
    `DELAY_EXCEEDED` (never a silent pass). Frontend wall clocks are never used.
 3. **Completion expiry (24 hours):** all required finalisation evidence (commitment cert +
@@ -646,7 +651,7 @@ implementation nicknames):
 |---|---|
 | `ROUTINE` | INDEX−commitment certificate delta ≤ 1 hour, and INDEX cert within the 24h completion window from `receipt_committed_at` |
 | `DELAY_EXCEEDED` | Certificate-pair delay > 1 hour, still within the 24h completion window |
-| `PREDATES_COMMITMENT` | INDEX certificate `/time` < commitment certificate `/time` |
+| `BEFORE_COMMITMENT_CERTIFICATE` (formerly `PREDATES_COMMITMENT`) | INDEX certificate `/time` < commitment certificate `/time` |
 | `OUTSIDE_COMPLETION_WINDOW` | INDEX certificate `/time` is more than 24 hours after `receipt_committed_at` |
 | `NOT_APPLICABLE` | Timing not assessed (e.g. FrozenWire-only → `UNAVAILABLE`, or evidence `INVALID`) |
 

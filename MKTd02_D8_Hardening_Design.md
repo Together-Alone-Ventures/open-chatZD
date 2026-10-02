@@ -1,5 +1,10 @@
 # MKTd02 — D8 Hardening DESIGN (propose-only)
 
+> **HISTORICAL (suite-v5 retrofit, 2026-09-22).** Records the June 2026 MKTd02/Leaf integration cycle
+> (user-canister adapter, engine re-pin). Superseded by the suite-v5 CVDR-on-Index design — ruling R-3
+> removed the ceremonial MKTd02/MKTd03 dependency; see `CVDR_BUILD_SPEC.md`, `docs/dev/v5/BASELINE_c744de1.md`
+> and `RELEASES.md`. Kept verbatim for the record; not a live instruction.
+
 **Target:** open-chatZD @ `7b5ac7ccb` + current P1 tree · **Engine:** mktd02-v0.4.1
 **Mode:** inspect-only — no code, no tests. Output is a design for G + Claude review.
 **Locked (not re-litigated):** central `mutate_state` write-guard; Phase-A precondition (not the guard) solves financial stranding; precondition checked *before* lock/tombstone; existing entry + post-await `assert_not_pending_deletion` stay as defense-in-depth.

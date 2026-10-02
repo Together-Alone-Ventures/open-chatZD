@@ -1,5 +1,10 @@
 # P0 — ICP-DELETE-LEAF API Repair — Build-Packet Brief
 
+> **HISTORICAL (suite-v5 retrofit, 2026-09-22).** Records the June 2026 MKTd02/Leaf integration cycle
+> (user-canister adapter, engine re-pin). Superseded by the suite-v5 CVDR-on-Index design — ruling R-3
+> removed the ceremonial MKTd02/MKTd03 dependency; see `CVDR_BUILD_SPEC.md`, `docs/dev/v5/BASELINE_c744de1.md`
+> and `RELEASES.md`. Kept verbatim for the record; not a live instruction.
+
 **Packet:** P0 (first; blocks all OpenChatZD work)
 **Target:** `ICP-Delete-Leaf` @ `1c45a68` (engine/library only — no OpenChatZD changes here)
 **Mode:** **High-assurance** (changes the auth model of an evidence engine; touches deletion/

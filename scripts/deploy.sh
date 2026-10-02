@@ -24,7 +24,7 @@ if [ $WASM_SRC = "build" ]
 then
     if [ "$TEST_MODE" = "true" ]
     then
-        OPENCHAT_LOCAL_REPLICA=true ./scripts/generate-all-canister-wasms.sh
+        ./scripts/generate-all-canister-wasms.sh
     else
         ./scripts/generate-all-canister-wasms.sh
     fi

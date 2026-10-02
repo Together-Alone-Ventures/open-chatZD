@@ -1,0 +1,65 @@
+# Step 10 end-to-end verification — fresh PocketIC PortablePackageV3 on the Step 10 wasms
+# verifier: CVDR-Verify openchatzd-v5 @ 8b0d835057a3c4987a99a1f18c6e4e364733d2ef (backend.yaml pin), built --locked --release
+# package : backend/integration_tests/fixtures/pocketic_e2e_portable_v3.json (exact GET /cvdr bytes)
+# package sha256: a43157cc3e3382f2381f75512a2229edf8443ee1349f12f71409662811a2f58b
+# local_user_index.wasm.gz sha256 (Step 10 tip build): 1ea8f3cdad74c40661ced89c8823dae6817b50689cfd32741f285d96136dcfd2
+#   built at: the Step 10 working tree before commit 8118d26a (HEAD f314663c5), git_commit_id =
+#   f314663c5945b699cee50250514a5a1e4dce935d-step10-worktree. NOT the published hash: the canonical recipe AT
+#   8118d26aae9c4194b4bc3ded0e58be578648474a gives 6cfdb4ac075c601e8dd09104af7dbadde7f92108477228b9846e9999c03690c7
+#   (RELEASES.md); the fresh package on those wasms: docs/evidence/2026-09-23-cd-final-gate.md. (annotation 2026-10-01)
+# command : mktd02-verify --package <pkg> --allow-fixture-root-key --fixture-root-key-hex <PocketIC root>
+# captured: 2026-09-22T12:48:15Z
+
+WARNING --allow-fixture-root-key: selector 'non-production-test-root' -> FIXTURE-SUPPLIED trust anchor (133 bytes). TEST VERDICT ONLY; never use for a real verdict.
+============================================================
+ CVDR-Verify: OpenChatZD package (suite v5 — V1 / V2 / V3A)
+============================================================
+ Package: PortablePackageV3 (live)
+ Gate B nested FrozenWire bytes sha256: 061ec6b150bbad47a97b4aec42b468f5e9747b2c5ca0588b1fc454a5203c5c17
+ Parsed RECEIPT_BODY_V2:
+   receipt_id            : bcbe69dd16ec5a476a0112f823c413f878dbdce1adeb20307dd2cdfbb02703cc
+   nonce                 : a27296a07ef33d81b19c2a7aed4a43fff496e5c1d983e45a6ef3898d6bd8039c
+   index_canister_id     : qhlhi-6h777-77776-aaaiq-cai
+   user_canister_id      : qoimu-ip777-77776-aaaja-cai
+   record_id             : 91a0badbbb22edfbeabf9c9d36b2c7fe465de7bb39c385bc4df3cee46e065453 (non-identifying; recomputable only with RevealWire record_salt)
+   deletion_seq          : 0
+   h_user_pre            : 5aa0baaa425d25d1d3dbaf62d1133e0eac2b384a0ce68c6715babbfd09311efa (Index-recorded observation; integrity-bound, not independently attested)
+   uninstall_completed_at: 1620633671015000129 ns
+   receipt_committed_at  : 1620633671015000129 ns
+   targets_count         : 0
+   targets_commitment    : ade15af7054080883ac2bc8448a7f9ce44d2dfc3614d18d415a73fbda59946e1
+
+ Checks:
+   [PASS] V1 package version ↔ body tag      PortablePackageV3 with RECEIPT_BODY_V2
+   [PASS] V1 body: tag dispatch + parse      236 bytes, RECEIPT_BODY_V2 all fields decoded
+   [PASS] V1 receipt_id recompute            receipt_id bcbe69dd16ec5a476a0112f823c413f878dbdce1adeb20307dd2cdfbb02703cc
+   [PASS] V1 leaf == receipt_hash            leaf 825773053873cd81cc233936ba0da01ec236c33a33992605d2dcb5ead650ca9e
+   [----] V1 reveal: targets / record_id     no reveal package supplied (targets_commitment / record_id not re-derived)
+   [PASS] V2 receipt_hash == witness leaf    
+   [PASS] V2 witness root == tree_root       root bca6d1176c36b03c52a76a69956030470db38a58b79e2078dc6930cc67b919af
+   [PASS] V2 cert BLS+delegation+range+certified_data certified_data == witness root; canister qhlhi-6h777-77776-aaaiq-cai in delegation range
+   [PASS] V2 certificate_time == cert /time  1620633699015000155 ns
+   [PASS] V3A subnet-attested Index code identity certificate authenticated under selector 'non-production-test-root', /time inside the protected interval, displayed identity == certified module_hash 1ea8f3cdad74c40661ced89c8823dae6817b50689cfd32741f285d96136dcfd2 (timing PREDATES_COMMITMENT) — authenticated under a NON-PRODUCTION trust root (test verdict only)
+   [----] expect: Index module hash          no --expect-module-hash supplied; no operator expectation was compared
+
+ Finalization window (non-gating): certificate_time − receipt_committed_at = 28000000026 ns ≤ 86400000000000 ns (24 h) → in window
+
+ V3A — subnet-attested Index code identity:
+   outcome : V3A_PASS
+   timing  : PREDATES_COMMITMENT (non-gating)
+   detail  : certificate authenticated under selector 'non-production-test-root', /time inside the protected interval, displayed identity == certified module_hash 1ea8f3cdad74c40661ced89c8823dae6817b50689cfd32741f285d96136dcfd2 (timing PREDATES_COMMITMENT) — authenticated under a NON-PRODUCTION trust root (test verdict only)
+   certified module_hash : 1ea8f3cdad74c40661ced89c8823dae6817b50689cfd32741f285d96136dcfd2
+   INDEX cert /time      : 1620633676015000137 ns
+   trust root            : selector 'non-production-test-root' -> NON-PRODUCTION root (133 bytes DER)  ** TEST VERDICT ONLY **
+   claim   : OpenChatZD carries subnet-attested installed module identity during the finalization/certification window. The Index upgrade interlock bounds that window from uninstall to evidence capture: the same Index code stays installed until the module-hash certificate is stored, so the certified module hash is the code identity of the deleting Index.
+
+============================================================
+ validity: PASS
+============================================================
+# exit code: 0
+
+# negative control: same package without the fixture root flag
+   [FAIL] V3A subnet-attested Index code identity INDEX_ATTESTATION_INVALID: evidence present but the selected trust root is not available to this verifier (a non-production selector needs the explicit fixture-root flag and a fixture root) — the certificate cannot be authenticated
+   detail  : evidence present but the selected trust root is not available to this verifier (a non-production selector needs the explicit fixture-root flag and a fixture root) — the certificate cannot be authenticated
+ validity: FAIL (trust-root: selector 'non-production-test-root' selects a fixture root, which requires the explicit --allow-fixture-root-key flag (refused: a non-production root is never used silently))
+# exit code: 1

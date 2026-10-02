@@ -15,7 +15,9 @@ mod change_group_role_tests;
 mod chit_tests;
 mod client;
 mod communities;
+mod cvdr_evidence_gate_tests;
 mod cvdr_tests;
+mod cvdr_v2_upgrade_tests;
 mod cycles_dispenser_tests;
 mod delete_direct_chat_tests;
 mod delete_group_tests;
@@ -35,14 +37,13 @@ mod identity_tests;
 mod join_group_tests;
 mod mentions_tests;
 mod message_activity_tests;
-mod mktd_deletion_tests;
 mod notification_tests;
 mod online_users_tests;
 mod p2p_swap_tests;
 mod pin_number_tests;
 mod poll_tests;
 mod prize_message_tests;
-mod receipts_tests;
+mod r3_upgrade_tests;
 mod register_user_tests;
 mod registry_tests;
 mod remove_from_group_tests;
@@ -123,7 +124,6 @@ pub struct CanisterIds {
     pub notifications_index: CanisterId,
     pub identity: CanisterId,
     pub online_users: CanisterId,
-    pub receipts: CanisterId,
     pub proposals_bot: CanisterId,
     pub airdrop_bot: CanisterId,
     pub storage_index: CanisterId,
@@ -159,7 +159,6 @@ impl Debug for CanisterIds {
         w.field("notifications_index", &self.notifications_index.to_string());
         w.field("identity", &self.identity.to_string());
         w.field("online_users", &self.online_users.to_string());
-        w.field("receipts", &self.receipts.to_string());
         w.field("proposals_bot", &self.proposals_bot.to_string());
         w.field("airdrop_bot", &self.airdrop_bot.to_string());
         w.field("storage_index", &self.storage_index.to_string());

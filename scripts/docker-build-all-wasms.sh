@@ -1,4 +1,7 @@
 #!/bin/bash
+# Canonical all-canister reproducible build (suite v5): the recipe a published module hash names.
+# No secret or token: every git source in Cargo.lock is public since R-3. The wasms embed
+# GIT_COMMIT_ID (`git rev-parse HEAD`), so a hash reproduces only at the commit it was built at.
 
 SCRIPT=$(readlink -f "$0")
 SCRIPT_DIR=$(dirname "$SCRIPT")
@@ -10,7 +13,7 @@ GIT_COMMIT_ID=$(git rev-parse HEAD)
 
 echo "CommitId: $GIT_COMMIT_ID"
 
-docker build -t openchat --build-arg git_commit_id=$GIT_COMMIT_ID --platform linux/amd64 . || exit 1
+DOCKER_BUILDKIT=1 docker build -t openchat --build-arg git_commit_id=$GIT_COMMIT_ID --platform linux/amd64 . || exit 1
 
 container_id=$(docker create openchat)
 rm -rf wasms

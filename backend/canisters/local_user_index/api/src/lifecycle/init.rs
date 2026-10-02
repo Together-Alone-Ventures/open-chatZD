@@ -6,10 +6,9 @@ use types::{BuildVersion, CanisterId, Hash};
 pub struct Args {
     // The wasm version running on this canister
     pub wasm_version: BuildVersion,
-    // CVDR v5: this index's OWN deployed module hash (gzip upload hash), supplied by the deploy
-    // pipeline — the captured H_index executor provenance. Not read from inside the canister,
-    // not computed from receipt fields.
-    pub executor_module_hash: Hash,
+    // R-2: the module hash the deploy pipeline EXPECTS this index to run (gzip upload hash). An
+    // ops-integrity guard only — never a trust input, never in a receipt preimage.
+    pub expected_index_module_hash: Option<Hash>,
     pub user_index_canister_id: CanisterId,
     pub group_index_canister_id: CanisterId,
     pub notifications_index_canister_id: CanisterId,
@@ -19,10 +18,6 @@ pub struct Args {
     pub escrow_canister_id: CanisterId,
     pub event_relay_canister_id: CanisterId,
     pub online_users_canister_id: CanisterId,
-    // P2: durable receipts canister for the pre-uninstall CVDR export. `None`
-    // disables export (retained-copy-first still blocks uninstall if a finalized
-    // receipt exists but there is nowhere to export it). Explicit + env-driven (§5).
-    pub receipts_canister_id: Option<CanisterId>,
     pub internet_identity_canister_id: CanisterId,
     pub website_canister_id: CanisterId,
     pub video_call_operators: Vec<Principal>,

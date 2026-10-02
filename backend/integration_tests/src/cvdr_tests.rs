@@ -2,7 +2,7 @@
 //!
 //! Spec §8/§8b: delete completes cert-absent (uninstall + cleanup); certificate capture is
 //! self-finalization (§6) / backstop (§7). Public serving is dual Available (§11.2):
-//! FrozenWire commitment-only or PortablePackageV2 when INDEX evidence is stored.
+//! FrozenWire commitment-only or PortablePackageV3 when INDEX evidence is stored.
 //! Obsolete `cvdr_data_certificate` removed (§11.5).
 
 use crate::client::register_user_and_include_auth;
@@ -37,7 +37,7 @@ fn prepare_deletion(env: &mut PocketIc, user: &User) -> prepare_account_deletion
     client::local_user_index::happy_path::prepare_account_deletion(env, user)
 }
 
-fn delete_and_reach_awaiting(env: &mut PocketIc, canister_ids: &CanisterIds, user: &User, auth: &UserAuth) {
+pub(crate) fn delete_and_reach_awaiting(env: &mut PocketIc, canister_ids: &CanisterIds, user: &User, auth: &UserAuth) {
     prepare_deletion(env, user);
     client::identity::happy_path::delete_user(env, auth, canister_ids.identity);
     tick_many(env, 10);
@@ -91,7 +91,7 @@ fn delete_and_store_package(
     receipt_id
 }
 
-fn finalize(
+pub(crate) fn finalize(
     env: &mut PocketIc,
     local_user_index: CanisterId,
     receipt_id: [u8; 32],
@@ -110,7 +110,7 @@ fn finalize(
     )
 }
 
-fn pending_live_package(env: &mut PocketIc, local_user_index: CanisterId) -> ([u8; 32], Vec<u8>, Vec<u8>) {
+pub(crate) fn pending_live_package(env: &mut PocketIc, local_user_index: CanisterId) -> ([u8; 32], Vec<u8>, Vec<u8>) {
     let (_, receipt_id, certificate, witness) = find_servable_cvdr_live(env, local_user_index);
     (receipt_id, certificate, witness)
 }
@@ -153,13 +153,13 @@ fn find_servable_cvdr_live(
     panic!("no servable /cvdr_live receipt for {lui_text} appeared");
 }
 
-fn fetch_cvdr(env: &PocketIc, local_user_index: CanisterId, receipt_id: [u8; 32]) -> get_cvdr::Response {
+pub(crate) fn fetch_cvdr(env: &PocketIc, local_user_index: CanisterId, receipt_id: [u8; 32]) -> get_cvdr::Response {
     client::local_user_index::get_cvdr(env, Principal::anonymous(), local_user_index, &get_cvdr::Args { receipt_id })
 }
 
 /// The v5 metrics triple (drafts_in_flight, released_count, awaiting_certificate) read off
 /// the public `/metrics` http route.
-fn cvdr_metrics(env: &PocketIc, local_user_index: CanisterId) -> (u64, u64, bool) {
+pub(crate) fn cvdr_metrics(env: &PocketIc, local_user_index: CanisterId) -> (u64, u64, bool) {
     let response = client::http_request(
         env,
         Principal::anonymous(),
@@ -188,7 +188,7 @@ fn cvdr_index_evidence_count(env: &PocketIc, local_user_index: CanisterId) -> u6
         .expect("cvdr_index_evidence_count")
 }
 
-fn metrics_json(env: &PocketIc, canister_id: CanisterId) -> serde_json::Value {
+pub(crate) fn metrics_json(env: &PocketIc, canister_id: CanisterId) -> serde_json::Value {
     let response = client::http_request(
         env,
         Principal::anonymous(),
@@ -205,12 +205,6 @@ fn metrics_json(env: &PocketIc, canister_id: CanisterId) -> serde_json::Value {
 }
 
 /// Receipts-canister stored-receipt count — proof of whether the index ever called `store`.
-fn receipts_stored(env: &PocketIc, receipts: CanisterId) -> u64 {
-    metrics_json(env, receipts)["receipts_stored"]
-        .as_u64()
-        .expect("receipts_stored")
-}
-
 /// The LUI's P2 durable parked/export-pending counts (`export_pending.len()` and its
 /// uninstall-pending sub-count) — both must stay flat under v5 (the parked set is never fed).
 fn lui_export_pending(env: &PocketIc, lui: CanisterId) -> (u64, u64) {
@@ -238,6 +232,11 @@ fn module_hash_is_none(env: &PocketIc, user: &User) -> bool {
 /// Running again — so this never returns mid-stop (no `CanisterStopped` race) and has no pre-stop
 /// false positive. Replaces a fixed `tick_many`, which was non-deterministic under load.
 fn wait_for_lui_version(env: &mut PocketIc, lui: CanisterId, expected: types::BuildVersion) {
+    wait_for_version(env, lui, expected)
+}
+
+/// Poll any OpenChat canister's `/metrics` until it reports `expected` (upgrade completed, Running).
+pub(crate) fn wait_for_version(env: &mut PocketIc, lui: CanisterId, expected: types::BuildVersion) {
     let req = HttpRequest {
         method: "GET".to_string(),
         url: "/metrics".to_string(),
@@ -272,7 +271,7 @@ fn wait_for_lui_version(env: &mut PocketIc, lui: CanisterId, expected: types::Bu
             return;
         }
     }
-    panic!("LUI {lui} did not reach version {expected} after upgrade");
+    panic!("canister {lui} did not reach version {expected} after upgrade");
 }
 
 /// Independent reimplementation of the canister's domain-tagged SHA-256 (`SHA-256(tag || parts)`),
@@ -384,8 +383,10 @@ fn cvdr_gate_a_frozen_wire_http_matches_candid() {
 /// E-2 / §11.7-2 — Pending → Available on the same receipt_id with no 404 in the gap.
 #[test]
 fn pending_then_available_no_404_in_the_gap() {
-    let mut wrapper = ENV.deref().get();
-    let TestEnv { env, canister_ids, .. } = wrapper.env();
+    // Step 9 flake isolation (ruling (b), point A): DEDICATED env — this test scans / mutates
+    // pending CVDR state that other pooled-env tests race on.
+    let mut owned_env = crate::setup::setup_new_env(None);
+    let TestEnv { env, canister_ids, .. } = &mut owned_env;
     let (user, user_auth) = register_user_and_include_auth(env, canister_ids);
     let lui = user.local_user_index;
 
@@ -568,8 +569,10 @@ fn concurrent_deletes_both_reach_awaiting_certificate() {
 /// proves timer -> outcall -> verify-before-store -> store with a mocked gateway response.
 #[test]
 fn self_finalization_captures_and_stores_via_mocked_outcall() {
-    let mut wrapper = ENV.deref().get();
-    let TestEnv { env, canister_ids, .. } = wrapper.env();
+    // Step 9 flake isolation (ruling (b), point A): DEDICATED env — this test scans / mutates
+    // pending CVDR state that other pooled-env tests race on.
+    let mut owned_env = crate::setup::setup_new_env(None);
+    let TestEnv { env, canister_ids, .. } = &mut owned_env;
     let (user, user_auth) = register_user_and_include_auth(env, canister_ids);
     let lui = user.local_user_index;
     let (_, base_frozen, _) = cvdr_metrics(env, lui);
@@ -628,8 +631,10 @@ fn self_finalization_captures_and_stores_via_mocked_outcall() {
 }
 
 /// INDEX capture plumbing under PocketIC: after a frozen package exists, the job POSTs
-/// `read_state` for `/module_hash`. PocketIC cannot mint a real NNS-rooted system-state
-/// certificate for that path, so this test proves (1) the outcall is issued, (2) an invalid
+/// `read_state` for `/module_hash`. This test covers the NEGATIVE store-gate legs (the positive leg,
+/// with a genuine PocketIC-signed certificate, is
+/// `cvdr_v2_upgrade_tests::stored_index_evidence_unblocks_upgrade_and_draft_finalises`): it proves
+/// (1) the outcall is issued, (2) an invalid
 /// gateway body is discarded (verify-before-store; count stays flat), and (3) after the 24h
 /// give-up window the job stops retrying.
 #[test]
@@ -926,9 +931,9 @@ fn export_cvdr_verify_e2e_fixture(env: &PocketIc, lui: CanisterId, receipt_id_he
 }
 
 /// NEGATIVE: the P2 export / parked-retry path is BANKED, not half-alive. A full v5 deletion
-/// must attempt NO receipts-canister `store` c2c (the dedicated canister's stored count never
-/// moves) and must never populate the durable parked/export-pending set (so the parked-retry
-/// drain has nothing and does not run) — verified as deltas, then re-verified after extra time.
+/// must never populate the durable parked/export-pending set (so the parked-retry drain has
+/// nothing and does not run) — verified as deltas, then re-verified after extra time. (The
+/// dedicated receipts canister itself was removed by R-3; the banked map is kept for stable layout.)
 #[test]
 #[ignore = "Slice 2/3: asserts released>=1 via finalize. The P2-banked property still holds cert-absent; re-enable/adapt when the store path lands."]
 fn p2_export_path_is_banked_not_half_alive() {
@@ -940,7 +945,6 @@ fn p2_export_path_is_banked_not_half_alive() {
     let lui = user.local_user_index;
 
     // Baselines (the test env is shared, so assert no NET change from this deletion).
-    let receipts_before = receipts_stored(env, canister_ids.receipts);
     let export_pending_before = lui_export_pending(env, lui);
 
     // Drive a complete v5 deletion.
@@ -956,13 +960,7 @@ fn p2_export_path_is_banked_not_half_alive() {
     assert!(released >= 1, "deletion completed via the v5 CVDR path");
     assert!(module_hash_is_none(env, &user), "user canister uninstalled by the v5 leg");
 
-    // P2 path provably untouched: no store c2c reached the dedicated receipts canister, and the
-    // durable parked/export-pending set was never populated.
-    assert_eq!(
-        receipts_stored(env, canister_ids.receipts),
-        receipts_before,
-        "v5 leg must attempt NO receipts-canister store c2c"
-    );
+    // P2 path provably untouched: the durable parked/export-pending set was never populated.
     assert_eq!(
         lui_export_pending(env, lui),
         export_pending_before,
@@ -973,68 +971,10 @@ fn p2_export_path_is_banked_not_half_alive() {
     env.advance_time(Duration::from_secs(60));
     tick_many(env, 15);
     assert_eq!(
-        receipts_stored(env, canister_ids.receipts),
-        receipts_before,
-        "no deferred/retried export ever fires (parked-retry job absent)"
-    );
-    assert_eq!(
         lui_export_pending(env, lui),
         export_pending_before,
         "parked/export-pending set stays empty over time"
     );
-}
-
-/// Upgrade-survivability: a deletion mid-flight at AwaitingCertificate survives a
-/// local_user_index upgrade (the durable draft is stable-backed and the commitment is
-/// re-published post-upgrade), then finalizes cleanly.
-///
-/// Runs on a DEDICATED env (built via `setup_new_env`, never popped from nor returned to the
-/// shared pool). The upgrade marks every LUI for a stop/start upgrade via a recurring user_index
-/// timer that outlives a test; on a pooled env that timer would later stop a LUI another test is
-/// mid-call on (`CanisterStopped`). Isolation removes both the inbound and outbound coupling.
-#[test]
-#[ignore = "Slice 2/3: the finalize tail. The §4 post_upgrade tree-rebuild + root re-assert has unit coverage; a cert-absent survival assertion can re-enable the front half in Slice 1."]
-fn draft_survives_upgrade_then_finalizes() {
-    let mut owned_env = crate::setup::setup_new_env(None);
-    let TestEnv {
-        env,
-        canister_ids,
-        controller,
-    } = &mut owned_env;
-    let (user, user_auth) = register_user_and_include_auth(env, canister_ids);
-    let lui = user.local_user_index;
-
-    delete_and_reach_awaiting(env, canister_ids, &user, &user_auth);
-    let (_, before_id, _, _) = find_servable_cvdr_live(env, lui);
-    let (drafts, released, awaiting) = cvdr_metrics(env, lui);
-    assert_eq!((drafts, released, awaiting), (1, 0, true), "awaiting before upgrade");
-
-    // Upgrade the local_user_index canister with the draft still in flight. Bump the version so
-    // the upgrade ACTUALLY runs (same version is skipped by `should_perform_upgrade`).
-    let mut new_wasm = crate::wasms::LOCAL_USER_INDEX.clone();
-    new_wasm.version = types::BuildVersion::new(0, 0, 1);
-    client::user_index::happy_path::upgrade_local_user_index_canister_wasm(env, *controller, canister_ids.user_index, new_wasm);
-    // Deterministically wait for the upgrade to COMPLETE (LUI reports the bumped version, Running).
-    wait_for_lui_version(env, lui, types::BuildVersion::new(0, 0, 1));
-
-    // The draft survived; the commitment is re-published so the certificate is available.
-    let (drafts, released, awaiting) = cvdr_metrics(env, lui);
-    assert_eq!(
-        (drafts, released, awaiting),
-        (1, 0, true),
-        "draft survives the upgrade, still awaiting"
-    );
-
-    let (_, after_id, certificate, witness) = find_servable_cvdr_live(env, lui);
-    assert_eq!(after_id, before_id, "same receipt across the upgrade");
-    assert!(matches!(
-        finalize(env, lui, after_id, certificate, witness),
-        finalize_cvdr::Response::Captured
-    ));
-
-    let (drafts, released, _) = cvdr_metrics(env, lui);
-    assert_eq!((drafts, released), (0, 1), "finalizes cleanly after the upgrade");
-    assert!(matches!(fetch_cvdr(env, lui, after_id), get_cvdr::Response::Available(_)));
 }
 
 /// SECURITY (spec §7 rules 3–5, HARD store-gate): a forged (garbage), tampered, or stale
@@ -1043,8 +983,10 @@ fn draft_survives_upgrade_then_finalizes() {
 /// subsequent valid submission still `Captured`s; the rejected attempts left the receipt intact.
 #[test]
 fn forged_or_stale_certificate_is_rejected() {
-    let mut wrapper = ENV.deref().get();
-    let TestEnv { env, canister_ids, .. } = wrapper.env();
+    // Step 9 flake isolation (ruling (b), point A): DEDICATED env — this test scans / mutates
+    // pending CVDR state that other pooled-env tests race on.
+    let mut owned_env = crate::setup::setup_new_env(None);
+    let TestEnv { env, canister_ids, .. } = &mut owned_env;
     let (user, user_auth) = register_user_and_include_auth(env, canister_ids);
     let lui = user.local_user_index;
     let (_, base_r, _) = cvdr_metrics(env, lui);
@@ -1288,46 +1230,6 @@ fn offline_verifier_round_trip_from_bytes() {
     let _ = receipt;
 }
 
-/// Captured executor provenance survives a mid-flight index upgrade. The draft is captured
-/// (incl. the executor module hash) BEFORE uninstall; the LUI is then really upgraded
-/// (post_upgrade runs); and the finalized receipt carries the CAPTURED executor hash, which
-/// `h_index` binds. (The test env ships a single LUI wasm, so pre/post module bytes are equal;
-/// the captured-wins-over-live semantics is additionally enforced in code — finalize reads the
-/// draft, never live state — and covered by the `h_index_binds_executor_module_hash` unit test.)
-#[test]
-#[ignore = "Slice 2/3: reads the captured executor hash back from a finalized/stored receipt. Captured-wins semantics has unit coverage (h_index_binds_executor_module_hash)."]
-fn captured_executor_hash_survives_mid_flight_upgrade() {
-    let mut owned_env = crate::setup::setup_new_env(None);
-    let TestEnv {
-        env,
-        canister_ids,
-        controller,
-    } = &mut owned_env;
-    let (user, user_auth) = register_user_and_include_auth(env, canister_ids);
-    let lui = user.local_user_index;
-    let _captured_executor =
-        sha256::sha256(&std::fs::read(crate::utils::local_bin().join("local_user_index.wasm.gz")).unwrap());
-
-    delete_and_reach_awaiting(env, canister_ids, &user, &user_auth);
-    let (_, before_id, _, _) = find_servable_cvdr_live(env, lui);
-
-    let mut new_wasm = crate::wasms::LOCAL_USER_INDEX.clone();
-    new_wasm.version = types::BuildVersion::new(0, 0, 2);
-    client::user_index::happy_path::upgrade_local_user_index_canister_wasm(env, *controller, canister_ids.user_index, new_wasm);
-    wait_for_lui_version(env, lui, types::BuildVersion::new(0, 0, 2));
-
-    let (_, after_id, certificate, witness) = find_servable_cvdr_live(env, lui);
-    assert_eq!(after_id, before_id, "same in-flight deletion across the upgrade");
-    assert!(matches!(
-        finalize(env, lui, after_id, certificate, witness),
-        finalize_cvdr::Response::Captured
-    ));
-    assert!(matches!(
-        fetch_cvdr(env, lui, after_id),
-        get_cvdr::Response::Available(get_cvdr::AvailablePackage::FrozenWire(_))
-    ));
-}
-
 /// Spec §11.4 prepare: RevealWire issued, `/cvdr` Pending, `/cvdr_live` does not serve Prepared.
 #[test]
 fn prepare_issues_reveal_pending_and_live_excludes_prepared() {
@@ -1340,7 +1242,13 @@ fn prepare_issues_reveal_pending_and_live_excludes_prepared() {
     assert_eq!(prepared.receipt_id.len(), 64);
     let reveal: serde_json::Value = serde_json::from_str(&prepared.reveal_wire_json).unwrap();
     assert_eq!(reveal["schema"], "openchatzd.cvdr.reveal_package");
+    assert_eq!(reveal["version"], 2, "RevealWire v2 (R-1: carries record_salt)");
     assert!(reveal["salt"].as_str().unwrap().len() == 64);
+    assert!(reveal["record_salt"].as_str().unwrap().len() == 64);
+    assert_ne!(
+        reveal["record_salt"], reveal["salt"],
+        "record_salt is an independent raw_rand draw"
+    );
     assert!(reveal["targets"].is_array());
 
     let receipt_id: [u8; 32] = hex::decode(&prepared.receipt_id).unwrap().try_into().unwrap();
@@ -1355,6 +1263,79 @@ fn prepare_issues_reveal_pending_and_live_excludes_prepared() {
     let again = prepare_deletion(env, &user);
     assert_eq!(again.receipt_id, prepared.receipt_id);
     assert_eq!(again.reveal_wire_json, prepared.reveal_wire_json);
+}
+
+/// R-1 / R-4 end to end on real canisters: the published body is RECEIPT_BODY_V2, its `record_id`
+/// is the salted V2 derivation the user can recompute from RevealWire, it is NOT derivable from the
+/// public UserId alone, and neither salt appears in the public body.
+#[test]
+fn published_body_is_v2_with_non_identifying_record_id() {
+    // DEDICATED env (never returned to the shared pool): this test leaves a receipt awaiting its
+    // certificate, which pooled-env tests that scan pending `/cvdr_live` outcalls would pick up.
+    let mut owned_env = crate::setup::setup_new_env(None);
+    let TestEnv { env, canister_ids, .. } = &mut owned_env;
+    let (user, user_auth) = register_user_and_include_auth(env, canister_ids);
+    let lui = user.local_user_index;
+
+    let prepared = prepare_deletion(env, &user);
+    let reveal: serde_json::Value = serde_json::from_str(&prepared.reveal_wire_json).unwrap();
+    let record_salt = hex::decode(reveal["record_salt"].as_str().unwrap()).unwrap();
+    let targets_salt = hex::decode(reveal["salt"].as_str().unwrap()).unwrap();
+
+    client::identity::happy_path::delete_user(env, &user_auth, canister_ids.identity);
+    tick_many(env, 10);
+
+    let live = cvdr_http(env, lui, &format!("/cvdr_live/{}", prepared.receipt_id));
+    assert_eq!(live.status_code, 200, "published receipt is served by /cvdr_live");
+    let live: serde_json::Value = serde_json::from_slice(&live.body).unwrap();
+    let body = hex::decode(live["receipt_body"].as_str().expect("receipt_body")).unwrap();
+
+    // RECEIPT_BODY_V2: tag ‖ receipt_id(32) ‖ nonce(32) ‖ len‖index ‖ len‖user ‖ record_id(32) ‖ seq(8) ‖ …
+    let tag = b"OPENCHATZD_RECEIPT_BODY_V2";
+    assert_eq!(&body[..tag.len()], tag);
+    let mut at = tag.len();
+    assert_eq!(hex::encode(&body[at..at + 32]), prepared.receipt_id);
+    at += 32;
+    let nonce = &body[at..at + 32];
+    at += 32;
+    let index_len = body[at] as usize;
+    assert_eq!(&body[at + 1..at + 1 + index_len], lui.as_slice());
+    at += 1 + index_len;
+    let user_len = body[at] as usize;
+    assert_eq!(&body[at + 1..at + 1 + user_len], user.canister().as_slice());
+    at += 1 + user_len;
+    let record_id = &body[at..at + 32];
+    at += 32;
+    let deletion_seq = &body[at..at + 8];
+    // V2 tail: h_user_pre(32) ‖ uninstall(8) ‖ committed(8) ‖ targets_count(4) ‖ targets_commitment(32)
+    assert_eq!(
+        body.len(),
+        at + 8 + 32 + 8 + 8 + 4 + 32,
+        "no h_index / commitment in the V2 body"
+    );
+
+    let user_principal: Principal = user.user_id.into();
+    assert_eq!(
+        record_id,
+        tagged(b"OPENCHATZD_RECORD_ID_USER_V2", &[&record_salt, user_principal.as_slice()]),
+        "RevealWire record_salt + UserId recompute the displayed record_id"
+    );
+    assert_ne!(
+        record_id,
+        tagged(b"OPENCHATZD_RECORD_ID_USER_V1", &[user_principal.as_slice()]),
+        "record_id must not be the retired UserId-only derivation (public join key)"
+    );
+    assert_eq!(
+        hex::encode(tagged(b"OPENCHATZD_CVDR_RECEIPT_V1", &[record_id, deletion_seq, nonce])),
+        prepared.receipt_id,
+        "receipt_id recomputes from displayed fields (R-5)"
+    );
+    for (name, secret) in [("record_salt", &record_salt), ("targets salt", &targets_salt)] {
+        assert!(
+            !body.windows(32).any(|w| w == secret.as_slice()),
+            "{name} leaked into the public body"
+        );
+    }
 }
 
 /// Spec §11.4: delete without prepare does not uninstall (prepare_required gate).
@@ -1376,8 +1357,10 @@ fn delete_without_prepare_does_not_uninstall() {
 /// Spec §11.4: after deletion completes the user is de-registered — prepare is rejected.
 #[test]
 fn prepare_fails_after_user_deleted() {
-    let mut wrapper = ENV.deref().get();
-    let TestEnv { env, canister_ids, .. } = wrapper.env();
+    // Step 9 flake isolation (ruling (b), point A): DEDICATED env — this test scans / mutates
+    // pending CVDR state that other pooled-env tests race on.
+    let mut owned_env = crate::setup::setup_new_env(None);
+    let TestEnv { env, canister_ids, .. } = &mut owned_env;
     let (user, auth) = register_user_and_include_auth(env, canister_ids);
 
     delete_and_reach_awaiting(env, canister_ids, &user, &auth);

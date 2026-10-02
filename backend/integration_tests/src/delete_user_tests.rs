@@ -14,8 +14,11 @@ use types::{Empty, Milliseconds};
 #[test_case(299_999, true)]
 #[test_case(300_001, false)]
 fn delete_user_succeeds_if_signed_in_recently(delay: Milliseconds, should_delete_user: bool) {
-    let mut wrapper = ENV.deref().get();
-    let TestEnv { env, canister_ids, .. } = wrapper.env();
+    // Step 9 flake isolation (ruling (b), point A): DEDICATED env — the final `module_hash` check
+    // gives the Index's serialised delete queue 10 ticks, which the pooled env's concurrent
+    // deletions can exhaust (observed 3× in 10 full-suite runs, always this parametrisation).
+    let mut owned_env = crate::setup::setup_new_env(None);
+    let TestEnv { env, canister_ids, .. } = &mut owned_env;
 
     let (user, user_auth) = register_user_and_include_auth(env, canister_ids);
 
@@ -69,12 +72,13 @@ fn delete_user_succeeds_if_signed_in_recently(delay: Milliseconds, should_delete
 
 #[test]
 fn deleted_user_removed_from_groups_and_communities() {
-    let mut wrapper = ENV.deref().get();
+    // Step 9 flake isolation (ruling (b), point A): DEDICATED env.
+    let mut owned_env = crate::setup::setup_new_env(None);
     let TestEnv {
         env,
         canister_ids,
         controller,
-    } = wrapper.env();
+    } = &mut owned_env;
 
     let user1 = client::register_diamond_user(env, canister_ids, *controller);
     let (user2, user2_auth) = register_user_and_include_auth(env, canister_ids);

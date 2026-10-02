@@ -218,17 +218,9 @@ async fn fetch_live(self_id: CanisterId, receipt_id: &[u8; 32], max_response_byt
     // `*.raw.localhost:<webserver>` (same host the browser uses for bearer `/cvdr` polls).
     let test_mode = read_state(|state| state.data.test_mode);
     let url = if test_mode {
-        format!(
-            "http://{}.raw.localhost:8080/cvdr_live/{}",
-            self_id,
-            hex::encode(receipt_id)
-        )
+        format!("http://{}.raw.localhost:8080/cvdr_live/{}", self_id, hex::encode(receipt_id))
     } else {
-        format!(
-            "https://{}.raw.icp0.io/cvdr_live/{}",
-            self_id,
-            hex::encode(receipt_id)
-        )
+        format!("https://{}.raw.icp0.io/cvdr_live/{}", self_id, hex::encode(receipt_id))
     };
     let result = http_outcall::non_replicated_get(url, max_response_bytes).await.ok()?;
 

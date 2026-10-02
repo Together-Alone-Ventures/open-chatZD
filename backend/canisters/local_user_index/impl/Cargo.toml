@@ -65,8 +65,6 @@ stable_memory_map = { path = "../../../libraries/stable_memory_map" }
 timer_job_queues = { path = "../../../libraries/timer_job_queues" }
 tracing = { workspace = true }
 types = { path = "../../../libraries/types" }
-receipts_canister = { path = "../../receipts/api" }
-receipts_canister_c2c_client = { path = "../../receipts/c2c_client" }
 user_canister = { path = "../../user/api" }
 user_canister_c2c_client = { path = "../../user/c2c_client" }
 user_ids_set = { path = "../../../libraries/user_ids_set" }

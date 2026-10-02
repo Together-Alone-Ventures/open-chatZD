@@ -1,0 +1,13 @@
+{
+  "vector": "pv5-001",
+  "kind": "positive",
+  "formula": "receipt_id = SHA256(\"OPENCHATZD_CVDR_RECEIPT_V1\" ‖ record_id ‖ deletion_seq(u64 BE) ‖ nonce)",
+  "inputs": {
+    "record_id": "dad2610907664d6711d4788fdea16dafde67c941bc11ca52ad1cfc193c21f97d",
+    "deletion_seq": 5,
+    "nonce": "0202020202020202020202020202020202020202020202020202020202020202"
+  },
+  "expected": {
+    "receipt_id": "ad27c3c80ce173e8b5de4b66d45b176852037dadacc16ce6af1f098eda8b5337"
+  }
+}

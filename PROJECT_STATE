@@ -1,78 +1,10 @@
-# PROJECT_STATE — OpenChatZD × ICP-DELETE-LEAF (MKTd02)
+# PROJECT_STATE — RETIRED (2026-09-22)
 
-_Continuity anchor. Update at each packet boundary. Append session lessons to `MILESTONE_LOG.md`._
-_Last refreshed 2026-06-16 against verified repo state (engine tag diff + open-chatZD tree)._
+This continuity anchor described the June 2026 MKTd02/Leaf integration cycle (last refreshed
+2026-06-16; full text in git history at `7b5ac7ccb`). It is retired by the suite-v5 retrofit.
 
-## Where we are
-- **Repo (integration):** `open-chatZD` — `origin/master` HEAD `431f7c1fe` (will be +1 after the
-  docs-honesty commit this refresh is part of). **`git fetch` + confirm HEAD before editing.** The P1
-  implementation is the first backend change and is **uncommitted** in the working tree (13 modified +
-  10 untracked `mktd_*` / deliverable files) — do not commit it via the docs commit.
-- **Engine:** `ICP-Delete-Leaf` — released **`mktd02-v0.4.1`** (annotated tag → commit `921d710c`).
-  Supersedes v0.4.0 as the P1 entry pin. The re-pin (ic-cdk 0.17→0.18 / is 0.6→0.7) is **diff-verified
-  patch-class (1d holds)** and **E4-lite SIGNED OFF by G (all-OK)**. Durable evidence in-repo:
-  `MKTd02_v0.4.1_RePin_Deliverable.md`, `P0x_v0.4.1_RePin_BuildPacket`, `RELEASES.md` v0.4.1 entry.
-  Canonical repo is `ICP-Delete-Leaf`; it is the authoritative source of truth for MKTd02.
-- **Consumer:** `DaffyDefs` — still pinned to engine **v0.4.0**. **R2 pending:** move to v0.4.1 / is-0.7,
-  build, re-run proof pass (single engine line, per G 1b). P1-acceptance gate, not a P1-build blocker.
-- **Gate:** `OpenChatZD_Integration_Gate_ACCEPTED.md` — accepted (G).
-- **Decision record:** `v0.4.1_RePin_Decision_Request` — **RESOLVED**, G rulings + diff-verified
-  execution status folded in (prior "RESOLVED" commit was mode-only; corrected this session).
-- **Current packet:** **P1 — OpenChatZD user-canister adapter + A/B/C wrappers** (re-point + build).
-  Spec: `P1_BuildPacket_Brief`. Engine re-pin (P0.x) is **done** and behind us.
-
-## Next action
-**R3 — re-point P1 to the released engine and build.** In order:
-1. Re-point the P1 engine pin **v0.4.0 → v0.4.1** (workspace + `user/api` + `user/impl` Cargo manifests).
-   Tag resolves (confirmed). The open-chatZD workspace is already ic-cdk 0.18 / is-0.7, so this dissolves
-   the original resolution-fatal compile blocker.
-2. **Clean build** (the P1 code's first real compile — it was statically reasoned only).
-3. Run the **10 PocketIC cases** (round-trip A→sim-B→C, owner-guard rejection, lock-blocks-mutation,
-   A2 rejection passthrough, `record_id` shape, `base_memory_id` no-collision, pending-state queries,
-   D8 resumable-failure).
-4. **CD independent review + Claude diff review** on the now-compiling code → **human-in-the-loop commit**.
-5. **R2 — DaffyDefs v0.4.1 compat** confirmed (P1-acceptance gate).
-No commit/push without explicit clearance through the review ladder.
-
-## P1 entry-condition status
-- **E1** Engine entry pin **superseded v0.4.0 → v0.4.1** and satisfied (released, diff-verified patch-class,
-  E4-lite signed). ✅
-- **E2** O6 = 100–107 / 8 slots. ✅ (G E4: `storage.rs` base+5 lock, base+6 receipts, base+7 tombstoned_at;
-  re-confirmed unchanged under is-0.7 in the v0.4.1 diff.)
-- **E3** Controller-path preservation. ✅ (G E4 property 6; unchanged in v0.4.1.)
-- **E4** G adversarial audit of A2 host-auth path. ✅ GO. **E4-lite** re-pass under is-0.7 ✅ all-OK.
-- **E5** CC read-only recon. ✅ Key facts: user canister uses only MemoryId {0, 3} → `base_memory_id = 100`
-  safe; owner-guard = `caller_is_owner`; PII split across heap `Data` + stable map (id 3);
-  `certified_data`/`data_certificate()` do **not** exist on the user canister (Phase B read side must be
-  built, model on `identity`); delete/uninstall in `local_user_index/delete_users.rs:76` (P3-owned).
-
-## Accepted decisions (gate D1–D8) — unchanged
-- **D1** Scope: per-user `user` canister PII only; shared-canister residuals disclosed.
-- **D2** Sequence: Phase A → B (ingress query) → C (host-authorized) → store → display/download →
-  `deleteCurrentUser` → uninstall.
-- **D3** Verification profile: V1–V3 archival; **V4 N/A** by design. (P1 interim: **V1–V2, V3 pending** —
-  see P1A.)
-- **D4** Dedicated receipts canister + best-effort user export/download.
-- **D5** User-facing receipt display/download is a hard requirement.
-- **D6** Phase C additive non-public `finalize_receipt_after_host_authorization`; controller-only default
-  unchanged. Implemented in P0 (A2); wrapped in P1 (S4).
-- **D7** `record_id` additive host-supplied; OpenChatZD supplies a stable, non-raw, domain-tagged
-  reference, never `caller()`. Engine support in P0 (A1); derivation in P1 (S5).
-- **D8** Phase A = point of no return; blocking retry/recovery; no uninstall before confirmed storage;
-  recovery owned by **P3**. P1 must not foreclose it (S7/S8).
-
-## Carried conditions (open)
-- **O2** — residual disclosure facts (identity auth-principals; group/community authored messages;
-  storage blob vs metadata). Gates **P4** receipt-screen copy. (Open — does not block P1.)
-- **2a (G ruling)** — P4/RTS receipt copy must say *tombstone applied + scheduled purge, physical erasure
-  on uninstall*; must not imply message bodies provably deleted at receipt time. Carry to P4.
-- **3a/3b (G ruling)** — P1 receipts disclosed as **V1–V2, V3 pending**; full V3 in **P1A — Module-Hash
-  Wiring / V3 Enablement** (installer-supplied module hash via `local_user_index`).
-- **O6** — RESOLVED in P0: 100–107 / 8 slots. Kept for traceability.
-
-## Packet sequence
-P0 ✅ (engine, v0.4.0) → **P0.x ✅ (engine re-pin, `v0.4.1`, E4-lite signed)** →
-**P1 (user-canister adapter + A/B/C wrappers) ← current (R3: re-point + build + test)** →
-R2 (DaffyDefs v0.4.1 compat) → P2 (receipts canister) → P3 (sequencing guard + recovery) →
-P4 (frontend receipt UX; 2a copy) → P5 (end-to-end proof).
-**P1A (Module-Hash Wiring / V3 Enablement)** — named follow-up, sequence TBD.
+Live state now lives in:
+- `RELEASES.md` — release entries (current: v0.8.0, untagged), module hashes, verifier pin.
+- `CVDR_BUILD_SPEC.md` — governing build spec (suite v5).
+- `docs/dev/v5/BASELINE_c744de1.md` — baseline, design record and per-step evidence.
+- `OpenChatZD_v5_Brief_B1` (Stef's working tree, outside this repo) — rulings R-1…R-6, C2.
