@@ -247,3 +247,24 @@ ed846b5bfb1ce5054f5eb383cbb54339d35ad8afad705969befbe27f1178e4d2  user_index.was
 | CVDR-Verify CI at X | `bash ./ci.sh` (open-chatZD visible as its sibling) | exit 0 — fmt, clippy clean; audit zero vulnerabilities; 157 passed, 0 failed (148 + the 9-test corpus acceptance re-run); reverse label guard ran against open-chatZD |
 | CVDR-Verify corpus consumer | `cargo test --locked --test openchatzd_v5_corpus` at X | 7 passed, 0 failed |
 | Fresh `PortablePackageV3` | from the `cvdr_` run, sha256 `4a3fe8749f914a0f900a827b35c323c5f21de8e7135098e0d5a409214b75b2be`, verified with X `--allow-fixture-root-key` | exit 0 — `validity: PASS`, `V3A_PASS`, timing `BEFORE_COMMITMENT_CERTIFICATE`, certified module_hash `bfcc1346…` = built `local_user_index`; without the flag `validity: FAIL` (exit 1) |
+
+## Baseline wasms for the ignored r3 upgrade tests
+
+Authoritative identity: `c744de1a1124f9320354946d83cfc3da68133967`, canonical all-canister Docker
+recipe (`docs/dev/v5/BASELINE_c744de1.md` §3.2). The four hashes below are pinned in
+`backend/integration_tests/src/wasms.rs` (`BASELINE_C744DE1_SHA256`). They are what
+`r3_upgrade_tests::r3_upgrade_from_c744de1_keeps_state_and_function` and
+`cvdr_v2_upgrade_tests::v1_in_flight_draft_blocks_upgrade_then_terminal_draft_survives_it` load.
+
+| Asset filename | sha256 |
+|---|---|
+| `openchat_installer.wasm.gz` | `81e2aa0b295122bd66efefcfc7dcda72c1910b9378486f2682e63d33d4177b64` |
+| `user_index.wasm.gz` | `f4c2d4c98fb9e5e56ab2f099859c35f237b3fbae3a8b66a858f11da53b053357` |
+| `local_user_index.wasm.gz` | `83601cf8e1c35f487011c94eb9a02519a785755240b175462bbf04264396a601` |
+| `user.wasm.gz` | `eec4762080e2bdd941cf3f9dcb8530665d6dfa9d2a8a9d81828ab4d066b80b45` |
+
+The files on release `baseline-c744de1-wasms` are the retained CD baseline artefacts. Their
+SHA-256 values match the canonical all-canister c744de1 build hashes above. The hash equality is the
+evidence; the release is transport only, and the release page is not part of the trust model. The
+`upgrade-baseline` job accepts a downloaded file only if its SHA-256 equals a pin in `wasms.rs`, and
+`wasms::baseline_c744de1` checks again on load.

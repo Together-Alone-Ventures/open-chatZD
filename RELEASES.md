@@ -101,6 +101,9 @@ binary output in `docs/dev/v5/STEP10_E2E_VERIFY.txt` (Step 10 working-tree wasms
 `local_user_index` below; both ignored c744de1 upgrade tests pass. Per-package counts:
 the evidence file.
 
+**CI scope:** PR CI no longer supplies the PocketIC gate; the mandatory CD re-gate does, and green
+GitHub CI is not the full release gate.
+
 **Storage census:** MemoryIds 0, 3, 4 (retained), 5–6 (reserved), 7, 8–11, 12–14; 100–107
 reserved by R-3, never reused. **Operators:** `docs/dev/v5/OPERATOR_NOTES.md`.
 
