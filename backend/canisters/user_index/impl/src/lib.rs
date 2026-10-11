@@ -363,10 +363,6 @@ struct Data {
     pub proposals_bot_canister_id: CanisterId,
     pub airdrop_bot_canister_id: CanisterId,
     pub online_users_canister_id: CanisterId,
-    /// P2: durable receipts canister id, propagated to local_user_index init args
-    /// (§5, env-driven). Additive; `None` on upgrade from a pre-P2 wasm.
-    #[serde(default)]
-    pub receipts_canister_id: Option<CanisterId>,
     pub canisters_requiring_upgrade: CanistersRequiringUpgrade,
     pub total_cycles_spent_on_canisters: Cycles,
     pub cycles_dispenser_canister_id: CanisterId,
@@ -428,7 +424,6 @@ impl Data {
         proposals_bot_canister_id: CanisterId,
         airdrop_bot_canister_id: CanisterId,
         online_users_canister_id: CanisterId,
-        receipts_canister_id: Option<CanisterId>,
         cycles_dispenser_canister_id: CanisterId,
         storage_index_canister_id: CanisterId,
         escrow_canister_id: CanisterId,
@@ -453,7 +448,6 @@ impl Data {
             proposals_bot_canister_id,
             airdrop_bot_canister_id,
             online_users_canister_id,
-            receipts_canister_id,
             cycles_dispenser_canister_id,
             canisters_requiring_upgrade: CanistersRequiringUpgrade::default(),
             total_cycles_spent_on_canisters: 0,
@@ -571,7 +565,6 @@ impl Default for Data {
             proposals_bot_canister_id: Principal::anonymous(),
             airdrop_bot_canister_id: Principal::anonymous(),
             online_users_canister_id: Principal::anonymous(),
-            receipts_canister_id: None,
             canisters_requiring_upgrade: CanistersRequiringUpgrade::default(),
             cycles_dispenser_canister_id: Principal::anonymous(),
             total_cycles_spent_on_canisters: 0,

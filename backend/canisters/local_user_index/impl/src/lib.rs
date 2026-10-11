@@ -59,7 +59,6 @@ mod memory;
 mod model;
 mod queries;
 mod updates;
-mod wasm_hash;
 
 const CHILD_CANISTER_INITIAL_CYCLES_BALANCE: Cycles = CYCLES_REQUIRED_FOR_UPGRADE + CHILD_CANISTER_TOP_UP_AMOUNT; // 0.5T cycles
 const CHILD_CANISTER_TOP_UP_AMOUNT: Cycles = 200_000_000_000; // 0.2T cycles
@@ -507,6 +506,12 @@ impl RuntimeState {
             cvdr_drafts_in_flight: self.data.cvdr.draft_count(),
             cvdr_released_count: self.data.cvdr.frozen_package_count(),
             cvdr_index_evidence_count: self.data.cvdr.index_evidence_count(),
+            cvdr_upgrade_blockers: self
+                .data
+                .cvdr
+                .evidence_capturable(now.saturating_mul(1_000_000), self.data.cvdr_code_epoch_started_at_ns)
+                .len() as u64,
+            cvdr_index_module_hash_expectation_mismatches: self.data.cvdr_index_module_hash_expectation_mismatches,
             cvdr_awaiting_certificate_count: self.data.cvdr.awaiting_certificate_count(),
             cvdr_awaiting_certificate: self.data.cvdr.awaiting_certificate_count() > 0,
             cvdr_failed_stuck_count: self.data.cvdr.finalization_terminal_counts().1,
@@ -557,13 +562,20 @@ struct Data {
     pub global_users: GlobalUserMap,
     pub bots: BotsMap,
     pub child_canister_wasms: ChildCanisterWasms<ChildCanisterType>,
+    // R-2: deploy-supplied EXPECTED module hash of this index (refreshed on every post_upgrade).
+    // Ops-integrity guard only: compared with the certified `/module_hash` at evidence capture
+    // (warning + counter on mismatch). Never stored as evidence, never in a receipt preimage.
+    // (Replaces the retired `executor_module_hash`; an old stored value is simply dropped.)
     #[serde(default)]
-    pub user_canister_module_hash: Hash,
-    // CVDR v5: this index's OWN deployed module hash (gzip upload hash), deploy-supplied at init
-    // and refreshed on every post_upgrade. The captured H_index executor provenance — never read
-    // from inside the canister, never computed from receipt fields.
+    pub expected_index_module_hash: Option<Hash>,
     #[serde(default)]
-    pub executor_module_hash: Hash,
+    pub cvdr_index_module_hash_expectation_mismatches: u64,
+    // R-2 interlock: IC time (ns) at which the CURRENTLY installed wasm started running on this
+    // canister (set by init / every successful post_upgrade). Index evidence is only captured for —
+    // and upgrades are only blocked by — receipts uninstalled at or after it. 0 = written by a wasm
+    // that predates the interlock (treated conservatively: every pending receipt counts).
+    #[serde(default)]
+    pub cvdr_code_epoch_started_at_ns: u64,
     pub user_index_canister_id: CanisterId,
     pub group_index_canister_id: CanisterId,
     pub notifications_index_canister_id: CanisterId,
@@ -572,11 +584,6 @@ struct Data {
     pub cycles_dispenser_canister_id: CanisterId,
     pub escrow_canister_id: CanisterId,
     pub online_users_canister_id: CanisterId,
-    /// P2: durable receipts canister for the pre-uninstall CVDR export (§5,
-    /// env-driven). `None` = export disabled. Additive; defaults to `None` on
-    /// upgrade from a pre-P2 wasm.
-    #[serde(default)]
-    pub receipts_canister_id: Option<CanisterId>,
     pub internet_identity_canister_id: CanisterId,
     pub website_canister_id: CanisterId,
     pub users_requiring_upgrade: CanistersRequiringUpgrade,
@@ -664,7 +671,6 @@ impl Data {
         escrow_canister_id: CanisterId,
         event_relay_canister_id: CanisterId,
         online_users_canister_id: CanisterId,
-        receipts_canister_id: Option<CanisterId>,
         internet_identity_canister_id: CanisterId,
         website_canister_id: CanisterId,
         canister_pool_target_size: u16,
@@ -679,8 +685,9 @@ impl Data {
             local_communities: LocalCommunityMap::default(),
             global_users: GlobalUserMap::default(),
             child_canister_wasms: ChildCanisterWasms::default(),
-            user_canister_module_hash: Hash::default(),
-            executor_module_hash: Hash::default(),
+            expected_index_module_hash: None,
+            cvdr_index_module_hash_expectation_mismatches: 0,
+            cvdr_code_epoch_started_at_ns: 0,
             user_index_canister_id,
             group_index_canister_id,
             notifications_index_canister_id,
@@ -689,7 +696,6 @@ impl Data {
             cycles_dispenser_canister_id,
             escrow_canister_id,
             online_users_canister_id,
-            receipts_canister_id,
             internet_identity_canister_id,
             website_canister_id,
             users_requiring_upgrade: CanistersRequiringUpgrade::default(),
@@ -783,6 +789,8 @@ pub struct Metrics {
     pub cvdr_drafts_in_flight: u64,
     pub cvdr_released_count: u64,
     pub cvdr_index_evidence_count: u64,
+    pub cvdr_upgrade_blockers: u64,
+    pub cvdr_index_module_hash_expectation_mismatches: u64,
     pub cvdr_awaiting_certificate_count: u64,
     pub cvdr_awaiting_certificate: bool,
     pub cvdr_failed_stuck_count: u64,

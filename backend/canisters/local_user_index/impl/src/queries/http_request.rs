@@ -74,7 +74,7 @@ fn http_request(request: HttpRequest) -> HttpResponse {
 
     // CVDR public serving (spec §11.1/§11.2): `GET /cvdr/<receipt_id>` PATH FORM ONLY.
     // Query form `/cvdr?receipt_id=...` is NOT served.
-    // Available FrozenWire | Available PortablePackageV2 | Pending 202 | Unknown 404 | malformed 400.
+    // Available FrozenWire | Available PortablePackageV3 | Pending 202 | Unknown 404 | malformed 400.
     fn get_cvdr_http(receipt_id_hex: &str, state: &RuntimeState) -> HttpResponse {
         let Some(receipt_id) = parse_receipt_id(receipt_id_hex) else {
             return cvdr_json_response(400, CVDR_BAD_REQUEST_BODY.as_bytes().to_vec());

@@ -1,5 +1,10 @@
 # P0.x — v0.4.1 Engine Re-Pin + P1 Scope Decisions (DECISION REQUEST for G)
 
+> **HISTORICAL (suite-v5 retrofit, 2026-09-22).** Records the June 2026 MKTd02/Leaf integration cycle
+> (user-canister adapter, engine re-pin). Superseded by the suite-v5 CVDR-on-Index design — ruling R-3
+> removed the ceremonial MKTd02/MKTd03 dependency; see `CVDR_BUILD_SPEC.md`, `docs/dev/v5/BASELINE_c744de1.md`
+> and `RELEASES.md`. Kept verbatim for the record; not a live instruction.
+
 **Type:** Decision request (gate companion). **Status:** RESOLVED — G ruled 2026-06-11;
 1c E4-lite signed off by G 2026-06-12 (see Execution status).
 **Author:** Claude. **Grounding:** CC P1 implementation pass (inspect-and-propose, uncommitted in the

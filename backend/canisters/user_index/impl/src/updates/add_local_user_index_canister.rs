@@ -108,9 +108,8 @@ fn prepare(args: &Args, state: &mut RuntimeState) -> Result<PrepareResult, Respo
             user_canister_wasm_hash: user_canister_wasm.wasm_hash,
             init_args: local_user_index_canister::init::Args {
                 wasm_version: canister_wasm.wasm.version,
-                // CVDR v5: deploy-supplied executor provenance — the index's own deployed module
-                // hash (gzip upload hash) at install.
-                executor_module_hash: canister_wasm.wasm_hash,
+                // R-2: expected module hash of the index (gzip upload hash) — guard only.
+                expected_index_module_hash: Some(canister_wasm.wasm_hash),
                 user_index_canister_id: state.env.canister_id(),
                 group_index_canister_id: state.data.group_index_canister_id,
                 notifications_index_canister_id: state.data.notifications_index_canister_id,
@@ -120,7 +119,6 @@ fn prepare(args: &Args, state: &mut RuntimeState) -> Result<PrepareResult, Respo
                 escrow_canister_id: state.data.escrow_canister_id,
                 event_relay_canister_id: state.data.event_store_client.info().event_store_canister_id,
                 online_users_canister_id: state.data.online_users_canister_id,
-                receipts_canister_id: state.data.receipts_canister_id,
                 internet_identity_canister_id: state.data.internet_identity_canister_id,
                 website_canister_id: state.data.website_canister_id,
                 video_call_operators: state.data.video_call_operators.clone(),

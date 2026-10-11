@@ -105,9 +105,9 @@ async fn perform_upgrade(canister_to_upgrade: NextCanisterToUpgrade) {
             deposit_cycles_if_needed: false,
             args: candid::encode_one(&local_user_index_canister::post_upgrade::Args {
                 wasm_version: to_version,
-                // CVDR v5: deploy-supplied executor provenance — the index's own newly-deployed
-                // module hash (the gzip upload hash being installed here).
-                executor_module_hash: canister_to_upgrade.new_wasm.module.hash(),
+                // R-2: the module hash we EXPECT the index to run (the gzip upload hash being
+                // installed here) — an ops-integrity guard on the index side, never evidence.
+                expected_index_module_hash: Some(canister_to_upgrade.new_wasm.module.hash()),
             })
             .unwrap(),
             mode: CanisterInstallMode::Upgrade(None),

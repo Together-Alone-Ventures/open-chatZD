@@ -1,0 +1,16 @@
+{
+  "vector": "pv5-002",
+  "kind": "positive",
+  "formula": "record_id = SHA256(\"OPENCHATZD_RECORD_ID_USER_V2\" ‖ record_salt(32) ‖ canonical UserId principal bytes)  (R-1; non-identifying)",
+  "inputs": {
+    "record_salt": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+    "user_id_principal": "l2hgx-oicai-baeaq-caiba-eaq",
+    "user_id_principal_bytes": "02020202020202020202"
+  },
+  "expected": {
+    "record_id": "dad2610907664d6711d4788fdea16dafde67c941bc11ca52ad1cfc193c21f97d"
+  },
+  "must_not_equal": {
+    "retired_v1_derivation": "a43d7ae8f10e02b2fd5b218a93f315ad16973ce77986756f0d08a5e667c6c8f0"
+  }
+}

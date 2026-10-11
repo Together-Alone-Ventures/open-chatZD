@@ -1,0 +1,15 @@
+{
+  "corpus": "openchatzd-v5",
+  "generated_by": "local_user_index_canister_impl::model::cvdr_vectors (hash-gated; OPENCHATZD_WRITE_VECTORS=1 to rewrite)",
+  "files": {
+    "nv5-001-old_tag_and_prefix_dispatch.json": "0b89b67585165e7bb243343165ade9130eaf476df6e5f24b9a2e2601cb303f55",
+    "nv5-002-altered_receipt_id.json": "8abd21d9c231c213c49955101320336927d3c9703d821b6031fea79aa4dc3599",
+    "nv5-003-identifying_record_id.json": "3fccab59e0fba38b8fc41c62e68d4923f5f7b522d8e5273c9160fbe0183b7b3a",
+    "nv5-004-module_hash_in_preimage_or_mismatched_evidence.json": "6ddad7c39ad1decfd90e28eb6b95b4155c23ce3b441f9f10825aa5a3e3e4d95c",
+    "nv5-005-altered_body_field.json": "0a4b5bfa095170c02631093f467d9b9d786636b83fba3c041f67d001fad42c7c",
+    "pv5-001-receipt_id.json": "1a693a92c654db0acbe67909a90974c5fcda1ebf75bb56e32f505c014a65f912",
+    "pv5-002-record_id_v2.json": "78db7addfbe00f72818f77ce91503e037944633fd58a69756ebe2908159dc066",
+    "pv5-003-receipt_body_v2.json": "8073680c43c884ccef93c8d8758258325e7c6479f9618066703992300e5fb3b6",
+    "pv5-004-canonical_package.json": "be49c3aeda28665b949730b6eba90ab4f05a8e10abe99a2d5c76b7c4dfa4c363"
+  }
+}

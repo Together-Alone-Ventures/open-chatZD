@@ -1,5 +1,10 @@
 # P1 — OpenChatZD User-Canister MKTd02 Integration — DELIVERABLE (inspect-and-propose)
 
+> **HISTORICAL (suite-v5 retrofit, 2026-09-22).** Records the June 2026 MKTd02/Leaf integration cycle
+> (user-canister adapter, engine re-pin). Superseded by the suite-v5 CVDR-on-Index design — ruling R-3
+> removed the ceremonial MKTd02/MKTd03 dependency; see `CVDR_BUILD_SPEC.md`, `docs/dev/v5/BASELINE_c744de1.md`
+> and `RELEASES.md`. Kept verbatim for the record; not a live instruction.
+
 **Mode:** inspect-and-propose only. This is a **proposed diff (uncommitted)** + artifacts.
 No commit/push/branch. Claude reviews → CD independent review → human-in-the-loop commit.
 **Engine pin:** `ICP-Delete-Leaf` @ `mktd02-v0.4.0` (zombie-core `zombie-core-v0.3.1`).

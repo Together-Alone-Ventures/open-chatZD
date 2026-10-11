@@ -76,40 +76,35 @@ pub(crate) async fn capture_prepared_draft(user_id: UserId, canister_id: Caniste
         Err(_) => return Err("canister_status_unavailable"),
     };
 
-    let record_id = cvdr::record_id_for(user_id);
-    let (deletion_seq, nonce, now, index_canister_id, executor_module_hash) = mutate_state(|state| {
+    // R-1: `record_salt` is sampled ONCE here (management-canister `raw_rand`), before the receipt
+    // identity is formed, and persisted with the draft; a re-issue returns the stored draft. It is
+    // independent of the targets `salt` (a separate `raw_rand` draw — never shared between the two).
+    let record_salt = utils::canister::get_random_seed().await;
+    let salt = utils::canister::get_random_seed().await;
+
+    let record_id = cvdr::record_id_v2(&record_salt, user_id);
+    let (deletion_seq, nonce, now, index_canister_id) = mutate_state(|state| {
         let seq = state.data.cvdr_next_deletion_seq;
         state.data.cvdr_next_deletion_seq = seq.saturating_add(1);
         let mut nonce = [0u8; 32];
         state.env.rng().fill_bytes(&mut nonce);
-        (
-            seq,
-            nonce,
-            state.env.now(),
-            state.env.canister_id(),
-            state.data.executor_module_hash.to_vec(),
-        )
+        (seq, nonce, state.env.now(), state.env.canister_id())
     });
 
     let h_user_pre = cvdr::h_user_pre(canister_id, &module_hash_pre);
-    let h_index = cvdr::h_index(index_canister_id, &executor_module_hash);
-    let commitment = cvdr::commitment(&record_id, deletion_seq, &h_user_pre, &h_index, canister_id);
     let receipt_id = cvdr::receipt_id_for(&record_id, deletion_seq, &nonce);
-    let salt = utils::canister::get_random_seed().await;
 
     let draft = CvdrDraft {
         user_id,
         user_canister_id: canister_id,
         index_canister_id,
+        record_salt: Some(record_salt),
         record_id,
         deletion_seq,
         nonce,
         receipt_id,
         module_hash_pre,
-        executor_module_hash,
         h_user_pre,
-        h_index,
-        commitment,
         salt,
         canisters_to_notify,
         uninstall_completed_at: 0,
@@ -120,6 +115,15 @@ pub(crate) async fn capture_prepared_draft(user_id: UserId, canister_id: Caniste
         attempt: 0,
         stage: DraftStage::Prepared,
     };
-    mutate_state(|state| state.data.cvdr.upsert_draft(draft.clone()));
-    Ok(draft)
+    // First-wins across the awaits above: a concurrent prepare that already stored its draft must
+    // not be overwritten — its RevealWire (`record_salt`, `salt`) may already be in the user's hands,
+    // and R-1 requires the salt to be sampled once and never regenerated.
+    mutate_state(|state| match state.data.cvdr.get_draft(&canister_id) {
+        Some(existing) if existing.stage == DraftStage::Prepared => Ok(existing),
+        Some(_) => Err("deletion_already_in_progress"),
+        None => {
+            state.data.cvdr.upsert_draft(draft.clone());
+            Ok(draft)
+        }
+    })
 }

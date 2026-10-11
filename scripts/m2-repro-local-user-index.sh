@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # M2: two clean Docker builds of local_user_index; compare gzip wasm SHA-256.
 #
-# Requires Docker + BuildKit and a GitHub token with read access to private
-# Together-Alone-Ventures/ICP-Delete-Leaf:
-#   export GH_TOKEN=...          # or GITHUB_TOKEN, or `gh auth login`
+# Requires Docker + BuildKit (no token: every git source in Cargo.lock is public since R-3):
 #   ./scripts/m2-repro-local-user-index.sh
+# Single-canister recipe — a determinism check, not a publishable hash (CVDR_BUILD_SPEC.md §8).
 #
 # Toolchain/ic-wasm layers are cached; only source+wasm is forced twice via
 # distinct --build-arg build_nonce (no full --no-cache).
@@ -15,31 +14,6 @@ SCRIPT_DIR=$(dirname "$SCRIPT")
 cd "$SCRIPT_DIR/.."
 
 ./scripts/check-docker-is-running.sh || exit 1
-
-resolve_gh_token() {
-  if [[ -n "${GH_TOKEN:-}" ]]; then
-    printf '%s' "$GH_TOKEN"
-    return 0
-  fi
-  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-    printf '%s' "$GITHUB_TOKEN"
-    return 0
-  fi
-  if command -v gh >/dev/null 2>&1; then
-    if token=$(gh auth token 2>/dev/null) && [[ -n "$token" ]]; then
-      printf '%s' "$token"
-      return 0
-    fi
-  fi
-  return 1
-}
-
-if ! GH_TOKEN="$(resolve_gh_token)"; then
-  echo "M2 Docker build needs a GitHub token for private ICP-Delete-Leaf." >&2
-  echo "Set GH_TOKEN / GITHUB_TOKEN, or run: gh auth login" >&2
-  exit 1
-fi
-export GH_TOKEN
 
 GIT_COMMIT_ID=$(git rev-parse HEAD)
 OUT_DIR="wasms/m2-repro"
@@ -52,7 +26,6 @@ build_once() {
   echo "=== M2 build nonce=$nonce → $dest ==="
   DOCKER_BUILDKIT=1 docker build \
     -t openchat-m2-lui \
-    --secret id=gh_token,env=GH_TOKEN \
     --build-arg git_commit_id="$GIT_COMMIT_ID" \
     --build-arg canister_name=local_user_index \
     --build-arg build_nonce="$nonce" \
@@ -82,4 +55,4 @@ fi
 
 echo "$HASH1" > "$OUT_DIR/MATCHED_SHA256"
 echo "PASS: byte-identical local_user_index.wasm.gz"
-echo "provenance: rust 1.95.0, ic-wasm 0.9.11, docker linux/amd64, generate-wasm.sh + RUSTFLAGS remap, --locked, BuildKit gh_token secret, build_nonce bust, commit $GIT_COMMIT_ID"
+echo "provenance: rust 1.95.0, ic-wasm 0.9.11, docker linux/amd64, generate-wasm.sh + RUSTFLAGS remap, --locked, build_nonce bust, commit $GIT_COMMIT_ID"

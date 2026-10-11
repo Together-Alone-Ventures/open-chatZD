@@ -1,0 +1,9 @@
+{
+  "vector": "nv5-003",
+  "kind": "negative",
+  "rejected_by": "V1 reveal: record_id_v2",
+  "note": "a V2 body whose record_id is the retired UserId-only derivation: receipt_id still recomputes, so only the RevealWire v2 linkage check exposes it (the canister never emits it: record_id_v2 is the only live derivation)",
+  "receipt_body": "4f50454e434841545a445f524543454950545f424f44595f5632f78fd0070820874597ac88d4b4e82ba4b73aae3a903fbf9d29d09661d913b69302020202020202020202020202020202020202020202020202020202020202020a030303030303030303030a02020202020202020202a43d7ae8f10e02b2fd5b218a93f315ad16973ce77986756f0d08a5e667c6c8f0000000000000000561137316afd99fd879e1369fda9436a55a9ca627356755842726ff8a30a7a7fc000000000000006f00000000000000de00000002a06af2c83778d1e4bbf685e99d8a0f01229d8a24ea41d8edae9d65e71b83b618",
+  "reveal_wire_v2": "{\"schema\":\"openchatzd.cvdr.reveal_package\",\"version\":2,\"encoding\":\"hex\",\"salt\":\"0404040404040404040404040404040404040404040404040404040404040404\",\"record_salt\":\"c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\",\"targets\":[\"773wu-zqgay-dambq-gayda-mbq\",\"piew3-ciiba-eaqca-ibaea-qca\"]}",
+  "expect": "V1 reveal: record_id_v2 FAIL"
+}

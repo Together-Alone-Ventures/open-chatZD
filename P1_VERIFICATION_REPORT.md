@@ -1,5 +1,10 @@
 # Independent Verification — OpenChatZD P1 (CD's Phase 1)
 
+> **HISTORICAL (suite-v5 retrofit, 2026-09-22).** Records the June 2026 MKTd02/Leaf integration cycle
+> (user-canister adapter, engine re-pin). Superseded by the suite-v5 CVDR-on-Index design — ruling R-3
+> removed the ceremonial MKTd02/MKTd03 dependency; see `CVDR_BUILD_SPEC.md`, `docs/dev/v5/BASELINE_c744de1.md`
+> and `RELEASES.md`. Kept verbatim for the record; not a live instruction.
+
 **Role:** independent verifier (I did not implement). **Repo:** `master` @ `7b5ac7ccb` + CD's uncommitted Phase 1 working tree. **Engine:** `mktd02` @ v0.4.1 (`921d710`). **Method:** `git fetch` done; inspected actual files; ran unit + PocketIC suites on a fresh wasm build. **No changes, nothing staged.**
 
 ## HEADLINE DIVERGENCE

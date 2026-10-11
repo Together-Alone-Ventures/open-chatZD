@@ -217,6 +217,8 @@ async fn advance_draft(draft: CvdrDraft) -> ProcessOutcome {
                         }
                         d.stage = DraftStage::Uninstalled;
                         state.data.cvdr.upsert_draft(d);
+                        // R-2: the protected interval starts here — begin capturing index evidence.
+                        crate::jobs::self_capture_index_evidence::start_if_required(state);
                         Some(())
                     });
                     match advanced {
@@ -330,6 +332,28 @@ pub(crate) fn rebuild_receipt_tree_from_durable(
 /// upgrade, so the forward-only job drives it to completion. Called from `init_state`; on a
 /// fresh install the stores are empty and this is a no-op.
 pub(crate) fn resume_in_flight_drafts(state: &mut RuntimeState) {
+    // Clean protocol break (R-1 / R-4): an in-flight draft written by a pre-V2 wasm carries a V1
+    // body and an identifying `record_id`. Re-publishing it under RECEIPT_BODY_V2 would mint a
+    // hybrid receipt, so the upgrade is refused (post_upgrade trap => the old wasm stays installed)
+    // until those deletions are finalised or purged under the wasm that created them.
+    // Checked BEFORE any rebuild / re-queue / certified_data write — nothing is migrated first.
+    if let Some(refusal) = crate::model::cvdr::pre_v2_upgrade_refusal(&state.data.cvdr.legacy_pre_v2_blockers()) {
+        ic_cdk::trap(refusal);
+    }
+    // R-2 upgrade interlock, incoming-wasm side: same predicate as `pre_upgrade`, evaluated against
+    // the OUTGOING code's epoch (still in `Data`). Covers upgrades from a wasm whose `pre_upgrade`
+    // predates the interlock (epoch 0 => every pending receipt counts).
+    let now_ns = state.env.now().saturating_mul(1_000_000);
+    let blockers = state
+        .data
+        .cvdr
+        .evidence_capturable(now_ns, state.data.cvdr_code_epoch_started_at_ns);
+    if let Some(refusal) = crate::model::cvdr::evidence_upgrade_refusal(&blockers) {
+        ic_cdk::trap(refusal);
+    }
+    // The upgrade (or install) is going ahead: the code epoch of THIS wasm starts now.
+    state.data.cvdr_code_epoch_started_at_ns = now_ns;
+
     rebuild_receipt_tree_from_durable(&state.data.cvdr, &mut state.data.cvdr_receipt_tree);
 
     let drafts = state.data.cvdr.all_drafts();
@@ -404,15 +428,13 @@ mod scheduler_tests {
             user_id: uid(1),
             user_canister_id: Principal::from_slice(&[1u8; 29]),
             index_canister_id: Principal::from_slice(&[2u8; 29]),
+            record_salt: Some([0x5Au8; 32]),
             record_id: [1u8; 32],
             deletion_seq: 1,
             nonce: [2u8; 32],
             receipt_id: [9u8; 32],
             module_hash_pre: vec![],
-            executor_module_hash: vec![7u8; 32],
             h_user_pre: [3u8; 32],
-            h_index: [4u8; 32],
-            commitment: [5u8; 32],
             salt: [0xABu8; 32],
             canisters_to_notify: vec![Principal::from_slice(&[5u8; 29])],
             uninstall_completed_at: 111,
@@ -432,15 +454,13 @@ mod scheduler_tests {
             user_id: uid(2),
             user_canister_id: Principal::from_slice(&[8u8; 29]),
             index_canister_id: Principal::from_slice(&[2u8; 29]),
+            record_salt: Some([0x5Au8; 32]),
             record_id: [8u8; 32],
             deletion_seq: 1,
             nonce: [2u8; 32],
             receipt_id: prepared_id,
             module_hash_pre: vec![],
-            executor_module_hash: vec![],
             h_user_pre: [0u8; 32],
-            h_index: [0u8; 32],
-            commitment: [0u8; 32],
             salt: [0xCDu8; 32],
             canisters_to_notify: vec![],
             uninstall_completed_at: 0,

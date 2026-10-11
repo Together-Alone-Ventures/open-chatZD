@@ -37,7 +37,9 @@ To start again with a fresh install, stop DFX, then run `rm -rf .dfx`, then star
 We need builds to be deterministic so that code running inside a canister can be verified by comparing the
 wasm hash locally with the wasm hash exposed by the IC.
 
-You can build the OpenChat canister wasms by running `./scripts/docker-build-all-wasms.sh`
+You can build the OpenChat canister wasms by running `./scripts/docker-build-all-wasms.sh` (no token or secret
+needed). Every wasm embeds the commit id, so a published hash reproduces only at the commit `RELEASES.md`
+names (`CVDR_BUILD_SPEC.md` §8).
 
 ## Bots 🤖
 

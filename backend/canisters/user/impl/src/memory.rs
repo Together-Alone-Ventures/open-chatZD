@@ -30,13 +30,10 @@ fn get_memory(id: MemoryId) -> Memory {
     MEMORY_MANAGER.with(|m| m.get(id))
 }
 
-/// Borrow the canister's single `MemoryManager` to hand to the MKTd02 engine.
-///
-/// MKTd02 (`mktd02::init` / `mktd02::on_post_upgrade`) is wired onto this SAME
-/// manager so its 8 reserved slots (`base_memory_id`..=`base_memory_id + 7`,
-/// i.e. 100..=107 — see [`crate::mktd`]) live alongside the host's slots
-/// 0 (UPGRADES) and 3 (STABLE_MEMORY_MAP). The two slot sets are disjoint;
-/// `memory_sizes()` reporting (0..=3) is unaffected.
-pub fn with_memory_manager<R>(f: impl FnOnce(&MemoryManager<DefaultMemoryImpl>) -> R) -> R {
-    MEMORY_MANAGER.with(|m| f(m))
-}
+// RESERVED — never reuse: MemoryIds 100..=107.
+// The retired user-canister MKTd02 engine (removed by R-3, suite-v5 retrofit) allocated these eight
+// slots on this MemoryManager. User canisters upgraded from a wasm that carried the engine still hold
+// those buckets; they are deliberately left unreclaimed and unread. Any new stable structure must
+// pick an id outside this range.
+#[allow(dead_code)]
+const RETIRED_MKTD02_MEMORY_IDS: std::ops::RangeInclusive<u8> = 100..=107;

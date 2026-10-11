@@ -4,6 +4,7 @@ pub mod cvdr;
 pub mod cvdr_canister_ranges;
 pub mod cvdr_index_attestation;
 pub mod cvdr_index_evidence;
+mod cvdr_vectors;
 pub mod export_pending;
 pub mod global_user_map;
 pub mod group_event_batch;

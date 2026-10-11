@@ -44,12 +44,39 @@ pub fn setup_new_env(seed: Option<Hash>) -> TestEnv {
     }
 }
 
+/// A fresh, uncached environment whose `openchat_installer`, `user_index`, `local_user_index` and
+/// `user` canisters are installed from the Docker-built `c744de1` wasms (pre-R-3), so a test can
+/// upgrade them to the current wasms. Everything else runs the current wasms.
+pub fn setup_env_from_baseline_c744de1() -> TestEnv {
+    verify_pocket_ic_exists();
+
+    let controller = Principal::from_text("xuxyr-xopen-chatx-xxxbu-cai").unwrap();
+    let (env, canister_ids) = build_installed_env(controller, None, true);
+
+    TestEnv {
+        env,
+        canister_ids,
+        controller,
+    }
+}
+
 fn initialize_base_state(controller: Principal, seed: Option<Hash>) -> (PocketIcState, CanisterIds) {
     let started = Instant::now();
 
     // This thread is first, so it is the only one which will run the full initialization
     println!("Initialization starting");
 
+    let (env, canister_ids) = build_installed_env(controller, seed, false);
+    let duration = Instant::now().duration_since(started);
+
+    println!("Initialization complete. Took: {}s", duration.as_secs());
+
+    let state = env.drop_and_take_state().unwrap();
+
+    (state, canister_ids)
+}
+
+fn build_installed_env(controller: Principal, seed: Option<Hash>, baseline_c744de1: bool) -> (PocketIc, CanisterIds) {
     let icp_features = IcpFeatures {
         cycles_minting: Some(IcpFeaturesConfig::DefaultConfig),
         ..Default::default()
@@ -68,17 +95,16 @@ fn initialize_base_state(controller: Principal, seed: Option<Hash>) -> (PocketIc
     let ticks: u8 = seed.map_or(0, |s| StdRng::from_seed(s).r#gen());
     tick_many(&mut env, ticks as usize);
 
-    let canister_ids = install_canisters(&mut env, controller);
-    let duration = Instant::now().duration_since(started);
+    let canister_ids = install_canisters(&mut env, controller, baseline_c744de1);
 
-    println!("Initialization complete. Took: {}s", duration.as_secs());
-
-    let state = env.drop_and_take_state().unwrap();
-
-    (state, canister_ids)
+    (env, canister_ids)
 }
 
-fn install_canisters(env: &mut PocketIc, controller: Principal) -> CanisterIds {
+fn install_canisters(env: &mut PocketIc, controller: Principal, baseline_c744de1: bool) -> CanisterIds {
+    let r3_affected = |name: &str, current: &CanisterWasm| {
+        if baseline_c744de1 { wasms::baseline_c744de1(name) } else { current.clone() }
+    };
+
     let nns_governance_canister_id = create_canister_with_id(env, controller, "rrkah-fqaaa-aaaaa-aaaaq-cai");
     let nns_ledger_canister_id = create_canister_with_id(env, controller, "ryjl3-tyaaa-aaaaa-aaaba-cai");
     let nns_root_canister_id = create_canister_with_id(env, controller, "r7inp-6aaaa-aaaaa-aaabq-cai");
@@ -114,7 +140,6 @@ fn install_canisters(env: &mut PocketIc, controller: Principal) -> CanisterIds {
     let event_store_canister_id = create_canister(env, controller);
     let sign_in_with_email_canister_id = create_canister(env, controller);
     let website_canister_id = create_canister(env, controller);
-    let receipts_canister_id = create_canister(env, controller);
 
     let community_canister_wasm = wasms::COMMUNITY.clone();
     let cycles_dispenser_canister_wasm = wasms::CYCLES_DISPENSER.clone();
@@ -125,21 +150,20 @@ fn install_canisters(env: &mut PocketIc, controller: Principal) -> CanisterIds {
     let group_index_canister_wasm = wasms::GROUP_INDEX.clone();
     let icp_ledger_canister_wasm = wasms::ICP_LEDGER.clone();
     let identity_canister_wasm = wasms::IDENTITY.clone();
-    let local_user_index_canister_wasm = wasms::LOCAL_USER_INDEX.clone();
+    let local_user_index_canister_wasm = r3_affected("local_user_index", &wasms::LOCAL_USER_INDEX);
     let notifications_index_canister_wasm = wasms::NOTIFICATIONS_INDEX.clone();
     let online_users_canister_wasm = wasms::ONLINE_USERS.clone();
-    let openchat_installer_canister_wasm = wasms::OPENCHAT_INSTALLER.clone();
+    let openchat_installer_canister_wasm = r3_affected("openchat_installer", &wasms::OPENCHAT_INSTALLER);
     let proposals_bot_canister_wasm = wasms::PROPOSALS_BOT.clone();
     let airdrop_bot_canister_wasm = wasms::AIRDROP_BOT.clone();
-    let receipts_canister_wasm = wasms::RECEIPTS.clone();
     let registry_canister_wasm = wasms::REGISTRY.clone();
     let sign_in_with_email_canister_wasm = wasms::SIGN_IN_WITH_EMAIL.clone();
     let sns_wasm_canister_wasm = wasms::SNS_WASM.clone();
     let storage_bucket_canister_wasm = wasms::STORAGE_BUCKET.clone();
     let storage_index_canister_wasm = wasms::STORAGE_INDEX.clone();
     let translations_canister_wasm = wasms::TRANSLATIONS.clone();
-    let user_canister_wasm = wasms::USER.clone();
-    let user_index_canister_wasm = wasms::USER_INDEX.clone();
+    let user_canister_wasm = r3_affected("user", &wasms::USER);
+    let user_index_canister_wasm = r3_affected("user_index", &wasms::USER_INDEX);
 
     let wasm_version = BuildVersion::min();
     let test_mode = true;
@@ -154,7 +178,6 @@ fn install_canisters(env: &mut PocketIc, controller: Principal) -> CanisterIds {
         proposals_bot_canister_id,
         airdrop_bot_canister_id,
         online_users_canister_id,
-        receipts_canister_id: Some(receipts_canister_id),
         cycles_dispenser_canister_id,
         storage_index_canister_id,
         escrow_canister_id,
@@ -256,24 +279,6 @@ fn install_canisters(env: &mut PocketIc, controller: Principal) -> CanisterIds {
         online_users_canister_id,
         online_users_canister_wasm,
         online_users_init_args,
-    );
-
-    let receipts_init_args = receipts_canister::init::Args {
-        // The export authority (§2). `controller` exercises the receipts-side
-        // store/idempotency/gating matrix directly. The real OpenChat export
-        // authority is the local_user_index canister(s); see the P2 report for
-        // wiring that dynamic id into the authorized set for the full pipeline.
-        authorized_principals: vec![controller],
-        cycles_dispenser_canister_id,
-        wasm_version,
-        test_mode,
-    };
-    install_canister(
-        env,
-        controller,
-        receipts_canister_id,
-        receipts_canister_wasm,
-        receipts_init_args,
     );
 
     let proposals_bot_init_args = proposals_bot_canister::init::Args {
@@ -518,7 +523,6 @@ fn install_canisters(env: &mut PocketIc, controller: Principal) -> CanisterIds {
         notifications_index: notifications_index_canister_id,
         identity: identity_canister_id,
         online_users: online_users_canister_id,
-        receipts: receipts_canister_id,
         proposals_bot: proposals_bot_canister_id,
         airdrop_bot: airdrop_bot_canister_id,
         storage_index: storage_index_canister_id,

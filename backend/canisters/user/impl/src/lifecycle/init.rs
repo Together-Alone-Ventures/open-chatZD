@@ -40,15 +40,5 @@ fn init(args: Args) {
         }
     });
 
-    // MKTd02 Leaf-mode CVDR engine: initialise its 8 stable-memory slots
-    // (base 100) on the SAME MemoryManager and publish the initial certified
-    // commitment. Must run after all initial PII writes and with no state
-    // borrow held (the engine calls back into the adapter via read_state).
-    let module_hash = args.mktd_module_hash.unwrap_or([0u8; 32]);
-    let adapter = crate::mktd::MKTdUserAdapter;
-    crate::memory::with_memory_manager(|mm| {
-        mktd02::init(&adapter, mm, crate::mktd::config(), module_hash);
-    });
-
     info!(version = %args.wasm_version, "Initialization complete");
 }
