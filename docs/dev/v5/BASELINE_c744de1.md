@@ -31,7 +31,7 @@ working tree, which no commit reproduces under the canonical recipe.
 
 Runs were made in a disposable layout (plan §2): `~/tav/_oczd_step0/open-chatZD` = `git worktree`
 detached at `c744de1`; `~/tav/_oczd_step0/CVDR-Verify` = `git archive` export of CVDR-Verify
-`ac64c1b881b46cda8ef909c4a23ae008f863536d` (the `backend.yaml` CI pin), so the cross-repo label
+`ac64c1b881b46cda8ef909c4a23ae008f863536d` (the `backend.yaml` CI pin at Step 0), so the cross-repo label
 drift guard resolves the same sibling CI uses.
 
 ## 2. Locked unit surface — DONE
@@ -349,7 +349,7 @@ index_code_identity_evidence { certificate_bytes, index_module_hash }
 ## 7. Step 5 — OpenChat verifier (CVDR-Verify `openchatzd-v5`; point E)
 
 Branch `openchatzd-v5` in `~/tav/CVDR-Verify` = `560e483` (mktd02-v5) merged with `ac64c1b` (the
-OpenChat line, current CI pin); all work inside `mktd02/mktd02-verify/`. Grade vocabulary aligned with
+OpenChat line, then the CI pin); all work inside `mktd02/mktd02-verify/`. Grade vocabulary aligned with
 the suite: `validity: PASS | INCOMPLETE | FAIL`, exit `0 | 4 | 1` (the OpenChat-only
 `VerifiedFinal / LateFinalized / Reject`, exit 3, is retired).
 
@@ -456,12 +456,14 @@ the suite: `validity: PASS | INCOMPLETE | FAIL`, exit `0 | 4 | 1` (the OpenChat-
   (12:27Z and 12:37Z): all 23 hashes identical (`RELEASES.md`); LUI `1ea8f3cd…dcfd2` (**built at:**
   the Step 10 working tree before commit `8118d26a`, HEAD `f314663c5`, `git_commit_id` =
   `f314663c5945b699cee50250514a5a1e4dce935d-step10-worktree`; determinism evidence, **not** the
-  published hash — the canonical recipe AT `8118d26a` gives LUI `6cfdb4ac…`, `RELEASES.md`). Confirmed
+  published hash — the published v0.8.0 hashes are the canonical recipe AT R `9c77719dd` (LUI
+  `bfcc1346…`, `RELEASES.md`); the canonical recipe AT `8118d26a`, an earlier Step 10 build, gave LUI
+  `6cfdb4ac…`). Confirmed
   2026-10-01: the `8118d26a` tree (`git archive`) built under that same id reproduces all 23 Step 10
   hashes, LUI `1ea8f3cd…` included — that working tree was the `8118d26a` tree.
 - **Fresh end-to-end package.** `stored_index_evidence_unblocks_upgrade_and_draft_finalises` on the
   Step 10 wasms exported the exact served `PortablePackageV3`; the pinned verifier (export of
-  CVDR-Verify `8b0d835`, `--locked --release`) reports `validity: PASS`, `V3A_PASS`, certified
+  CVDR-Verify `8b0d835`[^step10-pin], `--locked --release`) reports `validity: PASS`, `V3A_PASS`, certified
   module hash `1ea8f3cd…` = the dual-build LUI hash (built at the Step 10 working tree, above); without
   the fixture flag `FAIL` naming the selector. Binary output captured verbatim in
   `docs/dev/v5/STEP10_E2E_VERIFY.txt`. The same check on wasms built AT `8118d26a` (certified module
@@ -471,7 +473,7 @@ the suite: `validity: PASS | INCOMPLETE | FAIL`, exit `0 | 4 | 1` (the OpenChat-
   banner; `OpenChatZD_RTS_draft.md` rewritten for suite v5 (RT-OCZD-1…6) with the ratified claim
   verbatim; propagation list in `CVDR_BUILD_SPEC.md` §10; `docs/dev/v5/OPERATOR_NOTES.md`
   (`cvdr_upgrade_blockers`, install allowance / rate limit, ~30 s outcall expiry, discard reasons).
-- **CI pin** advanced to CVDR-Verify `8b0d835` — required, not optional: the LUI corpus mirror guard
+- **CI pin** advanced to CVDR-Verify `8b0d835`[^step10-pin] — required, not optional: the LUI corpus mirror guard
   fails when the sibling checkout lacks `tests/fixtures/v5-openchatzd/corpus/`.
 - **Release number v0.8.0**, untagged: `RELEASES.md` here (commit table, cross-checks, 23 hashes,
   census, retirements) and `mktd02/mktd02-verify/RELEASES.md` + `Cargo.toml` comment in CVDR-Verify
@@ -489,6 +491,11 @@ the suite: `validity: PASS | INCOMPLETE | FAIL`, exit `0 | 4 | 1` (the OpenChat-
   (`workflow_dispatch`, `.github/workflows/backend.yaml`) builds the current wasms and the baseline
   with the canonical recipe AT `c744de1` (the baseline locks the private MKTd02 / zombie-core crates,
   so the job reads `CVDR_VERIFY_READ_TOKEN`) and runs both tests with `--ignored --test-threads 1`.
+  **Superseded 2026-10-02 (`c69d411d2`…`bd4e020b4`):** the job no longer builds the baseline. It
+  downloads the four §3.2 wasms from release `baseline-c744de1-wasms`, accepts each only if its
+  SHA-256 equals a pin in `backend/integration_tests/src/wasms.rs` (= §3.2), builds the current wasms
+  on the runner without a token, and runs on `workflow_dispatch` or a PR labelled
+  `run-upgrade-baseline`. Green in CI run #22 (`docs/evidence/2026-10-09-v0.8.0-release-gate.md`).
 - **CVDR-Verify sibling precondition (adversarial pass).** The LUI label drift guard
   (`labels_match_sibling_cvdr_verify_when_present`) and corpus mirror guard
   (`corpus_mirror_in_cvdr_verify_is_byte_identical`) read a CVDR-Verify checkout:
@@ -504,9 +511,10 @@ the suite: `validity: PASS | INCOMPLETE | FAIL`, exit `0 | 4 | 1` (the OpenChat-
   `ivan-jukic/fcm-service`), so the `gh_token` BuildKit secret is gone from `Dockerfile`,
   `scripts/docker-build-all-wasms.sh` and `scripts/m2-repro-local-user-index.sh`. It never entered the
   output: the `8118d26a` tree built with the secret-free Dockerfile and no token reproduces the Step 10
-  set under `f314663c5…-step10-worktree` (LUI `1ea8f3cd…`) and the published v0.8.0 set under
-  `8118d26a` (LUI `6cfdb4ac…`), 23/23 each. §1, §3 and §9 describe the recipe as it was then; the
-  `c744de1` baseline still locks the private crates and needs a token (`upgrade-baseline` job).
+  set under `f314663c5…-step10-worktree` (LUI `1ea8f3cd…`) and the earlier Step 10 build set under
+  `8118d26a` (LUI `6cfdb4ac…`), 23/23 each (the published v0.8.0 set is the build AT R, LUI `bfcc1346…`). §1, §3 and §9 describe the recipe as it was then; the
+  `c744de1` baseline still locks the private crates, so building it needs a token; the
+  `upgrade-baseline` job uses the hash-pinned release assets instead (F2 above).
 - **Timing label rename + historical `NOT_ATTESTED` (G 2026-10-01; CVDR-Verify `b2547880`).** The
   pinned label is `TIMING_BEFORE_COMMITMENT_CERTIFICATE = "BEFORE_COMMITMENT_CERTIFICATE"` (was
   `PREDATES_COMMITMENT`), in the label module, both build specs and the RTS; `STEP10_E2E_VERIFY.txt`
@@ -524,3 +532,6 @@ the suite: `validity: PASS | INCOMPLETE | FAIL`, exit `0 | 4 | 1` (the OpenChat-
   present but empty, exactly like an absent one: `FrozenWire`, never a `PortablePackageV3` with an
   empty field. The insert gate already refused such rows; the serve rule no longer depends on it.
   Pinned by `stored_incomplete_index_evidence_is_served_as_frozen_wire` (six stored shapes).
+
+[^step10-pin]: Historical snapshot (Step 10). The current `backend.yaml` pin is CVDR-Verify X
+    `b2547880c1dfda6304a097e97fb74fb640002f9f`, tag `openchatzd-v0.8.0` (`RELEASES.md`).

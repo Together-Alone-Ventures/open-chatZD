@@ -5,10 +5,24 @@ number reserved for the line. Module hashes name the **canonical all-canister Do
 (`scripts/docker-build-all-wasms.sh`; `CVDR_BUILD_SPEC.md` §8). `GIT_COMMIT_ID` is embedded in
 every wasm, so a hash is a function of the committed tree *and* the commit id passed at build time.
 
-## v0.8.0 — suite v5 retrofit "Zombie Delete" (branch `v5-retrofit`; UNTAGGED)
+## v0.8.0 — suite v5 retrofit "Zombie Delete" (branch `v5-retrofit`; tag `v0.8.0` at R)
 
 Base `origin/antek` @ `c744de1`. Rulings R-1…R-6 (Brief B1, adopted 2026-09-21) and the C2
 amendment (2026-09-22). Governing spec `CVDR_BUILD_SPEC.md`; record `docs/dev/v5/BASELINE_c744de1.md`.
+
+### Release record
+
+- **Tag `v0.8.0` → R** `9c77719dd378826c96586649c79ae42828480037`, the build commit: every wasm embeds
+  `git_commit_id`, so the tag sits where the hashes reproduce. R is immutable; release records live
+  on this post-tag line (`v5-retrofit`).
+- **X** = CVDR-Verify `b2547880c1dfda6304a097e97fb74fb640002f9f`, tag `openchatzd-v0.8.0` (the `backend.yaml` pin).
+- **Gate evidence:** [`docs/evidence/2026-10-09-v0.8.0-release-gate.md`](docs/evidence/2026-10-09-v0.8.0-release-gate.md)
+  — CI run #22 on PR #2 at `bd4e020b` and CD's independent re-gate of R / `bd4e020b` / X (2026-10-09).
+- **Review residuals, CLOSED by that evidence:** `upgrade-baseline` job not yet green — **CLOSED**
+  (run #22, green); PocketIC not re-run at R — **CLOSED** (CD re-gate: `cvdr_` 20/0/5, ignored
+  upgrade tests 2/0).
+- The `RELEASES.md` inside the tagged tree R predates the tag and names build `84b2ba866` / LUI
+  `00b09636…`; the authoritative v0.8.0 table is this one, built AT R (LUI `bfcc1346…`).
 
 | Commit point | SHA | Content |
 |---|---|---|
@@ -24,10 +38,10 @@ amendment (2026-09-22). Governing spec `CVDR_BUILD_SPEC.md`; record `docs/dev/v5
 | G decisions 2026-10-01 | `221d2420a` … `9c77719dd` | timing label `BEFORE_COMMITMENT_CERTIFICATE` + historical `NOT_ATTESTED` (follow CVDR-Verify X), label guard matches definitions, placeholder evidence fails closed (hash / root, then certificate), CI pin → X |
 
 **Release identifiers** (tags applied by Stef at freeze):
-- **R** = `9c77719dd378826c96586649c79ae42828480037` — the open-chatZD release commit. Tag `v0.8.0` goes
+- **R** = `9c77719dd378826c96586649c79ae42828480037` — the open-chatZD release commit. Tag `v0.8.0` is
   here: the hashes below reproduce only when built AT R.
-- **Y** — the records commit on `v5-retrofit`: R..tip touches only `RELEASES.md`, the evidence file
-  (`docs/evidence/2026-09-23-cd-final-gate.md`) and `.github/workflows/*` — no build input; R and X
+- **Y** — the records commit on `v5-retrofit`: R..tip touches only `RELEASES.md`, docs (`docs/evidence/`,
+  `docs/dev/v5/`) and `.github/workflows/*` — no build input; R and X
   are the authoritative pins (full SHAs). `git diff --stat v0.8.0 HEAD` shows only those files. The SHA of Y itself is recorded outside the tree (release ledger, tag annotation).
 - **X** = `b2547880c1dfda6304a097e97fb74fb640002f9f` — CVDR-Verify `openchatzd-v5`, tag `openchatzd-v0.8.0`;
   the `.github/workflows/backend.yaml` pin.
@@ -88,7 +102,7 @@ Stef at freeze; crate `mktd02-verify` 0.8.0, pinned in `.github/workflows/backen
 | user | `8c7dca35af2d9b54ca81f889b245cbb2ff377010f46cf347b355144895d488c2` |
 | user_index | `ed846b5bfb1ce5054f5eb383cbb54339d35ad8afad705969befbe27f1178e4d2` |
 
-**Reproduce:** `git checkout 9c77719dd && bash scripts/docker-build-all-wasms.sh` (R; tag `v0.8.0` once applied; no token) — hashes
+**Reproduce:** `git checkout 9c77719dd && bash scripts/docker-build-all-wasms.sh` (R = tag `v0.8.0`; no token) — hashes
 embed `git_commit_id`, so only a build at that commit reproduces this table.
 
 **End-to-end evidence:** a fresh `PortablePackageV3` served by the Step 10 `local_user_index` under
